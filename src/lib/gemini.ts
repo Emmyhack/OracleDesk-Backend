@@ -1,3 +1,10 @@
+/**
+ * Compatibility shim over the Gemini provider (#157).
+ *
+ * The routing, health and retry policy now live in src/lib/llm/router.ts. This
+ * module is kept so existing imports (and the generated default client export)
+ * continue to work.
+ */
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { secret, secretEntry } from '../config/secrets';
 import { logger } from './logger';
@@ -25,6 +32,7 @@ export function setGenAI(mock: any): any {
 }
 
 export const GEMINI_MODEL = 'gemini-2.0-flash';
+export { isDailyQuotaError, parseRetryDelayMs };
 
 // ─── Per-call interval guard ──────────────────────────────────────────────────
 // The ingestion cron (every 15 min) and POST /markets/generate can fire at
@@ -97,8 +105,6 @@ function parseRetryDelayMs(errorMessage: string): number {
   return 30_000; // conservative fallback
 }
 
-// ─── callGemini — plain text output ───────────────────────────────────────────
-// Use for summaries, analysis narratives (non-JSON).
 export async function callGemini(
   systemPrompt: string,
   userPrompt: string,

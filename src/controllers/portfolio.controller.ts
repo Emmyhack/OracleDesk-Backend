@@ -24,7 +24,10 @@ export async function getPortfolio(req: Request, res: Response): Promise<void> {
       }),
   ]);
 
-  sendSuccess(res, { ...summary, correlationRisk: correlations, availableCapitalRaw });
+  const latestReport = await prisma.transparencyReport
+    .findFirst({ orderBy: { date: 'desc' }, select: { date: true, anchorLedger: true, cid: true, hash: true, onChainTraceId: true, mode: true, consistency: true } })
+    .catch(() => null);
+  sendSuccess(res, { ...summary, correlationRisk: correlations, availableCapitalRaw, latestReport });
 }
 
 /**

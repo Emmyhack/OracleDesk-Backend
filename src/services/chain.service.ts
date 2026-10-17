@@ -24,6 +24,7 @@ import { ChainError, contractErrorName, ArchivedEntryError } from './stellar/err
 import { withTimeout, TimeoutError } from '../lib/resilience';
 import type { Category, Market as OnChainMarket, Outcome, Position } from '../generated/market-core';
 import type { Trace } from '../generated/reasoning-registry';
+import type { DailyUsage, RiskConfig } from '../generated/treasury';
 import type { ResolutionState } from '../generated/resolver';
 
 export { ArchivedEntryError };
@@ -229,6 +230,15 @@ export const resolverState = (marketId: bigint, signal?: AbortSignal) =>
 
 export const treasuryAvailableCapital = (signal?: AbortSignal) =>
   read<bigint>('treasury', 'available_capital', async () => readClients.treasury().available_capital(), signal);
+
+export const treasuryConfig = () =>
+  read<RiskConfig>('treasury', 'get_config', async () => readClients.treasury().get_config());
+
+export const treasuryDailyUsage = () =>
+  read<DailyUsage>('treasury', 'daily_usage', async () => readClients.treasury().daily_usage());
+
+export const marketCoreConfig = () =>
+  read<MarketCoreConfig>('marketCore', 'get_config', async () => readClients.marketCore().get_config());
 
 // ─── Writes (through the treasury) ───────────────────────────────────────────
 

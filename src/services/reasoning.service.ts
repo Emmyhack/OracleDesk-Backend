@@ -1,5 +1,5 @@
 import { prisma } from '../lib/prisma';
-import { callLLMJSON } from '../lib/llm';   // ← Unified LLM (Claude → Gemini fallback)
+import { completeLLM } from '../lib/llm';
 import { logger } from '../lib/logger';
 import { Prisma } from '@prisma/client';
 import type {
@@ -46,6 +46,8 @@ export async function generateReasoningTrace(input: TraceInput) {
     betFraction:         input.betFraction,
     betSizeUsdc:         input.betSizeUsdc,
     hedgeConditions:     hedgeConditions.conditions,
+    // Optional, explicitly null-able provenance so payload hashing is stable.
+    llm:                 hedgeConditions.provenance,
     agentWallet:         input.agentWallet,
     timestamp:           new Date().toISOString(),
   };
@@ -145,7 +147,11 @@ async function generateHedgeConditions(
   input: TraceInput,
   edge:  number,
   ci:    ConfidenceInterval,
-): Promise<{ conditions: string[]; reasoning: string }> {
+): Promise<{
+  conditions: string[];
+  reasoning: string;
+  provenance: { provider: string; model: string } | null;
+}> {
   const systemPrompt = `You are a quantitative prediction market risk manager.
 Generate specific, measurable hedge conditions for a trading position.
 Return ONLY a valid JSON object matching this schema exactly. No markdown, no preamble.
@@ -177,10 +183,20 @@ and trigger an early close. Focus on data changes, not price changes.
 `;
 
   try {
-    const cleaned   = await callLLMJSON(systemPrompt, userPrompt, 1024);
-    const parsed    = JSON.parse(cleaned);
+    const result = await completeLLM({
+      task: 'hedge_conditions',
+      system: systemPrompt,
+      user: userPrompt,
+      mode: 'json',
+      maxTokens: 1024,
+    });
+    const parsed    = JSON.parse(result.text);
     const validated = traceReasoningSchema.parse(parsed);
-    return { conditions: validated.hedge_conditions, reasoning: validated.reasoning_summary };
+    return {
+      conditions: validated.hedge_conditions,
+      reasoning: validated.reasoning_summary,
+      provenance: { provider: result.provenance.provider, model: result.provenance.model },
+    };
   } catch (err) {
     // Non-fatal: log a warning but never fail the whole market creation cycle
     logger.warn({ err }, 'LLM hedge condition generation failed — applying safe defaults');
@@ -191,6 +207,7 @@ and trigger an early close. Focus on data changes, not price changes.
         `Hard stop-loss at 15% adverse market move`,
       ],
       reasoning: 'Default hedge conditions applied — LLM call failed',
+      provenance: null,
     };
   }
 }

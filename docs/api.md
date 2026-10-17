@@ -575,6 +575,79 @@ decides an outcome.**
 `marketStatus.tag` is `Open | Resolved | Void`. `404 MARKET_NOT_FOUND`,
 `409 MARKET_NOT_ON_CHAIN`, `502 CHAIN_READ_FAILED`.
 
+
+### Treasury admin console (auth, admin)
+
+The backend never holds the treasury admin key. It prepares unsigned,
+simulated transactions for the on-chain admin/multisig, verifies the signed
+XDR body against the prepared hash, and submits only when the collected
+signature weight reaches the account's high threshold. Every state change
+writes an `AgentLog` row (`ADMIN_OP_<STATE>`).
+
+#### `GET /admin/treasury`
+Returns treasury `RiskConfig`, available capital, USDC balance, daily usage
+with headroom/reset time, treasury/market-core paused flags and admins, and
+the agent's XLM fee balance. The on-chain admin is read from treasury instance
+storage until the contract exposes `admin()`/`is_paused()`.
+
+#### `GET /admin/treasury/operations?page&limit`
+Paginated prepared/signed/submitted operations.
+
+#### `POST /admin/treasury/operations`
+Body: `{ "operation": { ... }, "force"?: boolean }`, where `operation` is one of:
+
+- `{ "kind": "treasury.set_paused", "paused": true }`
+- `{ "kind": "treasury.withdraw", "to": "G…|C…", "amountRaw": "12500000000" }`
+- `{ "kind": "treasury.deposit", "from": "G…", "amountRaw": "100000000" }`
+- `{ "kind": "treasury.collect_market_fees", "onChainMarketId": "7" }`
+- `{ "kind": "market_core.set_paused", "paused": false }`
+
+Returns `{ id, xdr, networkPassphrase, hash, expiresAt, requiredSigners,
+thresholds, checks, humanSummary, status }`. Pre-flight failures return
+`422 PREFLIGHT_FAILED` with `details.checks`. A `C…` admin returns
+`501 UNSUPPORTED_ADMIN_KIND` (auth-entry signing is out of scope).
+
+#### `POST /admin/treasury/operations/:id/signatures`
+Body `{ "signedXdr": "…" }`. The envelope hash must equal the stored `txHash`;
+new signatures are verified against the admin account's signers, duplicates are
+ignored, and `weightCollected` is recomputed. `READY` means the high threshold
+(and optional `TREASURY_WITHDRAW_MIN_SIGNERS`) is met.
+
+#### `POST /admin/treasury/operations/:id/submit`
+Allowed only in `READY` and before `expiresAt`, testnet only. Sends the
+envelope, polls `getTransaction`, and records `SUCCESS`/`FAILED`, ledger and
+result XDR. No server key is used.
+
+#### `POST /admin/treasury/operations/:id/record`
+Body `{ "txHash": "<64 hex>" }` for clients that submitted themselves.
+
+#### `POST /admin/treasury/operations/:id/cancel`
+Cancels a prepared/partially-signed operation.
+
+### Transparency reports
+
+Public, computed only from chain state and `chain_events`; see
+`docs/transparency-reports.md`.
+
+#### `GET /reports?page&limit`
+Paginated index: `date`, `anchorLedger`, `cid`, `ipfsUri`, `hash`,
+`onChainTraceId`, `mode` (`live`/`dry-run`), `consistency`
+(`exact`/`best_effort`), the report document, and a verification recipe.
+
+#### `GET /reports/latest`
+Most recent report (404 if none yet).
+
+#### `GET /reports/:date`
+One report by `YYYY-MM-DD` (400 for a malformed date, 404 if absent).
+
+`GET /portfolio` also includes `latestReport` with the same metadata.
+
+### `POST /traces/verify` content source
+
+The response now includes `contentSource: "cache" | "gateway"`: `cache` means
+the bytes came from the local verified content store and both gateways could
+be down. The on-chain `trace_hash` remains the authority.
+
 ## Realtime (socket.io)
 
 Same origin as the API without `/api/v1`. The frontend listens to these

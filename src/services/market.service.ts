@@ -156,8 +156,17 @@ Pick the category that best fits the event.
 `;
 
   let rawResponse: string;
+  let provenance: Awaited<ReturnType<typeof completeLLM>>['provenance'] | null = null;
   try {
-    rawResponse = await callLLMJSON(systemPrompt, userPrompt, 4096);
+    const result = await completeLLM({
+      task: 'market_generation',
+      system: systemPrompt,
+      user: userPrompt,
+      mode: 'json',
+      maxTokens: 4096,
+    });
+    rawResponse = result.text;
+    provenance = result.provenance;
   } catch (err) {
     await logAgentAction('MARKET_MAKER', 'ERROR', 'GENERATE_QUESTION_LLM_FAIL', null, {
       error:       String(err),
@@ -165,6 +174,19 @@ Pick the category that best fits the event.
     });
     throw new AppError(500, 'LLM_CALL_FAILED', 'LLM API call failed during market generation');
   }
+
+  await logAgentAction('MARKET_MAKER', 'INFO', 'GENERATE_QUESTION_LLM', null, {
+    signalCount: signals.signalCount,
+    llm: provenance
+      ? {
+          provider: provenance.provider,
+          model: provenance.model,
+          attempts: provenance.attempts.length,
+          latencyMs: provenance.latencyMs,
+          usage: provenance.usage ?? null,
+        }
+      : null,
+  });
 
   return validateMarketQuestion(rawResponse);
 }

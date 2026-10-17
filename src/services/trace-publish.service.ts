@@ -60,7 +60,11 @@ export async function verifyTraceOnChain(traceId: string): Promise<TraceVerifica
 
   const onChain = await getOnChainTrace(trace.onChainTraceId);
   const onChainHash = Buffer.from(onChain.trace_hash).toString('hex');
-  const bytes = await fetchIpfsBytes(onChain.ipfs_cid);
+  const { bytes, source } = await fetchVerifiedBytes(
+    onChain.ipfs_cid,
+    onChainHash,
+    `reasoning_registry:trace:${trace.onChainTraceId}`,
+  );
   const verified = verifyTraceHash(bytes, onChainHash);
 
   await prisma.reasoningTrace.update({
@@ -80,6 +84,56 @@ export async function verifyTraceOnChain(traceId: string): Promise<TraceVerifica
     computedHash: sha256Hex(bytes),
     storedHash: trace.traceHash,
     verified,
+    contentSource: source,
     verifiedAt: new Date(),
   };
+}
+
+/**
+ * Generalises pin+publish for documents that do not have a ReasoningTrace row
+ * (transparency reports, #159). Returns the mode so callers can mark dry runs.
+ */
+export async function pinAndPublishDocument(params: {
+  document: unknown;
+  name: string;
+  action: string;
+  marketId: bigint;
+}, options: { dryRun?: boolean } = {}): Promise<{ cid: string; hash: string; onChainTraceId: bigint | null; publishTxHash: string | null; mode: 'dry-run' | 'live' }> {
+  const pinned = await pinJson(params.document, params.name);
+  if (options.dryRun) {
+    return { cid: pinned.cid, hash: pinned.hash, onChainTraceId: null, publishTxHash: null, mode: 'dry-run' };
+  }
+  const published = await publishPinnedDocument({
+    cid: pinned.cid,
+    hash: pinned.hash,
+    action: params.action,
+    marketId: params.marketId,
+  });
+  return { cid: pinned.cid, hash: pinned.hash, ...published };
+}
+
+/**
+ * Publishes bytes that are already pinned. Used to recover from a crash
+ * between pin and publish without recomputing (and re-pinning) the document.
+ */
+export async function publishPinnedDocument(params: {
+  cid: string;
+  hash: string;
+  action: string;
+  marketId: bigint;
+}, options: { dryRun?: boolean } = {}): Promise<{ onChainTraceId: bigint | null; publishTxHash: string | null; mode: 'dry-run' | 'live' }> {
+  if (options.dryRun) {
+    return { onChainTraceId: null, publishTxHash: null, mode: 'dry-run' };
+  }
+  const result = await publishTrace({
+    agent: agentSigner().publicKey as string,
+    market_id: params.marketId,
+    action: params.action,
+    trace_hash: Buffer.from(params.hash, 'hex'),
+    ipfs_cid: params.cid,
+  });
+  if (result.mode === 'dry-run') {
+    return { onChainTraceId: null, publishTxHash: null, mode: 'dry-run' };
+  }
+  return { onChainTraceId: result.value, publishTxHash: result.txHash, mode: 'live' };
 }

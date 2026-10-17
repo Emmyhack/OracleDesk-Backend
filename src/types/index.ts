@@ -127,6 +127,8 @@ export interface TraceVerification {
   computedHash: string;
   storedHash: string | null;
   verified: boolean;
+  /** Where the verified bytes came from (#100). */
+  contentSource?: 'cache' | 'gateway';
   verifiedAt: Date;
 }
 

@@ -123,6 +123,16 @@ const envSchema = z
     // ── LLM providers (optional; generation fails at runtime without one) ─
     ANTHROPIC_API_KEY: optionalString,
     GEMINI_API_KEY: optionalString,
+    // OpenAI or any OpenAI-compatible endpoint (used by the router, #157).
+    OPENAI_API_KEY: optionalString,
+    OPENAI_BASE_URL: optionalString.refine(
+      (v) => v === '' || /^https?:\/\//.test(v),
+      'must be an http(s) URL',
+    ),
+    // JSON object keyed by LlmTask, or a path to a JSON file. Defaults to the
+    // built-in policy that reproduces the pre-router behaviour.
+    LLM_POLICY: optionalString,
+    LLM_POLICY_FILE: optionalString,
 
     // ── IPFS ──────────────────────────────────────────────────────────────
     PINATA_API_KEY: optionalString,

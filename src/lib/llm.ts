@@ -1,21 +1,9 @@
-/** *
- * Provider priority:
- *   1. Anthropic Claude (claude-sonnet-4-20250514) — if ANTHROPIC_API_KEY is set in .env
- *   2. Gemini (gemini-2.0-flash)                   — automatic fallback
+/**
+ * LLM entry point (#157).
  *
- * Why this exists:
- *   Gemini's free tier has a hard daily quota. When that quota is exhausted,
- *   even a new API key from a new account won't help until midnight UTC —
- *   because Google tracks quota per project, not per key rotation.
- *   Claude (via @anthropic-ai/sdk, already in package.json) has a separate,
- *   generous free tier that's unaffected by Gemini's exhaustion.
- *
- *   This file lets the app route to Claude first, so Gemini is only called
- *   if Claude is unavailable. Both providers produce identical output shapes.
- *
- * Call-interval guard:
- *   Prevents the ingestion cron and a simultaneous POST /markets/generate
- *   from firing two LLM calls within the same second and burning quota twice.
+ * All calls go through the provider-agnostic router. The default policy
+ * reproduces the historical behaviour (Anthropic Claude first, Gemini
+ * fallback) while allowing per-task policies via LLM_POLICY / LLM_POLICY_FILE.
  */
 
 import Anthropic from '@anthropic-ai/sdk';
@@ -126,8 +114,7 @@ export async function callLLMJSON(
   }, opts?.signal);
 }
 
-// ─── callLLMText — plain text output ─────────────────────────────────────────
-// For summaries and narratives that don't need strict JSON.
+/** Backwards-compatible plain-text wrapper. Never requests a JSON MIME type. */
 export async function callLLMText(
   systemPrompt: string,
   userPrompt: string,

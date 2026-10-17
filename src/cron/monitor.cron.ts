@@ -72,6 +72,16 @@ export function startMonitorCron(): void {
   // Copy trade sweep — every 5 minutes
   cron.schedule('*/5 * * * *', () => tick('copy_trade_sweep', sweepCopyTrades));
 
+  // IPFS content eviction (#100) — hourly at :30, bounded batches.
+  cron.schedule('30 * * * *', async () => {
+    try {
+      const result = await postgresContentStore.evict(config.IPFS_CACHE_BUDGET_BYTES);
+      if (result.removed > 0) logger.info(result, 'Monitor cron: evicted IPFS content');
+    } catch (err) {
+      logger.error({ err }, 'Monitor cron: IPFS content eviction failed');
+    }
+  });
+
   logger.info('Monitor cron started');
 }
 
