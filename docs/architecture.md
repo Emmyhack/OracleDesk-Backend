@@ -36,6 +36,27 @@ The contracts repo's `agents/stellar/adapter.ts` covers similar ground, but its 
 
 Backend categories are mapped to the contract enum by `toContractCategory()`.
 
+### Resolvability and the timing rule (#74)
+
+The resolver is strict about time: `attest` is rejected before
+`market.close_time`, and `finalize_signers` only succeeds after
+`proposed_at + dispute_window`. Before a proposal is persisted or pinned,
+`resolvability.service.ts` (pure, no I/O) checks that its text, close time and
+source fit that timeline:
+
+```
+event deadline ──► source publishes ──► close_time ──► attestation ──► dispute window ──► finalise
+                   (+ publication lag)   [lag, lag+6h]   (≤ 48 h SLA)    (RESOLUTION_DISPUTE_WINDOW_SECS)
+```
+
+- `earliestClose = deadline + lag`; `latestClose = earliestClose + 6 h` (bounds trading after the answer is public).
+- `close + dispute window + 48 h` must be within 120 days of now.
+- The deadline comes from a table-driven grammar (`by`, `on`, `before`, `for <month>`, `in Q3`, `end of …`, `at its <month> meeting`); "by X" is end of day X in the source's time zone (built as local 23:59:59 then converted, never `+86400 s`). Two distinct deadlines are `AMBIGUOUS_DEADLINE`.
+- Meetings resolve through `resolvability.calendar.ts` (FOMC/ECB). **Update it yearly**; a test fails when the table has no future meeting.
+- `resolution_oracle` must map to an allowlisted source (`RESOLUTION_SOURCES`) that can resolve the category; the source carries the publication lag, time zone, URL and signer instructions.
+- If only the close time is off and the deadline is unambiguous, it is clamped into `[max(earliestClose, now + 1 day), latestClose]` (`PROPOSAL_EXPIRY_REPAIRED`); otherwise the proposal is rejected (`PROPOSAL_UNRESOLVABLE`, with reason codes). Repair happens before `pinJson`, so the pinned document carries the final `closeTime`. The resolution hash does not cover close time and is unaffected.
+- The resolution block is stored in `Market.resolutionDetails` and pinned in question document v2 (see `docs/api.md`).
+
 ## Reasoning traces
 
 A trace is canonicalised once (sorted keys, same rules as `agents/core/trace.ts`), pinned byte for byte with Pinata's `pinFileToIPFS`, and `trace_hash` is the sha256 of those bytes. It is published to reasoning-registry once its market is on-chain. `POST /traces/verify` re-fetches the bytes by the on-chain CID and compares them with the on-chain hash, like `x402/trace-verification.ts`.
@@ -95,6 +116,24 @@ A daily pass is granted only after `payment-verification.service.ts` reads the t
 - the amount is at least `DAILY_PASS_PRICE_RAW`.
 
 Each hash is usable once (unique `PaymentEvent.txHash`). There is no development bypass; tests inject a fake RPC reader. Per-trace unlocks are sold by the x402 service in the contracts repo, which the frontend calls directly.
+
+## Position valuation (#78)
+
+Agent positions are share counts, not futures-style floats. `agent_buy` returns the shares; the position stores `sharesRaw`, `costBasisRaw` and `feesPaidRaw` (`NUMERIC(39,0)`, converted with `decimalToBigint`, never through a JS number). Each trader cycle starts with `markOpenPositions()`: it reads reserves once per market (newest indexed market-core `Trade` event when the indexer is current, otherwise `get_market`; `fee_bps` is fixed per market and cached) and computes, for the held outcome with `src/generated/fpmm.ts`:
+
+- mid value = `shares × price_bps / 10000`
+- liquidation value = `collateralOutForShares(reserve_sold, reserve_other, shares, fee_bps)`, `0` with `illiquid` if the pool can't absorb the sale
+- unrealised PnL = liquidation value − cost basis
+
+Worked example: reserves YES 400 / NO 600 USDC, fee 1%, a YES position of 10 USDC of shares (100,000,000 raw), cost 5.5 USDC. Price of YES is `600 / 1000 = 60%`, mid value 6.00 USDC. Selling all shares into the pool returns 5.9161929 USDC (liquidation value), so unrealised PnL is +0.4161929 USDC. The same shares on NO (reserve_sold = NO) liquidate at 3.9362880 USDC: swapping the reserves is the classic bug. Stop-loss triggers when `unrealisedPnlRaw ≤ −15% × costBasisRaw`, hedge detection at −10%. Run `npx tsx scripts/backfill-position-shares.ts` once after deploying to fill pre-existing rows (exact from the indexed `Trade` event, otherwise estimated with `calcBuy`, dry-run leftovers reported and skipped).
+
+## Position exits (#77)
+
+`exitPosition()` (`exit.service.ts`) sells through `treasury.agent_sell`; `closePosition()` only closes the database row. market-core `sell` takes an exact `collateral_out`, so the plan inverts the FPMM: `collateralOutForShares`, verified with `calcSell` (lowered a unit at a time until it burns no more than the target), cross-checked with `quote_sell`, and bounded by `max_shares_in = min(held, target × (1 + 1%))`. Shares held are read for the treasury contract (the holder), not the agent key. A position changes only from a confirmed live result; dry-run exits are recorded `SIMULATED`. Every attempt writes a `position_exits` row. `SlippageExceeded` re-plans (twice), `InsufficientShares` re-reads the balance (once), `MarketClosed`/`MarketNotOpen`/`Paused` fail without retry, and an ambiguous submission stays `SUBMITTED`, blocking new exits for that position until the next call reconciles it with the on-chain balance. Exits within 60 s of `close_time` are left to settlement.
+
+## Agent controls (#79)
+
+`agent_controls` holds a pause per scope (`ALL`, `MARKET_MAKER`, `TRADER`) shared by all instances; `agent_control_events` is the audit trail. See the Agent controls section of `docs/api.md` for the endpoints, automatic pauses and the guarantee boundary.
 
 ## Resolution
 

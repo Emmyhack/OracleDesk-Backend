@@ -26,6 +26,14 @@ import type { Category, Config as MarketCoreConfig, Market as OnChainMarket, Out
 import type { Trace } from '../generated/reasoning-registry';
 import type { DailyUsage, RiskConfig } from '../generated/treasury';
 import type { ResolutionState } from '../generated/resolver';
+import { agentScopeForTraceAction } from '../lib/trace-actions';
+import {
+  AgentPausedError,
+  assertAgentActive,
+  assertAgentActiveLocked,
+  recordChainWriteOutcome,
+  type AgentScope,
+} from './agent-controls.service';
 
 export { ArchivedEntryError };
 
@@ -101,7 +109,36 @@ async function read<T>(
   );
 }
 
+/**
+ * Every chain write goes through here (#79): the agent's control state is
+ * checked before the transaction is built, re-checked under a share lock after
+ * simulation (right before signing), and the outcome feeds the failure breaker.
+ */
 async function write<T>(
+  scope: AgentScope,
+  contract: 'treasury' | 'reasoningRegistry',
+  method: string,
+  args: Record<string, unknown>,
+  call: () => Promise<AssembledTransaction<unknown>>,
+  signal?: AbortSignal,
+): Promise<WriteResult<T>> {
+  const seenVersion = await assertAgentActive(scope);
+  try {
+    const result = await submitWrite<T>(scope, seenVersion, contract, method, args, call, signal);
+    await recordChainWriteOutcome(scope, true, null);
+    return result;
+  } catch (err) {
+    // A refused write never reached the chain; it is not a chain failure.
+    if (!(err instanceof AgentPausedError)) {
+      await recordChainWriteOutcome(scope, false, err instanceof ChainError ? err.contractError : null);
+    }
+    throw err;
+  }
+}
+
+async function submitWrite<T>(
+  scope: AgentScope,
+  seenVersion: number,
   contract: 'treasury' | 'reasoningRegistry',
   method: string,
   args: Record<string, unknown>,
@@ -118,6 +155,9 @@ async function write<T>(
     });
   }
   const simulated = simulatedValue<T>(contract, method, tx);
+
+  // A pause that landed while the transaction was being built stops here.
+  await assertAgentActiveLocked(scope, seenVersion);
 
   if (config.CHAIN_EXECUTION_MODE === 'dry-run') {
     logger.info({ method, args: printable(args), simulated: printable(simulated) }, 'dry-run: simulated, not submitted');
@@ -190,6 +230,11 @@ export const quoteBuy = (marketId: bigint, outcome: Outcome, collateralIn: bigin
     readClients.marketCore().quote_buy({ market_id: marketId, outcome, collateral_in: collateralIn }), signal,
   );
 
+export const quoteSell = (marketId: bigint, outcome: Outcome, collateralOut: bigint, signal?: AbortSignal) =>
+  read<bigint>('marketCore', 'quote_sell', async () =>
+    readClients.marketCore().quote_sell({ market_id: marketId, outcome, collateral_out: collateralOut }), signal,
+  );
+
 export const getPosition = (marketId: bigint, holder: string, signal?: AbortSignal) =>
   read<Position>('marketCore', 'get_position', async () =>
     readClients.marketCore().get_position({ market_id: marketId, holder }), signal,
@@ -253,15 +298,15 @@ export interface CreateMarketArgs {
 }
 
 export const agentCreateMarket = (args: CreateMarketArgs, signal?: AbortSignal) =>
-  write<bigint>('treasury', 'agent_create_market', { ...args }, async () =>
+  write<bigint>('MARKET_MAKER', 'treasury', 'agent_create_market', { ...args }, async () =>
     agentClients.treasury().agent_create_market(args), signal,
   );
 
 export const agentBuy = (args: { market_id: bigint; outcome: Outcome; collateral_in: bigint; min_shares_out: bigint }, signal?: AbortSignal) =>
-  write<bigint>('treasury', 'agent_buy', args, async () => agentClients.treasury().agent_buy(args), signal);
+  write<bigint>('TRADER', 'treasury', 'agent_buy', args, async () => agentClients.treasury().agent_buy(args), signal);
 
 export const agentSell = (args: { market_id: bigint; outcome: Outcome; collateral_out: bigint; max_shares_in: bigint }, signal?: AbortSignal) =>
-  write<bigint>('treasury', 'agent_sell', args, async () => agentClients.treasury().agent_sell(args), signal);
+  write<bigint>('TRADER', 'treasury', 'agent_sell', args, async () => agentClients.treasury().agent_sell(args), signal);
 
 export const publishTrace = (args: {
   agent: string;
@@ -269,7 +314,7 @@ export const publishTrace = (args: {
   action: string;
   trace_hash: Buffer;
   ipfs_cid: string;
-}, signal?: AbortSignal) =>
-  write<bigint>('reasoningRegistry', 'publish_trace', args, async () =>
+}, signal?: AbortSignal, scope: AgentScope = agentScopeForTraceAction(args.action)) =>
+  write<bigint>(scope, 'reasoningRegistry', 'publish_trace', args, async () =>
     agentClients.reasoningRegistry().publish_trace(args), signal,
   );

@@ -1,1 +1,8 @@
-[]
+[
+  {
+    "migration": "20261018000000_position_shares_resolvability_agent_controls",
+    "rules": ["require-concurrent-index-creation"],
+    "reason": "#78 requires the chain_events expression index inside the migration. Prisma runs migrations in a transaction, where CREATE INDEX CONCURRENTLY is not allowed; the index is partial (eventName = 'Trade') and chain_events is append-only, so the short ACCESS EXCLUSIVE-free SHARE lock only delays the indexer's inserts.",
+    "approvedBy": "pending maintainer review on the PR"
+  }
+]

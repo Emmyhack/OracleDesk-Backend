@@ -4,12 +4,28 @@ import { writeAgentLog } from '../lib/agent-log';
 import { calculateKellySize } from './trade.service';
 import { AppError } from '../middlewares/error.middleware';
 import type { HedgeRecommendation } from '../types';
+import { decimalToBigint } from '../lib/amounts';
+import { pauseAgent } from './agent-controls.service';
 
 // ─── Hedging constants ───
 const HEDGE_TRIGGER_EDGE_DECAY  = 0.50;  // Hedge when edge decays by 50%
 const HEDGE_SIZE_FRACTION       = 0.50;  // Hedge 50% of original position
 const MAX_DAILY_DRAWDOWN_PCT    = 0.03;  // 3% daily drawdown → pause agent
 const DRAWDOWN_PAUSE_HOURS      = 4;     // Pause for 4 hours on max drawdown
+const STOP_LOSS_BPS             = 1_500n; // Exit at a 15% liquidation-value loss
+const HEDGE_LOSS_BPS            = 1_000n; // Hedge at a 10% liquidation-value loss
+
+/**
+ * Unrealised loss as basis points of cost, from the mark-to-market columns
+ * (#78): liquidation value minus cost, i.e. what selling now would lose.
+ * Null for legacy rows that were never given shares.
+ */
+function liquidationLossBps(position: { costBasisRaw: any; unrealisedPnlRaw: any }): bigint | null {
+  if (position.costBasisRaw == null || position.unrealisedPnlRaw == null) return null;
+  const cost = decimalToBigint(position.costBasisRaw);
+  if (cost <= 0n) return null;
+  return (-decimalToBigint(position.unrealisedPnlRaw) * 10_000n) / cost;
+}
 
 /**
  * Scans all open positions and identifies which ones need hedging.
@@ -17,7 +33,9 @@ const DRAWDOWN_PAUSE_HOURS      = 4;     // Pause for 4 hours on max drawdown
  * A position needs hedging when:
  * 1. The current market price has moved adversely by > 8%
  *    (edge from entry is now < 50% of original edge)
- * 2. OR the position is showing unrealised loss > 10% of size
+ * 2. OR selling the position now would realise a loss of 10% or more of its
+ *    cost (liquidation value, #78; legacy rows without shares fall back to
+ *    the float pnl)
  *
  * For each position needing a hedge, we search for:
  * - A market in the same category with OPPOSITE directional exposure
@@ -44,7 +62,10 @@ export async function detectHedgeOpportunities(): Promise<HedgeRecommendation[]>
     const currentEdge = entryEdge - priceChange;
 
     const edgeDegraded = currentEdge < entryEdge * (1 - HEDGE_TRIGGER_EDGE_DECAY);
-    const hasLoss = position.pnl < -(position.size * 0.10);
+    const lossBps = liquidationLossBps(position);
+    const hasLoss = lossBps !== null
+      ? lossBps >= HEDGE_LOSS_BPS
+      : position.pnl < -(position.size * 0.10);
 
     if (!edgeDegraded && !hasLoss) continue;
 
@@ -136,10 +157,8 @@ export async function autoHedge(recommendation: HedgeRecommendation): Promise<an
 /**
  * Implements hard stop-loss logic.
  *
- * Called by the position monitor every 15 minutes.
- * Closes positions where:
- *   - Market has moved 15%+ against the position
- *   - Daily drawdown of the entire portfolio exceeds 3%
+ * Called by the trader cycle every 15 minutes, after markOpenPositions().
+ * Flags positions whose liquidation value is 15% or more below their cost.
  */
 export async function enforceStopLoss(positionId: string): Promise<{
   shouldClose: boolean;
@@ -153,6 +172,17 @@ export async function enforceStopLoss(positionId: string): Promise<{
     return { shouldClose: false };
   }
 
+  // Liquidation-based (#78): what the shares would fetch if sold now against
+  // the pool, not the mid price. Written by markOpenPositions() each cycle.
+  const lossBps = liquidationLossBps(position);
+  if (lossBps !== null) {
+    if (lossBps >= STOP_LOSS_BPS) {
+      return { shouldClose: true, reason: `STOP_LOSS: Liquidation value is ${(Number(lossBps) / 100).toFixed(1)}% below cost` };
+    }
+    return { shouldClose: false };
+  }
+
+  // Legacy rows (no shares recorded) keep the old price-move rule.
   const currentPrice = position.currentPrice ?? position.entryPrice;
   const adverseMove = Math.abs(currentPrice - position.entryPrice) / position.entryPrice;
 
@@ -165,15 +195,19 @@ export async function enforceStopLoss(positionId: string): Promise<{
 
 /**
  * Checks if the daily drawdown limit has been breached.
- * If yes, pauses new trade execution for DRAWDOWN_PAUSE_HOURS.
+ * If yes, persists a TRADER pause for DRAWDOWN_PAUSE_HOURS (#79); every
+ * instance sees it, and the cycle gate (assertAgentActive) enforces it.
+ *
+ * "Today" is the UTC day (it used to be the server's local day, which differed
+ * between instances).
  */
 export async function checkDailyDrawdown(bankroll: number): Promise<{
   isPaused:      boolean;
   drawdownPct:   number;
   pauseUntil?:   Date;
 }> {
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
+  const now = new Date();
+  const todayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
 
   const todayTrades = await prisma.position.findMany({
     where: {
@@ -192,6 +226,13 @@ export async function checkDailyDrawdown(bankroll: number): Promise<{
   if (drawdownPct >= MAX_DAILY_DRAWDOWN_PCT) {
     const pauseUntil = new Date(Date.now() + DRAWDOWN_PAUSE_HOURS * 60 * 60 * 1000);
     logger.warn({ drawdownPct, pauseUntil }, 'Daily drawdown limit reached — pausing agent');
+
+    await pauseAgent('TRADER', {
+      source: 'drawdown',
+      actor: 'system',
+      until: pauseUntil,
+      reason: `Daily drawdown ${(drawdownPct * 100).toFixed(2)}% reached the ${(MAX_DAILY_DRAWDOWN_PCT * 100).toFixed(0)}% limit`,
+    });
 
     await writeAgentLog({
       agentType: 'TRADER',

@@ -247,6 +247,42 @@ Publishing it doesn't weaken the commitment: the hash was fixed on-chain
 before trading, so the spec can't change, and anyone may reveal it to the
 resolver.
 
+`resolutionDetails` (nullable) is the resolvability block pinned in question
+document v2 (below); `null` for markets created before #74.
+
+#### Question document (pinned to IPFS, `questionHash = sha256(bytes)`)
+
+`metaUri` points at the canonical JSON the market was created with. The hash
+covers the exact pinned bytes, so a v1 document stays verifiable forever.
+
+- **v1**: `{ version: 1, question, category, contractCategory, closeTime, resolutionSource, resolutionHash, backendMarketId }`.
+- **v2** (#74): the same fields with `version: 2` plus a `resolution` block,
+  emitted when the market has `resolutionDetails`:
+
+```json
+{
+  "version": 2,
+  "question": "Will CPI for September 2026 exceed 3%?",
+  "closeTime": 1792207199,
+  "resolutionSource": "BLS",
+  "resolution": {
+    "sourceId": "BLS",
+    "url": "https://www.bls.gov/news.release/",
+    "measurable": "CPI",
+    "comparator": ">",
+    "threshold": { "value": 3, "unit": "%", "text": "3%" },
+    "deadlineUtc": "2026-10-01T03:59:59.000Z",
+    "instructions": "Use the first release of the BLS news release … Deadline: 2026-09-30 23:59:59 (America/New_York) = 2026-10-01T03:59:59.000Z. Resolve on the first published value."
+  }
+}
+```
+
+`sourceId` is one of `FRED, BLS, ECB, AP_ELECTIONS, AP_POLITICS, ESPN, BILLBOARD, OPEC, CHAINLINK`.
+`comparator` and `threshold` are `null` when the question has none. `deadlineUtc`
+is the event deadline (end of day in the source's zone, a data period's end, or a
+meeting announcement); `closeTime` is later by the source's publication lag.
+**Readers must ignore unknown fields.** `resolutionSource` stays for compatibility.
+
 #### `GET /markets`
 
 Query: `status` (`PENDING|ACTIVE|RESOLVING|RESOLVED|CANCELLED`), `category`
@@ -309,7 +345,12 @@ live signals, which is recorded as a backlog item):
 ```
 
 Response `202`: `{ jobId, message, statusUrl, hint }`.
-Errors: `403 FORBIDDEN` (not an admin), `429 RATE_LIMITED`.
+Errors: `403 FORBIDDEN` (not an admin), `423 AGENT_PAUSED` (the market maker or ALL
+is paused; no job is started), `429 RATE_LIMITED`.
+
+A cycle drops a proposal whose deadline, close time and source don't fit
+(`PROPOSAL_UNRESOLVABLE` agent log with reason codes) and repairs a close time
+that is merely off (`PROPOSAL_EXPIRY_REPAIRED`); see `docs/architecture.md`.
 
 #### `GET /markets/generation-status/:jobId` (auth)
 
@@ -469,8 +510,33 @@ the RPC read fails). The float fields are the DB's view.
 #### `GET /portfolio/positions`
 
 Query `status`, `page`, `limit`. Response: `Position[]` with
-`market { question, category, settlementCurrency, expiryTimestamp, onChainMarketId }`
-and `trade { direction, amount, edgeDetected, kellyFraction, txHash }`.
+`market { question, category, settlementCurrency, expiryTimestamp, onChainMarketId }`,
+`trade { direction, amount, edgeDetected, kellyFraction, txHash }` and `lastExit`
+(the newest `PositionExit`: `status`, `reason`, `mode`, `sharesSoldRaw`,
+`collateralOutRaw`, `effectivePrice`, `txHash`, `error`, `createdAt`, or `null`).
+
+Positions are denominated in **shares** (#77/#78). Raw fields are base-unit
+decimal strings (7-decimal USDC, `NUMERIC(39,0)`), never floats:
+
+| Field | Meaning |
+|---|---|
+| `sharesRaw` | Outcome shares still held, from `agent_buy`'s result (`null`: legacy row, see the backfill script). |
+| `costBasisRaw` | Collateral paid for the shares still held. Released pro rata by partial exits. |
+| `feesPaidRaw` | Fee paid on the buy (`ceil(collateral_in × fee_bps / 10000)`). |
+| `realisedCollateralRaw`, `realisedPnlRaw` | Collateral received and PnL realised by confirmed exits. |
+| `markPriceBps` | Mid price of the held outcome, in basis points. |
+| `markValueRaw` | **Mid value**: `shares × markPriceBps / 10000`. Overstates what a large position can realise. |
+| `liquidationValueRaw` | **Liquidation value**: what selling all shares into the pool returns now (`collateralOutForShares`, fee included, rounded down). `0` with `illiquid: true` if the pool can't absorb the sale. **This drives risk.** |
+| `unrealisedPnlRaw` | `liquidationValueRaw − costBasisRaw`. Stop-loss (−15% of cost) and hedge detection (−10%) use it. |
+| `markedAt`, `valuationSource` | When and from where the mark came: `indexed` (newest indexed `Trade` event), `rpc` (`get_market`) or `estimated` (backfill). |
+| `entryPrice` | Effective price paid per share (`collateralIn / sharesOut`), display only. |
+| `currentPrice`, `pnl`, `size` | Float display fields derived from the raw values (`pnl` = realised + unrealised). |
+
+Several open positions in one market are valued by their own shares; selling
+them together returns less than the sum because each sale moves the pool.
+
+`GET /portfolio` sums exactly in base units: `deployedCapital` = Σ `costBasisRaw`,
+`totalPnl` = Σ (realised + liquidation-based unrealised) plus closed positions.
 
 #### `GET /portfolio/stats`
 
@@ -544,6 +610,43 @@ Query parameters: `page`, `limit`, `status`.
 
 Schedules a trace audit run asynchronously in the background.
 Response `202 Accepted`: `{ "runId": "uuid", "message": "Trace audit run scheduled" }`.
+
+### Agent controls (admin auth, #79)
+
+A persistent kill switch and pause shared by every backend instance. Scopes:
+`ALL`, `MARKET_MAKER`, `TRADER`. An agent is paused when its own row or `ALL`
+is. Both agent cycles check at their start, and every chain write
+(`agent_create_market`, `agent_buy`, `agent_sell`, `publish_trace`) checks
+before building the transaction and again, under a share lock, right after
+simulation and before signing. A pause committed after that lock is released
+cannot stop a transaction already handed to RPC. Checks fail closed: if the
+control table can't be read the agent does not run (`503 AGENT_CONTROL_UNAVAILABLE`).
+
+Automatic pauses (`source`): `drawdown` (TRADER, 4 h, "today" is the UTC day),
+`chain_paused` (ALL; market-core `get_config().paused` or a `Paused` contract
+error; cleared by an operator or when the re-check shows market-core unpaused),
+`failure_breaker` (the writing agent; `AGENT_FAILURE_THRESHOLD` failures within
+`AGENT_FAILURE_WINDOW_MS`; risk-cap rejections don't count; needs an operator
+resume). An operator pause (`source: operator`, no `until`) is never shortened
+or cleared by a timed pause.
+
+#### `GET /admin/agents/controls` (admin)
+
+`{ scopes: [{ scope, paused, own: { paused, reason, source, pausedUntil, pausedBy, version } }], events }`
+with the last 20 audit events.
+
+#### `POST /admin/agents/:agent/pause` (admin)
+
+`:agent` is `ALL | MARKET_MAKER | TRADER`. Body `{ reason: string (5..500), until?: ISO datetime }`.
+Without `until` the pause lasts until an operator resumes. Returns the same
+body as `GET /admin/agents/controls`. `400 VALIDATION_ERROR` for a bad body,
+agent or past `until`.
+
+#### `POST /admin/agents/:agent/resume` (admin)
+
+Body `{ reason?: string }`. Clears only the named row: resuming `TRADER` does not
+clear an `ALL` pause. Every pause, resume and automatic expiry writes an
+`agent_control_events` row (`before`, `after`, `actor`, `source`).
 
 ### Oracle / resolution
 
@@ -707,6 +810,16 @@ strings, such as `buy` from the contracts repo's TypeScript agents.
   "ledger": 123456
 }
 ```
+
+### `AGENT_CONTROL_CHANGED`
+
+Emitted when a pause is set, a pause is lifted or a timed pause expires.
+
+```json
+{ "scope": "TRADER", "paused": true, "reason": "Daily drawdown 3.10% reached the 3% limit", "until": "2026-10-18T16:00:00.000Z" }
+```
+
+`until` is `null` for indefinite pauses and for resumes.
 
 ## Frontend call map
 

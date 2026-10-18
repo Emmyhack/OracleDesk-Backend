@@ -12,6 +12,7 @@ import { startTraceAuditCron } from './cron/trace-audit.cron';
 import { startTracePublicationCron } from './cron/trace-publication.cron';
 import { startEventListener } from './services/indexer.service';
 import { closeRedis } from './lib/redis';
+import { setControlEmitter } from './services/agent-controls.service';
 import { health } from './services/health.service';
 
 let stopEventListener: (() => void) | null = null;
@@ -52,6 +53,8 @@ async function bootstrap(): Promise<void> {
       methods: ['GET', 'POST'],
     },
   });
+
+  setControlEmitter((event, payload) => io.emit(event, payload));
 
   // 3. Index Stellar events (resumes from the stored ledger cursor)
   stopEventListener = startEventListener((event, payload) => io.emit(event, payload));

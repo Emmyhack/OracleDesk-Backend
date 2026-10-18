@@ -4,7 +4,10 @@ import {
   addOperationSignature,
   cancelTreasuryOperation,
   createOperation,
+  getAgentControls,
   getSystemStatus,
+  pauseAgentControl,
+  resumeAgentControl,
   getTraceAuditSummary,
   getTreasury,
   getTreasuryOperation,
@@ -26,6 +29,9 @@ router.post('/treasury/operations/:id/signatures', addOperationSignature);
 router.post('/treasury/operations/:id/submit', submitTreasuryOperation);
 router.post('/treasury/operations/:id/record', recordTreasuryOperation);
 router.post('/treasury/operations/:id/cancel', cancelTreasuryOperation);
+router.get('/agents/controls', getAgentControls);
+router.post('/agents/:agent/pause', pauseAgentControl);
+router.post('/agents/:agent/resume', resumeAgentControl);
 router.get('/status', getSystemStatus);
 router.get('/trace-audit', getTraceAuditSummary);
 router.post('/trace-audit/run', triggerTraceAuditRun);

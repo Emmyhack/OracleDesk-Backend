@@ -293,6 +293,9 @@ test('POST /markets/generate replay returns same jobId and starts one cycle', as
   const { prisma } = await import('../src/lib/prisma');
   const { signToken } = await import('../src/middlewares/auth.middleware');
   const prev = mw.setIdempotencyStore(memoryStore().store);
+  const controls = await import('../src/services/agent-controls.service');
+  const origAssert = controls.assertAgentActive;
+  (controls as any).assertAgentActive = async () => 1; // no agent_controls table in this test
   let cycles = 0;
   const origCycle = agent.runMarketMakerCycle;
   const origLog = prisma.agentLog.create;
@@ -317,6 +320,7 @@ test('POST /markets/generate replay returns same jobId and starts one cycle', as
     });
   } finally {
     (agent as any).runMarketMakerCycle = origCycle;
+    (controls as any).assertAgentActive = origAssert;
     (prisma.agentLog.create as any) = origLog;
     mw.setIdempotencyStore(prev);
   }

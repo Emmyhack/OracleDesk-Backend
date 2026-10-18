@@ -1,0 +1,604 @@
+[
+  {
+    "name": "cpi for september closes after BLS lag (repaired)",
+    "question": "Will CPI YoY exceed 3% for September?",
+    "category": "MACRO",
+    "oracle": "BLS",
+    "expiry": "2026-10-01T00:00:00Z",
+    "now": "2026-09-20T12:00:00Z",
+    "expected": {
+      "ok": true,
+      "reasons": [],
+      "repairedExpiry": "2026-10-17T03:59:59.000Z",
+      "resolution": {
+        "sourceId": "BLS",
+        "comparator": ">",
+        "thresholdValue": 3
+      }
+    }
+  },
+  {
+    "name": "cpi close inside window untouched",
+    "question": "Will CPI YoY exceed 3% for September?",
+    "category": "MACRO",
+    "oracle": "BLS",
+    "expiry": "2026-10-17T05:00:00Z",
+    "now": "2026-09-20T12:00:00Z",
+    "expected": {
+      "ok": true,
+      "reasons": []
+    }
+  },
+  {
+    "name": "cpi close months late clamps to latest",
+    "question": "Will CPI YoY exceed 3% for September?",
+    "category": "MACRO",
+    "oracle": "BLS",
+    "expiry": "2026-12-15T00:00:00Z",
+    "now": "2026-09-20T12:00:00Z",
+    "expected": {
+      "ok": true,
+      "reasons": [],
+      "repairedExpiry": "2026-10-17T09:59:59.000Z"
+    }
+  },
+  {
+    "name": "cpi with explicit year",
+    "question": "Will CPI for September 2026 exceed 3%?",
+    "category": "MACRO",
+    "oracle": "BLS",
+    "expiry": "2026-10-17T05:00:00Z",
+    "now": "2026-09-20T12:00:00Z",
+    "expected": {
+      "ok": true,
+      "reasons": []
+    }
+  },
+  {
+    "name": "data month already published",
+    "question": "Will CPI for September 2026 exceed 3%?",
+    "category": "MACRO",
+    "oracle": "BLS",
+    "expiry": "2026-12-01T00:00:00Z",
+    "now": "2026-11-20T12:00:00Z",
+    "expected": {
+      "ok": false,
+      "reasons": [
+        "DEADLINE_IN_PAST"
+      ]
+    }
+  },
+  {
+    "name": "fed december meeting closes after announcement, not month end",
+    "question": "Will the Fed cut rates at its December meeting?",
+    "category": "FED",
+    "oracle": "FRED",
+    "expiry": "2026-12-31T00:00:00Z",
+    "now": "2026-10-18T12:00:00Z",
+    "expected": {
+      "ok": true,
+      "reasons": [],
+      "repairedExpiry": "2026-12-10T02:00:00.000Z"
+    }
+  },
+  {
+    "name": "fed december meeting close inside window",
+    "question": "Will the Fed cut rates at its December meeting?",
+    "category": "FED",
+    "oracle": "FRED",
+    "expiry": "2026-12-09T20:30:00Z",
+    "now": "2026-10-18T12:00:00Z",
+    "expected": {
+      "ok": true,
+      "reasons": []
+    }
+  },
+  {
+    "name": "fed next meeting",
+    "question": "Will the Fed hold rates at its next meeting?",
+    "category": "FED",
+    "oracle": "FRED",
+    "expiry": "2026-10-28T19:30:00Z",
+    "now": "2026-10-18T12:00:00Z",
+    "expected": {
+      "ok": true,
+      "reasons": []
+    }
+  },
+  {
+    "name": "fed next meeting expiry too early",
+    "question": "Will the Fed hold rates at its next FOMC meeting?",
+    "category": "FED",
+    "oracle": "FRED",
+    "expiry": "2026-10-20T00:00:00Z",
+    "now": "2026-10-18T12:00:00Z",
+    "expected": {
+      "ok": true,
+      "reasons": [],
+      "repairedExpiry": "2026-10-28T19:00:00.000Z"
+    }
+  },
+  {
+    "name": "fed september meeting ahead of expiry",
+    "question": "Will the Fed hold rates at its September meeting?",
+    "category": "FED",
+    "oracle": "FRED",
+    "expiry": "2026-09-30T00:00:00Z",
+    "now": "2026-09-10T12:00:00Z",
+    "expected": {
+      "ok": true,
+      "reasons": [],
+      "repairedExpiry": "2026-09-17T01:00:00.000Z"
+    }
+  },
+  {
+    "name": "meeting announcement imminent cannot be repaired safely",
+    "question": "Will the Fed hold rates at its September meeting?",
+    "category": "FED",
+    "oracle": "FRED",
+    "expiry": "2026-09-30T00:00:00Z",
+    "now": "2026-09-16T17:30:00Z",
+    "expected": {
+      "ok": false,
+      "reasons": [
+        "DEADLINE_IN_PAST"
+      ]
+    }
+  },
+  {
+    "name": "fed meeting beyond the 120 day horizon",
+    "question": "Will the Fed cut rates at its January 2027 meeting?",
+    "category": "FED",
+    "oracle": "FRED",
+    "expiry": "2027-01-27T20:30:00Z",
+    "now": "2026-09-20T12:00:00Z",
+    "expected": {
+      "ok": false,
+      "reasons": [
+        "HORIZON_TOO_LONG"
+      ]
+    }
+  },
+  {
+    "name": "fed meeting month not in calendar",
+    "question": "Will the Fed cut rates at its November meeting?",
+    "category": "FED",
+    "oracle": "FRED",
+    "expiry": "2026-11-30T00:00:00Z",
+    "now": "2026-10-18T12:00:00Z",
+    "expected": {
+      "ok": false,
+      "reasons": [
+        "NO_DEADLINE"
+      ]
+    }
+  },
+  {
+    "name": "ecb december meeting repaired",
+    "question": "Will the ECB cut rates at its December meeting?",
+    "category": "ECB",
+    "oracle": "ECB",
+    "expiry": "2026-12-31T00:00:00Z",
+    "now": "2026-09-20T12:00:00Z",
+    "expected": {
+      "ok": true,
+      "reasons": [],
+      "repairedExpiry": "2026-12-17T20:15:00.000Z"
+    }
+  },
+  {
+    "name": "ecb next meeting",
+    "question": "Will the ECB hold rates at its next meeting?",
+    "category": "ECB",
+    "oracle": "ECB",
+    "expiry": "2026-10-29T15:00:00Z",
+    "now": "2026-09-20T12:00:00Z",
+    "expected": {
+      "ok": true,
+      "reasons": []
+    }
+  },
+  {
+    "name": "fed funds target by year end with FRED lag",
+    "question": "Will the Fed's target rate be above 4% by December 31, 2026?",
+    "category": "FED",
+    "oracle": "FRED",
+    "expiry": "2027-02-01T00:00:00Z",
+    "now": "2026-09-20T12:00:00Z",
+    "expected": {
+      "ok": true,
+      "reasons": [],
+      "repairedExpiry": "2027-01-02T10:59:59.000Z"
+    }
+  },
+  {
+    "name": "championship far beyond horizon",
+    "question": "Will the Lakers win the championship by June 30, 2027?",
+    "category": "SPORTS",
+    "oracle": "ESPN",
+    "expiry": "2027-07-01T00:00:00Z",
+    "now": "2026-09-20T12:00:00Z",
+    "expected": {
+      "ok": false,
+      "reasons": [
+        "HORIZON_TOO_LONG"
+      ]
+    }
+  },
+  {
+    "name": "btc on bare date",
+    "question": "Will Bitcoin close above $100,000 on October 5?",
+    "category": "CRYPTO",
+    "oracle": "CHAINLINK",
+    "expiry": "2026-10-06T01:00:00Z",
+    "now": "2026-09-20T12:00:00Z",
+    "expected": {
+      "ok": true,
+      "reasons": [],
+      "resolution": {
+        "sourceId": "CHAINLINK",
+        "comparator": ">",
+        "thresholdValue": 100000
+      }
+    }
+  },
+  {
+    "name": "btc expiry weeks after the deadline",
+    "question": "Will Bitcoin close above $100,000 on October 5?",
+    "category": "CRYPTO",
+    "oracle": "CHAINLINK",
+    "expiry": "2026-11-30T00:00:00Z",
+    "now": "2026-09-20T12:00:00Z",
+    "expected": {
+      "ok": true,
+      "reasons": [],
+      "repairedExpiry": "2026-10-06T06:00:59.000Z"
+    }
+  },
+  {
+    "name": "btc end of year",
+    "question": "Will Bitcoin trade above $150,000 by end of 2026?",
+    "category": "CRYPTO",
+    "oracle": "CHAINLINK",
+    "expiry": "2027-01-01T01:00:00Z",
+    "now": "2026-10-20T12:00:00Z",
+    "expected": {
+      "ok": true,
+      "reasons": []
+    }
+  },
+  {
+    "name": "two deadlines in one question",
+    "question": "Will Congress pass the bill by October 15 and see it signed by October 31?",
+    "category": "POLITICS",
+    "oracle": "AP_POLITICS",
+    "expiry": "2026-11-01T10:00:00Z",
+    "now": "2026-09-20T12:00:00Z",
+    "expected": {
+      "ok": false,
+      "reasons": [
+        "AMBIGUOUS_DEADLINE"
+      ]
+    }
+  },
+  {
+    "name": "no deadline",
+    "question": "Will the Fed cut rates?",
+    "category": "FED",
+    "oracle": "FRED",
+    "expiry": "2026-12-31T00:00:00Z",
+    "now": "2026-09-20T12:00:00Z",
+    "expected": {
+      "ok": false,
+      "reasons": [
+        "NO_DEADLINE"
+      ]
+    }
+  },
+  {
+    "name": "either-or outcome",
+    "question": "Will Biden or Trump win the election by November 3, 2026?",
+    "category": "ELECTION",
+    "oracle": "AP_ELECTIONS",
+    "expiry": "2026-11-04T18:00:00Z",
+    "now": "2026-10-20T12:00:00Z",
+    "expected": {
+      "ok": false,
+      "reasons": [
+        "NOT_BINARY"
+      ]
+    }
+  },
+  {
+    "name": "two wills",
+    "question": "Will inflation rise and will the Fed cut rates by December 31, 2026?",
+    "category": "MACRO",
+    "oracle": "FRED",
+    "expiry": "2027-01-02T06:00:00Z",
+    "now": "2026-10-20T12:00:00Z",
+    "expected": {
+      "ok": false,
+      "reasons": [
+        "NOT_BINARY"
+      ]
+    }
+  },
+  {
+    "name": "how many",
+    "question": "How many seats will Democrats win by November 3, 2026?",
+    "category": "ELECTION",
+    "oracle": "AP_ELECTIONS",
+    "expiry": "2026-11-04T18:00:00Z",
+    "now": "2026-10-20T12:00:00Z",
+    "expected": {
+      "ok": false,
+      "reasons": [
+        "NOT_BINARY"
+      ]
+    }
+  },
+  {
+    "name": "comparator 'or more' is not an either-or",
+    "question": "Will CPI for September 2026 be 3% or more?",
+    "category": "MACRO",
+    "oracle": "BLS",
+    "expiry": "2026-10-17T05:00:00Z",
+    "now": "2026-09-20T12:00:00Z",
+    "expected": {
+      "ok": true,
+      "reasons": [],
+      "resolution": {
+        "sourceId": "BLS",
+        "comparator": ">=",
+        "thresholdValue": 3
+      }
+    }
+  },
+  {
+    "name": "oracle not on the allowlist",
+    "question": "Will CPI for September 2026 exceed 3%?",
+    "category": "MACRO",
+    "oracle": "REUTERS",
+    "expiry": "2026-10-17T05:00:00Z",
+    "now": "2026-09-20T12:00:00Z",
+    "expected": {
+      "ok": false,
+      "reasons": [
+        "SOURCE_NOT_ALLOWED"
+      ]
+    }
+  },
+  {
+    "name": "empty oracle",
+    "question": "Will CPI for September 2026 exceed 3%?",
+    "category": "MACRO",
+    "oracle": "",
+    "expiry": "2026-10-17T05:00:00Z",
+    "now": "2026-09-20T12:00:00Z",
+    "expected": {
+      "ok": false,
+      "reasons": [
+        "SOURCE_NOT_ALLOWED"
+      ]
+    }
+  },
+  {
+    "name": "billboard oracle on a FED question",
+    "question": "Will the Fed cut rates at its December meeting?",
+    "category": "FED",
+    "oracle": "BILLBOARD",
+    "expiry": "2026-12-10T00:00:00Z",
+    "now": "2026-10-18T12:00:00Z",
+    "expected": {
+      "ok": false,
+      "reasons": [
+        "SOURCE_CATEGORY_MISMATCH"
+      ]
+    }
+  },
+  {
+    "name": "espn oracle on a macro question",
+    "question": "Will CPI for September 2026 exceed 3%?",
+    "category": "MACRO",
+    "oracle": "ESPN",
+    "expiry": "2026-10-17T05:00:00Z",
+    "now": "2026-09-20T12:00:00Z",
+    "expected": {
+      "ok": false,
+      "reasons": [
+        "SOURCE_CATEGORY_MISMATCH"
+      ]
+    }
+  },
+  {
+    "name": "first allowed token that fits the category wins",
+    "question": "Will the Fed cut rates at its December meeting?",
+    "category": "FED",
+    "oracle": "BLS|FRED",
+    "expiry": "2026-12-09T20:30:00Z",
+    "now": "2026-10-18T12:00:00Z",
+    "expected": {
+      "ok": true,
+      "reasons": [],
+      "resolution": {
+        "sourceId": "FRED"
+      }
+    }
+  },
+  {
+    "name": "lowercase oracle",
+    "question": "Will the Fed cut rates at its December meeting?",
+    "category": "FED",
+    "oracle": "fred",
+    "expiry": "2026-12-09T20:30:00Z",
+    "now": "2026-10-18T12:00:00Z",
+    "expected": {
+      "ok": true,
+      "reasons": []
+    }
+  },
+  {
+    "name": "alias oracle",
+    "question": "Will the Fed cut rates at its December meeting?",
+    "category": "FED",
+    "oracle": "Federal Reserve",
+    "expiry": "2026-12-09T20:30:00Z",
+    "now": "2026-10-18T12:00:00Z",
+    "expected": {
+      "ok": true,
+      "reasons": []
+    }
+  },
+  {
+    "name": "dst spring forward day",
+    "question": "Will the Lakers beat the Celtics by March 8, 2026?",
+    "category": "SPORTS",
+    "oracle": "ESPN",
+    "expiry": "2026-03-09T07:00:00Z",
+    "now": "2026-02-20T12:00:00Z",
+    "expected": {
+      "ok": true,
+      "reasons": []
+    }
+  },
+  {
+    "name": "dst fall back day",
+    "question": "Will the Giants beat the Eagles by November 1, 2026?",
+    "category": "SPORTS",
+    "oracle": "ESPN",
+    "expiry": "2026-11-02T08:00:00Z",
+    "now": "2026-10-20T12:00:00Z",
+    "expected": {
+      "ok": true,
+      "reasons": []
+    }
+  },
+  {
+    "name": "before a date means the previous day",
+    "question": "Will the treaty be announced before November 1, 2026?",
+    "category": "POLITICS",
+    "oracle": "AP_POLITICS",
+    "expiry": "2026-11-01T12:00:00Z",
+    "now": "2026-10-20T12:00:00Z",
+    "expected": {
+      "ok": true,
+      "reasons": []
+    }
+  },
+  {
+    "name": "on or before",
+    "question": "Will the bill be signed on or before October 31, 2026?",
+    "category": "POLITICS",
+    "oracle": "AP_POLITICS",
+    "expiry": "2026-11-01T10:30:00Z",
+    "now": "2026-10-20T12:00:00Z",
+    "expected": {
+      "ok": true,
+      "reasons": []
+    }
+  },
+  {
+    "name": "iso date",
+    "question": "Will the unemployment rate be below 5% by 2026-12-31?",
+    "category": "MACRO",
+    "oracle": "FRED",
+    "expiry": "2027-01-02T06:00:00Z",
+    "now": "2026-10-20T12:00:00Z",
+    "expected": {
+      "ok": true,
+      "reasons": [],
+      "resolution": {
+        "comparator": "<",
+        "thresholdValue": 5
+      }
+    }
+  },
+  {
+    "name": "day month year form",
+    "question": "Will Brent crude settle above $90 by 30 November 2026?",
+    "category": "MACRO",
+    "oracle": "OPEC",
+    "expiry": "2026-12-17T01:00:00Z",
+    "now": "2026-10-20T12:00:00Z",
+    "expected": {
+      "ok": true,
+      "reasons": []
+    }
+  },
+  {
+    "name": "quarter",
+    "question": "Will US GDP growth exceed 2% in Q3 2026?",
+    "category": "MACRO",
+    "oracle": "FRED",
+    "expiry": "2026-10-18T05:00:00Z",
+    "now": "2026-09-20T12:00:00Z",
+    "expected": {
+      "ok": true,
+      "reasons": []
+    }
+  },
+  {
+    "name": "treasury yield",
+    "question": "Will the 10-year Treasury yield exceed 5% by December 15, 2026?",
+    "category": "MACRO",
+    "oracle": "FRED",
+    "expiry": "2026-12-17T06:00:00Z",
+    "now": "2026-10-20T12:00:00Z",
+    "expected": {
+      "ok": true,
+      "reasons": []
+    }
+  },
+  {
+    "name": "election night",
+    "question": "Will the Democratic candidate win the Georgia Senate race on November 3, 2026?",
+    "category": "ELECTION",
+    "oracle": "AP_ELECTIONS",
+    "expiry": "2026-11-04T18:00:00Z",
+    "now": "2026-10-20T12:00:00Z",
+    "expected": {
+      "ok": true,
+      "reasons": []
+    }
+  },
+  {
+    "name": "billboard chart lag",
+    "question": "Will the new album debut at number one on the Billboard 200 by October 31, 2026?",
+    "category": "ENTERTAINMENT",
+    "oracle": "BILLBOARD",
+    "expiry": "2026-11-05T05:00:00Z",
+    "now": "2026-10-20T12:00:00Z",
+    "expected": {
+      "ok": true,
+      "reasons": []
+    }
+  },
+  {
+    "name": "explicit deadline already passed",
+    "question": "Will the Lakers win the title by September 1, 2026?",
+    "category": "SPORTS",
+    "oracle": "ESPN",
+    "expiry": "2026-10-01T00:00:00Z",
+    "now": "2026-09-20T12:00:00Z",
+    "expected": {
+      "ok": false,
+      "reasons": [
+        "DEADLINE_IN_PAST"
+      ]
+    }
+  },
+  {
+    "name": "bare date resolves to next year then exceeds horizon",
+    "question": "Will the Lakers win the title by March 3?",
+    "category": "SPORTS",
+    "oracle": "ESPN",
+    "expiry": "2027-03-04T00:00:00Z",
+    "now": "2026-09-20T12:00:00Z",
+    "expected": {
+      "ok": false,
+      "reasons": [
+        "HORIZON_TOO_LONG"
+      ]
+    }
+  }
+]

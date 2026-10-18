@@ -1,6 +1,14 @@
 import type { Request, Response } from 'express';
 import { sendSuccess, parsePagination, buildPaginationMeta } from '../utils/response.util';
-import { createOperationSchema, recordSchema, signatureSchema } from '../validators/admin.validator';
+import {
+  controlScopeSchema,
+  createOperationSchema,
+  pauseAgentSchema,
+  recordSchema,
+  resumeAgentSchema,
+  signatureSchema,
+} from '../validators/admin.validator';
+import { controlsOverview, pauseAgent, resumeAgent } from '../services/agent-controls.service';
 import { v4 as uuidv4 } from 'uuid';
 import { prisma } from '../lib/prisma';
 import { TraceAuditStatus } from '@prisma/client';
@@ -78,6 +86,45 @@ export async function recordTreasuryOperation(req: Request, res: Response): Prom
 export async function cancelTreasuryOperation(req: Request, res: Response): Promise<void> {
   await cancelOperation(String(req.params.id), actor(req));
   sendSuccess(res, { cancelled: true });
+}
+
+/** GET /admin/agents/controls: effective state per scope plus the last 20 audit events. */
+export async function getAgentControls(_req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await controlsOverview());
+}
+
+function agentParam(req: Request) {
+  const scope = controlScopeSchema.safeParse(String(req.params.agent));
+  if (!scope.success) {
+    throw new AppError(400, 'VALIDATION_ERROR', 'agent must be one of ALL, MARKET_MAKER, TRADER');
+  }
+  return scope.data;
+}
+
+/** POST /admin/agents/:agent/pause: indefinite unless `until` is given. */
+export async function pauseAgentControl(req: Request, res: Response): Promise<void> {
+  const scope = agentParam(req);
+  const body = pauseAgentSchema.safeParse(req.body);
+  if (!body.success) {
+    throw new AppError(400, 'VALIDATION_ERROR', 'Invalid pause request', body.error.flatten().fieldErrors as any);
+  }
+  const until = body.data.until ? new Date(body.data.until) : undefined;
+  if (until && until.getTime() <= Date.now()) {
+    throw new AppError(400, 'VALIDATION_ERROR', 'until must be in the future');
+  }
+  await pauseAgent(scope, { reason: body.data.reason, source: 'operator', actor: actor(req), until });
+  sendSuccess(res, await controlsOverview());
+}
+
+/** POST /admin/agents/:agent/resume: clears only the named row. */
+export async function resumeAgentControl(req: Request, res: Response): Promise<void> {
+  const scope = agentParam(req);
+  const body = resumeAgentSchema.safeParse(req.body ?? {});
+  if (!body.success) {
+    throw new AppError(400, 'VALIDATION_ERROR', 'Invalid resume request', body.error.flatten().fieldErrors as any);
+  }
+  await resumeAgent(scope, { actor: actor(req), reason: body.data.reason });
+  sendSuccess(res, await controlsOverview());
 }
 
 /**

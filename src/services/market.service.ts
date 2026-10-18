@@ -30,6 +30,14 @@ import {
   type SanitizedSignal,
 } from './llm-guard.service';
 import { ALLOWED_ORACLES, SOURCE_WEIGHTS, meaningfulTokens } from './market-policy';
+import {
+  ATTESTATION_SLA_SECS,
+  MAX_POST_EVENT_TRADING_SECS,
+  RESOLUTION_SOURCES,
+  assessResolvability,
+  type QuestionResolutionBlock,
+} from './resolvability.service';
+import { config } from '../config';
 
 // The proposal schemas live in src/lib/llm-schema.ts (single source for the
 // zod shape, the Anthropic tool schema and the Gemini response schema).
@@ -119,7 +127,8 @@ RULES:
 3. Markets must resolve within 1–90 days from now (expiry_timestamp is a unix time in seconds)
 4. Reject vague, subjective, or unverifiable questions
 5. initial_yes_probability must be between 0.05 and 0.95
-6. resolution_oracle must be exactly one of: ${ALLOWED_ORACLES.join(', ')}
+6. resolution_oracle must be exactly one of: ${ALLOWED_ORACLES.join(', ')}. Prefer ${Object.keys(RESOLUTION_SOURCES).join(', ')}: only those can be resolved by OracleDesk's signers, and a question whose source is not one of them is rejected.
+9. The question must contain exactly one explicit deadline ("by June 30, 2026", "at its September meeting", "for September"). expiry_timestamp must be shortly (under ${MAX_POST_EVENT_TRADING_SECS / 3600} hours) after the source publishes the answer, never before: for example BLS CPI for a month is published about 16 days after the month ends. Signers need ${ATTESTATION_SLA_SECS / 3600} hours after close to attest.
 7. No URLs, @handles, or markdown in the question; no markets about deaths, self-harm, or private individuals
 8. reasoning is a maximum of two sentences explaining the probability estimate
 
@@ -313,6 +322,7 @@ export function generateExpiryDate(category: string): Date {
  */
 export async function createMarketFromProposal(
   proposal: MarketProposal,
+  resolutionDetails?: QuestionResolutionBlock | null,
 ): Promise<Market> {
   const upperCategory = String(proposal.category).toUpperCase();
   const finalCategory = Object.values(MarketCategory).includes(upperCategory as MarketCategory)
@@ -331,6 +341,7 @@ export async function createMarketFromProposal(
       expiryTimestamp:    new Date(proposal.expiry_timestamp * 1000),
       resolutionOracle:   proposal.resolution_oracle,
       minimumLiquidity:   proposal.minimum_liquidity_usdc,
+      ...(resolutionDetails ? { resolutionDetails: resolutionDetails as unknown as Prisma.InputJsonValue } : {}),
     },
   });
 
@@ -346,6 +357,47 @@ export async function createMarketFromProposal(
     "Market created",
   );
   return market;
+}
+
+/**
+ * Runs the deterministic resolvability check (#74) before anything is
+ * persisted or pinned. Returns null (after logging PROPOSAL_UNRESOLVABLE) when
+ * the proposal can't be resolved by its committed source; otherwise returns
+ * the proposal, with its expiry repaired into the allowed window if needed
+ * (logged as PROPOSAL_EXPIRY_REPAIRED), and the resolution block to store.
+ */
+export async function prepareResolvableProposal(
+  proposal: MarketProposal,
+  now = new Date(),
+): Promise<{ proposal: MarketProposal; resolution: QuestionResolutionBlock } | null> {
+  const report = assessResolvability(proposal, {
+    now,
+    disputeWindowSecs: config.RESOLUTION_DISPUTE_WINDOW_SECS,
+  });
+  if (!report.ok || !report.resolution) {
+    await logAgentAction('MARKET_MAKER', 'WARN', 'PROPOSAL_UNRESOLVABLE', null, {
+      reasons: report.reasons,
+      category: proposal.category,
+      oracle: proposal.resolution_oracle,
+      expiry: new Date(proposal.expiry_timestamp * 1000).toISOString(),
+      window: report.window
+        ? { earliestClose: report.window.earliestClose.toISOString(), latestClose: report.window.latestClose.toISOString() }
+        : null,
+    });
+    return null;
+  }
+  let result = proposal;
+  if (report.repairedExpiry) {
+    const after = Math.floor(report.repairedExpiry.getTime() / 1000);
+    await logAgentAction('MARKET_MAKER', 'INFO', 'PROPOSAL_EXPIRY_REPAIRED', null, {
+      before: new Date(proposal.expiry_timestamp * 1000).toISOString(),
+      after: report.repairedExpiry.toISOString(),
+      reasons: report.repairReasons,
+      sourceId: report.sourceId,
+    });
+    result = { ...proposal, expiry_timestamp: after };
+  }
+  return { proposal: result, resolution: report.resolution };
 }
 
 /**

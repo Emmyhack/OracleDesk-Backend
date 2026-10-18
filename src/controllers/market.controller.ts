@@ -20,6 +20,7 @@ import {
   Prisma,
 } from '@prisma/client';
 import { AppError } from '../middlewares/error.middleware';
+import { assertAgentActive } from '../services/agent-controls.service';
 
 
 const jobTracker: Map<string, JobRecord> = new Map();
@@ -206,6 +207,9 @@ export async function triggerMarketGeneration(
     sendError(res, 400, 'VALIDATION_ERROR', 'Invalid generation parameters', body.error.flatten().fieldErrors as any);
     return;
   }
+
+  // A paused market maker answers 423 immediately instead of starting a job (#79).
+  await assertAgentActive('MARKET_MAKER');
 
   const jobId = uuidv4();
 
