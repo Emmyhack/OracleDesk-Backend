@@ -274,3 +274,17 @@ test('enqueueTracePublication stores the payload and action once per trace', asy
   assert.equal(stored.action, 'buy_yes');
   assert.deepEqual(stored.payload, payload);
 });
+
+test('a paused agent defers its trace without burning an attempt (#79)', async () => {
+  const { processPublication } = await load();
+  const { AgentPausedError } = await import('../src/services/agent-controls.service');
+  const ready = { onChainMarketId: 7n, marketStatus: 'ACTIVE', trace: { traceHash: HASH, ipfsCid: 'QmPinned' }, pub: { status: 'READY' } };
+  const { store, prisma } = makeDb(ready);
+  const paused = fakePublisher(async () => { throw new AgentPausedError('MARKET_MAKER', { reason: 'halt' }); });
+  const before = Date.now();
+  for (let i = 0; i < 8; i++) await processPublication(row(store), deps(prisma, { publisher: paused, maxAttempts: 3 }));
+  const pub = store.pubs.get('p1');
+  assert.equal(pub.status, 'READY', 'never marked FAILED by a pause');
+  assert.equal(pub.attempts, 0);
+  assert.ok(pub.nextAttemptAt.getTime() > before, 'retried later');
+});

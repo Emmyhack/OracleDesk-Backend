@@ -4,11 +4,13 @@ import {
   controlScopeSchema,
   createOperationSchema,
   pauseAgentSchema,
+  reconcileRunSchema,
   recordSchema,
   resumeAgentSchema,
   signatureSchema,
 } from '../validators/admin.validator';
 import { controlsOverview, pauseAgent, resumeAgent } from '../services/agent-controls.service';
+import { defaultDeps, runReconciliation } from '../services/market-reconciler.service';
 import { v4 as uuidv4 } from 'uuid';
 import { prisma } from '../lib/prisma';
 import { TraceAuditStatus } from '@prisma/client';

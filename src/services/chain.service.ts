@@ -109,6 +109,15 @@ async function readTx<T>(
   );
 }
 
+async function read<T>(
+  contract: ContractKey,
+  method: string,
+  call: () => Promise<AssembledTransaction<unknown>>,
+  signal?: AbortSignal,
+): Promise<T> {
+  return (await readTx<T>(contract, method, call, signal)).value;
+}
+
 /**
  * Every chain write goes through here (#79): the agent's control state is
  * checked before the transaction is built, re-checked under a share lock after

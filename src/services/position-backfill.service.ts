@@ -53,7 +53,7 @@ export const defaultBackfillDeps: BackfillDeps = {
       SELECT "params" FROM chain_events
       WHERE "eventName" = 'Trade' AND "contractName" = 'marketCore'
         AND params->>'market_id' = ${onChainMarketId.toString()}
-        AND "ledgerClosedAt" < ${before}
+        AND "ledgerClosedAt" < (${before.toISOString()}::timestamptz AT TIME ZONE 'UTC')
       ORDER BY "ledger" DESC LIMIT 1`;
     const p = rows[0]?.params;
     return p ? { reserveYes: BigInt(p.reserve_yes), reserveNo: BigInt(p.reserve_no) } : null;

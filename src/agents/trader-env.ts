@@ -6,13 +6,15 @@
  */
 import { aggregateSignals } from '../services/ingestion.service';
 import { calculateProbability } from '../services/market.service';
-import { executeTrade, closePosition } from '../services/trade.service';
+import { executeTrade } from '../services/trade.service';
+import { exitPosition } from '../services/exit.service';
+import { markOpenPositions } from '../services/valuation.service';
 import { checkCorrelation } from '../services/correlation.service';
 import { generateReasoningTrace } from '../services/reasoning.service';
 import { detectHedgeOpportunities, autoHedge, enforceStopLoss } from '../services/hedging.service';
 import { prisma } from '../lib/prisma';
 import { logger } from '../lib/logger';
-import { recordDrawdownPause, type DrawdownEvaluation } from '../services/hedging.service';
+import { recordDrawdownPause, utcStartOfDay, type DrawdownEvaluation } from '../services/hedging.service';
 import type {
   AggregatedSignals,
   ConfidenceInterval,
@@ -25,7 +27,7 @@ export type TradeDirection = 'YES' | 'NO';
 
 export interface Clock {
   now(): Date;
-  /** Start of the current day: local midnight in production, UTC in a backtest. */
+  /** Start of the current day in UTC. */
   startOfDay(): Date;
 }
 
@@ -92,6 +94,8 @@ export interface TraderEnv {
   /** P&L of positions closed since `t`, for the daily drawdown check. */
   closedPnlSince(t: Date): Promise<number[]>;
   forecast(m: MarketView, s: AggregatedSignals): Promise<Forecast | null>;
+  /** Marks open positions to market from the latest reserves (#78); a backtest values its own pools. */
+  markToMarket?(): Promise<void>;
   stopLoss(position: PositionView): Promise<{ shouldClose: boolean; reason?: string }>;
   correlation(marketId: string, size: number, direction: TradeDirection): Promise<CorrelationCheckResult>;
   hedges(): Promise<HedgeRecommendation[]>;
@@ -107,11 +111,7 @@ export function prodTraderEnv(): TraderEnv {
   return {
     clock: {
       now: () => new Date(),
-      startOfDay: () => {
-        const d = new Date();
-        d.setHours(0, 0, 0, 0);
-        return d;
-      },
+      startOfDay: () => utcStartOfDay(),
     },
 
     async openPositions() {
@@ -161,6 +161,10 @@ export function prodTraderEnv(): TraderEnv {
       return { p: probability, ci: confidenceInterval, sources };
     },
 
+    async markToMarket() {
+      await markOpenPositions();
+    },
+
     stopLoss: (position) => enforceStopLoss(position.id),
 
     correlation: (marketId, size, direction) => checkCorrelation(marketId, size, 10_000, { direction }),
@@ -205,9 +209,10 @@ export function prodTraderEnv(): TraderEnv {
       return { ok: true };
     },
 
-    async exit(positionId, reason, price) {
-      await closePosition(positionId, price, reason);
-      return { ok: true };
+    // A real exit: agent_sell on-chain, the position changes only once it confirms (#77).
+    async exit(positionId, reason) {
+      const result = await exitPosition(positionId, { reason });
+      return { ok: result.status === 'CONFIRMED' || result.status === 'SIMULATED', ...(result.code ? { reason: result.code } : {}) };
     },
 
     async recordDecision(d) {
