@@ -134,6 +134,28 @@ const envSchema = z
     LLM_POLICY: optionalString,
     LLM_POLICY_FILE: optionalString,
 
+    // ── LLM budgets and shared guards (#71) ───────────────────────────────
+    // Counted per UTC day across all providers and instances (see
+    // src/lib/llm-budget.ts). Costs are estimates from a static price table.
+    LLM_DAILY_TOKEN_BUDGET: z.string().default('2000000').transform(Number)
+      .pipe(z.number().int().positive()),
+    LLM_DAILY_COST_BUDGET_MICROS: z.string().default('20000000').transform(Number)
+      .pipe(z.number().int().positive()),
+    // Share of the budgets held back for admin-triggered work (cron stops first).
+    LLM_ADMIN_RESERVE_PCT: z.string().default('10').transform(Number)
+      .pipe(z.number().min(0).max(100)),
+    LLM_ANTHROPIC_RPM: z.string().default('12').transform(Number)
+      .pipe(z.number().int().positive()),
+    LLM_GEMINI_RPM: z.string().default('15').transform(Number)
+      .pipe(z.number().int().positive()),
+    LLM_BREAKER_FAILURE_THRESHOLD: z.string().default('3').transform(Number)
+      .pipe(z.number().int().positive()),
+    LLM_BREAKER_OPEN_MS: z.string().default('3600000').transform(Number)
+      .pipe(z.number().int().positive()),
+    // What to do when the guard store (Redis) is unreachable: refuse LLM calls
+    // (closed, recommended in production) or use a per-process limiter (open).
+    LLM_REDIS_FAIL_MODE: z.enum(['closed', 'open']).default('closed'),
+
     // ── IPFS ──────────────────────────────────────────────────────────────
     PINATA_API_KEY: optionalString,
     PINATA_SECRET_API_KEY: optionalString,

@@ -17,6 +17,7 @@ test('market proposal validation accepts strict binary JSON and rejects malforme
     category: 'FED',
     confidence_interval: { lower: 0.52, upper: 0.72 },
     reasoning: 'Fed signals and inflation trends support a rate cut probability.',
+    grounding_signal_ids: ['n1'],
   }));
 
   assert.equal(valid.category, 'FED');

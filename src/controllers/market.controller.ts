@@ -237,7 +237,7 @@ export async function triggerMarketGeneration(
 
   // ── Run generation in background ─────────────────────────────
 
-  bindDetached(() => runMarketMakerCycle(), { jobId, kind: 'job' })
+  bindDetached(() => runMarketMakerCycle({ priority: 'admin' }), { jobId, kind: 'job' })
     .then((result: any) => {
       const existingJob = jobTracker.get(jobId);
 

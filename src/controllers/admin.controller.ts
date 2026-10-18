@@ -12,7 +12,7 @@ import { secret } from '../config/secrets';
 import { health } from '../services/health.service';
 import { indexerStatus } from '../services/indexer.service';
 import { agentSigner } from '../services/stellar/clients';
-import { geminiBreakerState } from '../lib/gemini';
+import { getLlmUsage } from '../lib/llm-budget';
 import { getCronStatus } from '../cron/registry';
 import { AppError } from '../middlewares/error.middleware';
 import {
@@ -185,7 +185,8 @@ export async function getSystemStatus(_req: Request, res: Response): Promise<voi
     llm: {
       anthropicConfigured: secret('ANTHROPIC_API_KEY') !== '',
       geminiConfigured: secret('GEMINI_API_KEY') !== '',
-      geminiBreaker: geminiBreakerState(),
+      // Shared across instances (Redis); null when the guard store is down.
+      usage: await getLlmUsage().catch(() => null),
     },
     process: {
       uptimeSeconds: process.uptime(),

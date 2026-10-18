@@ -1,0 +1,20 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "role": "model",
+        "parts": [
+          {
+            "text": "{\"market_question\":\"Will the Federal Reserve hold the federal funds rate unchanged at its next FOMC meeting?\",\"initial_yes_probability\":0.64,\"resolution_oracle\":\"FRED\",\"expiry_timestamp\":4102444800,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"WEATHER\",\"confidence_interval\":{\"lower\":0.54,\"upper\":0.74},\"reasoning\":\"FEDFUNDS is flat and CPI cooled, so a hold is the modal outcome.\",\"grounding_signal_ids\":[]}"
+          }
+        ]
+      },
+      "finishReason": "STOP"
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 1398,
+    "candidatesTokenCount": 210,
+    "totalTokenCount": 1608
+  }
+}

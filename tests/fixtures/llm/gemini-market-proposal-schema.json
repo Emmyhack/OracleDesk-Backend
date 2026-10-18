@@ -1,0 +1,99 @@
+{
+  "type": "object",
+  "properties": {
+    "market_question": {
+      "type": "string"
+    },
+    "initial_yes_probability": {
+      "type": "number",
+      "minimum": 0.01,
+      "maximum": 0.99
+    },
+    "resolution_oracle": {
+      "type": "string"
+    },
+    "expiry_timestamp": {
+      "type": "integer",
+      "maximum": 9007199254740991
+    },
+    "settlement_currency": {
+      "type": "string",
+      "enum": [
+        "USDC"
+      ],
+      "format": "enum"
+    },
+    "minimum_liquidity_usdc": {
+      "type": "number"
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "FED",
+        "ECB",
+        "ELECTION",
+        "GEOPOLITICAL",
+        "CRYPTO",
+        "MACRO",
+        "SPORTS",
+        "ENTERTAINMENT",
+        "POLITICS"
+      ],
+      "format": "enum"
+    },
+    "confidence_interval": {
+      "type": "object",
+      "properties": {
+        "lower": {
+          "type": "number"
+        },
+        "upper": {
+          "type": "number"
+        }
+      },
+      "propertyOrdering": [
+        "lower",
+        "upper"
+      ],
+      "required": [
+        "lower",
+        "upper"
+      ]
+    },
+    "reasoning": {
+      "type": "string"
+    },
+    "grounding_signal_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "maxItems": 5
+    }
+  },
+  "propertyOrdering": [
+    "market_question",
+    "initial_yes_probability",
+    "resolution_oracle",
+    "expiry_timestamp",
+    "settlement_currency",
+    "minimum_liquidity_usdc",
+    "category",
+    "confidence_interval",
+    "reasoning",
+    "grounding_signal_ids"
+  ],
+  "required": [
+    "market_question",
+    "initial_yes_probability",
+    "resolution_oracle",
+    "expiry_timestamp",
+    "settlement_currency",
+    "minimum_liquidity_usdc",
+    "category",
+    "confidence_interval",
+    "reasoning",
+    "grounding_signal_ids"
+  ]
+}

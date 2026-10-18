@@ -218,6 +218,8 @@ test('backfillEvents tick is bounded when getEvents hangs', async () => {
 
 test('callGeminiJSON stops retrying when budget is shorter than retryDelay', async () => {
   const { callGeminiJSON, setGenAI } = await import('../src/lib/gemini');
+  const { MemoryGuardStore, setLlmGuardStore } = await import('../src/lib/llm-budget');
+  const prevStore = setLlmGuardStore(new MemoryGuardStore());
 
   const fakeGenAI = {
     getGenerativeModel() {
@@ -246,6 +248,7 @@ test('callGeminiJSON stops retrying when budget is shorter than retryDelay', asy
     assert.ok(elapsed < 2000, `Expected fast timeout, took ${elapsed}ms`);
   } finally {
     setGenAI(prev);
+    setLlmGuardStore(prevStore);
   }
 });
 
