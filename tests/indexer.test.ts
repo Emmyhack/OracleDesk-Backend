@@ -41,6 +41,12 @@ async function setup(events = FIXTURES.map(toEventResponse)) {
     db.events.set(data.id, data);
     return data;
   };
+  (prisma.chainEvent.findMany as any) = async ({ where, take }: any) =>
+    [...db.events.values()]
+      .filter((e) => e.published === where.published)
+      .sort((a, b) => a.ledger - b.ledger || (a.id < b.id ? -1 : 1))
+      .slice(0, take);
+  (prisma.chainEvent.update as any) = async ({ where, data }: any) => Object.assign(db.events.get(where.id), data);
   (prisma.indexerCursor.findUnique as any) = async () => (db.cursor === null ? null : { lastLedger: db.cursor });
   (prisma.indexerCursor.upsert as any) = async ({ update }: any) => { db.cursor = update.lastLedger; return {}; };
   const byChainId = (id: bigint) => [...db.markets.values()].find((m) => m.onChainMarketId === id) ?? null;
@@ -185,4 +191,58 @@ test('Trade event confirms a CONFIRMING copy trade with matching txHash', async 
   await backfillEvents(undefined, { source, emit });
   assert.equal(db.copyTrades[0].status, 'EXECUTED');
   assert.equal(db.copyTrades[0].collateralRaw, '100000000');
+});
+
+test('events are stored unpublished, flagged after the bus accepts them, and non-public ones need no publish', async () => {
+  const { db, source, emitted, emit, backfillEvents } = await setup();
+  await backfillEvents(undefined, { source, emit });
+  const rows = [...db.events.values()];
+  assert.ok(rows.every((r) => r.published === true), 'everything is published after a clean run');
+  assert.equal(emitted.length, 2, 'only Trade and TracePublished have socket messages');
+  const resolved = rows.find((r) => r.eventName === 'MarketResolved');
+  assert.equal(resolved.published, true);
+});
+
+test('a rejected publish leaves the event unpublished and publishPending retries it in ledger order', async () => {
+  const { db, source, emitted, backfillEvents } = await setup();
+  const { publishPending } = await import('../src/services/indexer.service');
+  let down = true;
+  const published: Array<[string, any, any]> = [];
+  const flaky = async (e: string, p: any, meta: any) => {
+    if (down) throw new Error('redis down');
+    published.push([e, p, meta]);
+  };
+
+  await backfillEvents(undefined, { source, emit: flaky });
+  assert.equal(published.length, 0);
+  const pending = [...db.events.values()].filter((r) => !r.published);
+  assert.equal(pending.length, 2, 'both public events wait for the bus');
+
+  down = false;
+  const result = await publishPending(flaky);
+  assert.deepEqual({ published: result.published, failed: result.failed }, { published: 2, failed: false });
+  const ledgers = published.map(([, , meta]) => meta.ledger);
+  assert.deepEqual(ledgers, [...ledgers].sort((a, b) => a - b), 'ledger order');
+  assert.ok(published.every(([, , meta]) => typeof meta.id === 'string' && meta.id.length > 0), 'meta carries chain_events.id');
+  assert.equal(published.find(([e]) => e === 'TRADE_EXECUTED')![2].marketKey, '0');
+  assert.equal(emitted.length, 0);
+  assert.ok([...db.events.values()].every((r) => r.published));
+});
+
+test('publishPending stops at the first failure so a later event never overtakes an earlier one', async () => {
+  const { db, source, backfillEvents } = await setup();
+  const { publishPending } = await import('../src/services/indexer.service');
+  await backfillEvents(undefined, { source, emit: async () => { throw new Error('down'); } });
+  const seen: string[] = [];
+  let calls = 0;
+  const failSecond = async (_e: string, _p: any, meta: any) => {
+    calls++;
+    if (calls === 2) throw new Error('down again');
+    seen.push(meta.id);
+  };
+  const first = await publishPending(failSecond);
+  assert.deepEqual({ published: first.published, failed: first.failed }, { published: 1, failed: true });
+  const left = [...db.events.values()].filter((r) => !r.published);
+  assert.equal(left.length, 1);
+  assert.ok(left[0].ledger >= db.events.get(seen[0]).ledger, 'the remaining event is the later one');
 });

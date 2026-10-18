@@ -1,6 +1,6 @@
 import cron from 'node-cron';
 import { runTraderCycle } from '../agents/trader.agent';
-import { expireStaleSubscriptions } from '../services/subscription.service';
+import { expireStaleSubscriptions, notifyExpiringPasses } from '../services/subscription.service';
 import { logger } from '../lib/logger';
 import { config } from '../config';
 import { postgresContentStore } from '../services/content-store.service';
@@ -58,6 +58,18 @@ export function startMonitorCron(): void {
     }
   });
 
+  // PASS_EXPIRING socket events (#94) — every 10 minutes, once per pass.
+  cron.schedule('*/10 * * * *', async () => {
+    const startedAt = new Date();
+    try {
+      await notifyExpiringPasses();
+      recordCronRun('pass-expiry-notify', 'success', startedAt, new Date());
+    } catch (err) {
+      recordCronRun('pass-expiry-notify', 'failure', startedAt, new Date(), err);
+      logger.error({ err }, 'Monitor cron: pass expiry notification failed');
+    }
+  });
+
   // Expired Idempotency-Key rows (24h TTL, #123) — hourly at :10, in batches of 5 000
   cron.schedule('10 * * * *', async () => {
     const startedAt = new Date();
@@ -93,7 +105,7 @@ async function sweepCopyTrades(): Promise<void> {
   sweepRunning = true;
   try {
     const { prisma } = await import('../lib/prisma');
-    const { CopyTradeStatus, expireStaleCopyTrades, verifyCopyTradeTx, CopyTradePendingError } = await import('../services/copy-trade.service');
+    const { CopyTradeStatus, expireStaleCopyTrades, verifyCopyTradeTx, CopyTradePendingError, notifyCopyTradeConfirmed } = await import('../services/copy-trade.service');
     const { toDisplayUsdc } = await import('../lib/amounts');
     const { AppError } = await import('../middlewares/error.middleware');
 
@@ -135,7 +147,7 @@ async function sweepCopyTrades(): Promise<void> {
             (((ct as any).outcome === 'YES' && outcomeTag === 'Yes') || ((ct as any).outcome === 'NO' && outcomeTag === 'No'))
           ) {
             const collateral = BigInt(params?.collateral ?? 0);
-            await prisma.copyTrade.update({
+            const done = await prisma.copyTrade.update({
               where: { id: ct.id },
               data: {
                 status: CopyTradeStatus.EXECUTED,
@@ -149,6 +161,7 @@ async function sweepCopyTrades(): Promise<void> {
                 failureCode: null,
               },
             });
+            notifyCopyTradeConfirmed({ ...done, userId: done?.userId ?? ct.userId }, true);
             continue;
           }
         }
@@ -164,7 +177,7 @@ async function sweepCopyTrades(): Promise<void> {
           maxCollateral,
         });
 
-        await prisma.copyTrade.update({
+        const executed = await prisma.copyTrade.update({
           where: { id: ct.id },
           data: {
             status: CopyTradeStatus.EXECUTED,
@@ -178,6 +191,7 @@ async function sweepCopyTrades(): Promise<void> {
             failureCode: null,
           },
         });
+        notifyCopyTradeConfirmed({ ...executed, userId: executed?.userId ?? ct.userId }, true);
       } catch (err: any) {
         if (err instanceof CopyTradePendingError) {
           await prisma.copyTrade.update({

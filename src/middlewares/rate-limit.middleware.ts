@@ -26,3 +26,6 @@ export const globalLimiter = limiter(15 * 60 * 1000, 200);
 export const authLimiter = limiter(5 * 60 * 1000, 20);
 /** /markets/generate: 5 per hour per IP (each run calls paid LLM APIs). */
 export const generateLimiter = limiter(60 * 60 * 1000, 5);
+
+/** /signer/*: 30 requests per minute per IP (each prepare simulates against RPC). */
+export const signerLimiter = limiter(60 * 1000, 30);

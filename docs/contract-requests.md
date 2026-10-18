@@ -85,3 +85,24 @@ The backend publishes traces with `create_market`, `buy_yes` and `buy_no`
 (`src/lib/trace-actions.ts`). The contracts repo's TypeScript agents use
 `create_market` and `buy`. Consumers that group traces by action should treat
 `buy` as either direction, or the two sides should agree on one vocabulary.
+
+## 8. Resolver: admin view, attestation counts, and cancel semantics
+
+Found while building the signer portal (#91) and the dispute monitor (#92):
+
+- **`admin() -> Address`.** The guardian is the resolver admin, but there is no
+  view for it, so the backend takes `RESOLVER_GUARDIAN_ADDRESS` from
+  configuration and can only discover a wrong value by a failed simulation.
+- **Attestation visibility.** `attest` emits nothing per attestation and there is
+  no count view, so progress is limited to what the backend itself
+  submitted. An `Attested { market_id, signer, outcome }` event, or
+  `attestation_count(market_id, outcome)`, would make progress observable for
+  every signer.
+- **`ProposalCancelled` event.** `cancel_proposal` emits nothing, so the dispute
+  monitor learns a proposal is gone by simulating `finalize_signers`
+  (`NoProposal`). An event would remove the polling.
+- **Counts survive `cancel_proposal`.** The same signers cannot re-attest the
+  cancelled outcome (`AlreadyAttested`), so after a cancel the market can only be
+  fixed by different signers or `guardian_void_market`. Clearing the counts for
+  the cancelled outcome on cancel (or documenting that voiding is the remedy)
+  would make the guardian's choice clearer.

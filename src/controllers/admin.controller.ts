@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import { sendSuccess, parsePagination, buildPaginationMeta } from '../utils/response.util';
 import { createOperationSchema, recordSchema, signatureSchema } from '../validators/admin.validator';
+import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
 import { prisma } from '../lib/prisma';
 import { TraceAuditStatus } from '@prisma/client';
@@ -15,6 +16,11 @@ import { agentSigner } from '../services/stellar/clients';
 import { getLlmUsage } from '../lib/llm-budget';
 import { getCronStatus } from '../cron/registry';
 import { AppError } from '../middlewares/error.middleware';
+import {
+  acknowledge,
+  buildGuardianTx,
+  listDisputes,
+} from '../services/dispute-monitor.service';
 import {
   addSignature,
   cancelOperation,
@@ -194,4 +200,39 @@ export async function getSystemStatus(_req: Request, res: Response): Promise<voi
       version: process.env.npm_package_version ?? null,
     },
   });
+}
+
+// ─── Dispute monitor (#92) ───────────────────────────────────────────────
+
+const disputeIdSchema = z.object({ id: z.string().uuid('id must be a dispute review UUID') });
+const disputeListSchema = z.object({ status: z.enum(['open', 'all']).default('open') });
+
+function disputeId(req: Request): string {
+  const parsed = disputeIdSchema.safeParse(req.params);
+  if (!parsed.success) throw new AppError(400, 'VALIDATION_ERROR', 'Invalid dispute id', parsed.error.flatten().fieldErrors as any);
+  return parsed.data.id;
+}
+
+/** GET /admin/disputes?status=open|all — reviews with the window left on the ledger clock. */
+export async function getDisputes(req: Request, res: Response): Promise<void> {
+  const parsed = disputeListSchema.safeParse(req.query);
+  if (!parsed.success) throw new AppError(400, 'VALIDATION_ERROR', 'status must be open or all', parsed.error.flatten().fieldErrors as any);
+  const { page, limit } = parsePagination(req.query as any);
+  const { items, total, ledgerTime } = await listDisputes({ status: parsed.data.status, page, limit });
+  sendSuccess(res, items, 200, { ...(buildPaginationMeta(page, limit, total) as any), ledgerTime });
+}
+
+/** POST /admin/disputes/:id/ack */
+export async function ackDispute(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await acknowledge(disputeId(req), actor(req)));
+}
+
+/** POST /admin/disputes/:id/cancel-tx — unsigned cancel_proposal for the guardian's wallet. */
+export async function cancelDisputeTx(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await buildGuardianTx(disputeId(req), 'cancel_proposal'));
+}
+
+/** POST /admin/disputes/:id/void-tx — unsigned guardian_void_market. */
+export async function voidDisputeTx(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await buildGuardianTx(disputeId(req), 'guardian_void_market'));
 }

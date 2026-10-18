@@ -100,13 +100,87 @@ Each hash is usable once (unique `PaymentEvent.txHash`). There is no development
 
 Outcomes are decided on-chain by the resolver contract. The backend only reads `resolver.state` and `market_core.get_market`; the old endpoint that let any user set an outcome is gone. When the indexer sees `MarketResolved`, it updates the database and closes positions.
 
+### Resolution signers (#91)
+
+Markets created with a `signers` spec commit to an m-of-n signer set. `signer-portal.service.ts` serves the people in that set; it coordinates and never holds a signer key.
+
+- **Authority is the committed spec, not the environment.** `RESOLUTION_SIGNERS` can change after a market exists, so membership is read from `Market.resolutionSpec`, and that JSON is trusted only after it re-hashes (`resolutionHash()`) to `Market.resolutionHash` and to the market's on-chain `resolution_hash`. Any mismatch is `409 SPEC_MISMATCH`.
+- **Prepare** builds `resolver.attest` with a client whose `publicKey` is the signer and which has no signer callback, so the signer is the transaction source and source-account auth satisfies `signer.require_auth()`. The transaction is simulated, must need no other signers, carries time bounds, and is stored with its hash in `signer_attestations`.
+- **Submit** parses the signed envelope, requires its hash to equal the prepared hash (signatures do not change a hash, a different transaction or network does), checks expiry, verifies the wallet's signature, claims the row (`PREPARED` → `SUBMITTED`) so a double submit broadcasts once, then polls for the result.
+- **Counts are api-observed.** The resolver emits no per-attestation event and has no count view, so progress counts only attestations confirmed through this API. The proposal comes from the indexed `ResolutionProposed` event, and a proposal the observed counts cannot explain is reported as `attestationsOutsideApi`.
+- **No help equivocating.** A second outcome for a signer with a confirmed attestation is refused (`CONFLICTING_ATTESTATION`) unless `allowConflict=true`.
+
+### Disputes and guardian actions
+
+This is the runbook for the guardian: the resolver admin, configured here as `RESOLVER_GUARDIAN_ADDRESS` (the resolver has no admin view, so this is configuration; a wrong value shows up as `GUARDIAN_MISMATCH`).
+
+**Why it exists.** In signer mode an outcome is not final when the threshold is reached. The resolver stores a proposal, emits `ResolutionProposed`, and anyone may call `finalize_signers` once `dispute_window` seconds of *ledger time* have passed. Until then only the guardian can call `cancel_proposal`. With the default configuration (the agent as sole signer, threshold 1) a compromised key or a faulty attestation pipeline can propose a wrong outcome with no one else involved, so something has to notice.
+
+**What the monitor does.** For each `ResolutionProposed` the indexer inserts one `DisputeReview` per event id (idempotent). A separate step, not the indexer tick, then:
+
+1. re-hashes the stored spec and compares it to `Market.resolutionHash` (a mismatch is `ERROR` and `CRITICAL`: a proposal on a market whose rules the backend cannot verify is itself suspicious);
+2. fetches the question document from IPFS and checks its sha256 against `Market.questionHash` (a mismatch is `ERROR`);
+3. evaluates the market independently from the resolution source. The evaluator is blind: it is not given the proposed outcome, the signers' evidence or any `ReasoningTrace`. It uses its own prompt and, by default, a different primary model from attestation (`dispute_review` task). Evidence is sanitised, delimited as data, instruction-like items are dropped and a decision must cite evidence ids that were really sent;
+4. compares the result with the proposal and alerts.
+
+**Verdicts** (`DISPUTE_AGREE_MIN_CONFIDENCE`, default 0.8):
+
+| Verdict | Meaning | Alert |
+|---|---|---|
+| `AGREE` | Independent outcome equals the proposal, confidence at or above the threshold. | None, except `INFO` when the market has a single signer with threshold 1 and it is the agent: there is no second opinion on-chain. |
+| `DISAGREE` | Independent outcome differs, confidence at or above the threshold. | `CRITICAL` immediately. |
+| `INSUFFICIENT` | Low confidence, no determination, or evidence that cannot be trusted alone. | `WARN` immediately; `CRITICAL` when less than 25% of the window remains and nobody has acknowledged it. |
+| `ERROR` | Spec or question document does not verify. | `CRITICAL` immediately. |
+
+On a market holding at least `DISPUTE_HIGH_VALUE_LIQUIDITY` USDC, `AGREE` also needs a cited primary (non-news) source, so a manipulated news story cannot fool the signers and the review alike. A proposal observed after its window already ended (indexer catch-up) gets `INFO` only. A proposal found only by the 30-minute polling pass (event missed) gets a `WARN`, with `proposedAt` unknown.
+
+**Time.** Remaining window is measured against the latest ledger close time (RPC `getLatestLedger`, then the indexer's newest event), because the contract compares ledger time. Alerts and the admin API show it; the API also shows server time and which source was used.
+
+**Alerts.** Sinks: `ALERT_WEBHOOK_URLS` (JSON, signed `X-OracleDesk-Signature: sha256=<hmac>` with `ALERT_WEBHOOK_SECRET`) and `ALERT_SLACK_WEBHOOK_URL`. Each has a 5 s timeout, 3 attempts with backoff, and is deduplicated by `reviewId:level:sink` in `alert_deliveries` (so restarts and multiple instances do not repeat an alert, and a failed delivery is retried by the next 5-minute pass). Webhook URLs contain tokens: they are never logged, never put in an error message and never stored; sinks are identified by a hash of the URL, and the logger redacts them. If `RESOLVER_GUARDIAN_ADDRESS` is unset, alerts say so.
+
+**What to do when you get one.**
+
+1. `GET /admin/disputes` for the evidence and time left. Open the cited sources yourself; the review is a prompt to look, not a ruling.
+2. If the proposal is wrong, `POST /admin/disputes/:id/cancel-tx`. It returns `{ xdr, networkPassphrase, validUntil }`: a simulated `cancel_proposal` whose source is the guardian. Sign it with your own wallet or the Stellar CLI (for example `stellar tx sign` with the guardian key, then `stellar tx send`), within `validUntil`. The backend never signs or sends it.
+3. **Cancelling does not clear attestation counts.** The same signers cannot re-attest the same outcome (`AlreadyAttested`), and an outcome that already had threshold votes keeps them. If the whole signer set was wrong, new signers will not help for that market; the remedy is `POST /admin/disputes/:id/void-tx` (`guardian_void_market`), which voids the market through market-core (the indexer then records a `MarketResolved` without an outcome and marks the market `CANCELLED`). Choose between the two before acting. (A resolver that cleared counts on cancel would be a contract change; see `docs/contract-requests.md`.)
+4. `POST /admin/disputes/:id/ack` to record that you looked; acknowledged reviews stop escalating.
+
+**Timings.** The review runs within seconds of the indexed event (poll interval plus evaluation time). Escalation and retries run every 5 minutes, the missed-event pass every 30. With the default 24 h window `CRITICAL` for an unconfirmed proposal arrives with six hours left. `cancel_proposal` only works on a proposal that has not been finalized, and anyone may finalize once the window ends, so treat the window end as the deadline.
+
+## Event bus and socket fan-out (#93)
+
+Socket events used to be emitted by the process that indexed them, so with several API instances clients on the others missed events. Now:
+
+```
+indexer ──publish──▶ Redis Stream (oracledesk:events) ──▶ one fan-out leader ──io.emit──▶ socket.io Redis Streams adapter ──▶ every instance's clients
+```
+
+- **Identity.** Each bus message carries `id = chain_events.id` (the RPC event id), `ledger`, `marketKey` (the on-chain market id) and the payload (bigints as strings).
+- **Publication is tied to the committed row.** `chain_events.published` is false when an event is stored. After side effects, `publishPending()` publishes unpublished rows in `(ledger, id)` order and flags each one once the bus accepted it. A crash between store and publish loses nothing; the next pass publishes it. It stops at the first failure so a later event never overtakes an earlier one, and the live path and recovery share one queue per process. If Redis is down the indexer keeps storing events, the server keeps serving, and the backlog drains when Redis returns. Rows that existed before the migration are marked published.
+- **Delivery semantics: at-least-once publication, effectively-once delivery.** A crash between XADD and the flag, or two indexing instances racing, can put the same id on the stream twice. The fan-out records every delivered id (`seen` keys with a TTL) and skips ids it has already delivered, so clients still get each event once.
+- **Fan-out design.** One instance, elected with `SET leader NX PX` (renewed by compare-and-set), reads the bus with a blocking `XREAD` on its own connection (`getBlockingRedis`, never the shared client) and calls `io.emit`; the streams adapter carries that to every instance. *Alternative considered:* every instance consumes and emits only to its own sockets, with no adapter. It is simpler, but each future feature (per-market rooms, private per-user events) would have to reimplement cross-instance routing, and private events need the adapter anyway. The leader persists the stream id of the last event it delivered (`oracledesk:fanout:cursor`), so a successor resumes there with no gap; the `seen` check prevents the one event that may straddle the switch from being delivered twice. Leadership is re-verified (fenced) before delivering, so a paused leader that lost the lock stops emitting.
+- **Ordering.** One stream and one consumer preserve publish order, which is `(ledger, id)` order, so per-market order holds.
+- **Retention.** `XADD ... MAXLEN ~ EVENT_BUS_MAXLEN` (default 100000) bounds the stream, a delivery buffer only. `chain_events` is the durable history; anything that must replay far back (for example a resumable SSE feed) should read that table.
+- **Not covered here.** Leader election for the *indexer* and splitting API/worker roles (the design works whether one or all instances index), coalescing during a large historical catch-up (the stream stays bounded but is not throttled), and per-market rooms (the `marketKey` field is there for them).
+- **Boot without Redis.** The server starts and logs the degraded state. The streams adapter reports a rejected subscribe as an unhandled rejection while Redis is down (it is logged, not fatal). `EVENT_BUS_ENABLED=false` swaps in an in-process bus and no adapter, for a single instance.
+
+## Socket authentication and private events (#94)
+
+- The handshake accepts the REST API's JWT in `auth.token` through `verifyAccessToken()`, the same function `requireAuth` uses (HS256 only, previous-secret rotation included). No token is an anonymous socket; a bad one fails the handshake with a code; a token in the query string is refused.
+- Private events (`PAYMENT_CONFIRMED`, `PASS_EXPIRING`, `COPY_TRADE_CONFIRMED`) go only through `emitToUser`/`notifyUser`, which target `user:<userId>`. The public emitter wraps `assertPublic`, and a test fails if any file under `src/` emits a private event name directly.
+- A session ends at the token's `exp` (re-armed in chunks, because `setTimeout` overflows above about 24.8 days). The socket gets `SESSION_EXPIRED` and leaves its user room but stays connected for public events, so a long-lived page keeps live prices; `reauth` with a token for the same user restores private events. Switching users on a live socket is refused.
+- Emission happens after the database commit: `PAYMENT_CONFIRMED` after the payment transaction (not on the idempotent re-submit), `COPY_TRADE_CONFIRMED` after the status update, `PASS_EXPIRING` after claiming the pass with a conditional update on `expiryNotifiedAt`, which makes it at-most-once even with several instances.
+- Tokens are never logged; only the user id is.
+
+
 ## Indexer
 
 `indexer.service.ts` polls Stellar RPC `getEvents` for the four contract ids every `INDEXER_POLL_MS`:
 
 - Events are decoded with each binding's spec (`Spec.parseEvent`) and stored in `chain_events` keyed by the RPC event id, so re-reads are idempotent.
 - The ledger cursor lives in `indexer_cursors`. If it is older than RPC retention (about 7 days on testnet), the indexer warns and resumes from the oldest retained ledger; anything in between is lost to it.
-- New `Trade` and `TracePublished` events are pushed to clients over socket.io as `TRADE_EXECUTED` and `REASONING_PUBLISHED`.
+- New `Trade` and `TracePublished` events are published to the event bus and delivered to clients over socket.io as `TRADE_EXECUTED` and `REASONING_PUBLISHED` (see [Event bus and socket fan-out](#event-bus-and-socket-fan-out-93)).
+- `ResolutionProposed` and `ResolutionFinalized` open and close dispute reviews (see [Disputes and guardian actions](#disputes-and-guardian-actions)). The independent evaluation never runs inside the poll.
 
 ## Health and degraded mode (#111)
 
