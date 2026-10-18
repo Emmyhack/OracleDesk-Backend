@@ -2,6 +2,7 @@ import { prisma } from '../lib/prisma';
 import { writeAgentLog } from '../lib/agent-log';
 import { logger } from '../lib/logger';
 import { AppError } from '../middlewares/error.middleware';
+import { AgentPausedError } from './agent-controls.service';
 import type { KellyResult, TradePayload, KellyInput } from '../types';
 import { agentBuy, getOnChainMarket, Outcomes, quoteBuy } from './chain.service';
 import { enqueueTracePublication } from './trace-publish.service';
@@ -79,6 +80,15 @@ export async function executeTrade(payload: TradePayload): Promise<{
     dryRun = submitted.dryRun;
     fill = submitted;
   } catch (err) {
+    // A paused agent is not a failed trade: nothing was sent (#79).
+    if (err instanceof AgentPausedError) {
+      await prisma.trade.update({
+        where: { id: trade.id },
+        data:  { status: 'CANCELLED', errorMessage: `${err.code}: ${err.message}` },
+      });
+      await logAgentAction('TRADER', 'INFO', 'TRADE_SKIPPED_PAUSED', payload.marketId, { tradeId: trade.id });
+      throw err;
+    }
     // Mark as FAILED — no position created
     await prisma.trade.update({
       where: { id: trade.id },

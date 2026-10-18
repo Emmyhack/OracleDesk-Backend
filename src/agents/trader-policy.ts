@@ -6,7 +6,7 @@
  *
  * Full flow:
  *   1. Check daily drawdown — pause if limit hit
- *   2. Update all open positions (stop-loss check)
+ *   2. Mark open positions to market, then stop-loss check (liquidation value)
  *   3. Check for hedge opportunities on deteriorating positions
  *   4. Scan active markets for +EV opportunities
  *   5. For each mispriced market: compute Kelly size, check correlation, execute
@@ -54,16 +54,21 @@ export async function runTraderPolicy(
 
   signal?.throwIfAborted();
 
-  // Step 2: Update all open positions
+  // Step 2: Mark to market, then check every open position
+  await env.markToMarket?.();
+  signal?.throwIfAborted();
   const openPositions = await env.openPositions();
 
   for (const position of openPositions) {
     signal?.throwIfAborted();
     const { shouldClose, reason } = await env.stopLoss(position);
     if (shouldClose && reason) {
-      await env.exit(position.id, 'STOP_LOSS', position.currentPrice ?? position.entryPrice);
-      await env.recordDecision({ kind: 'STOP_LOSS', marketId: position.marketId, data: { positionId: position.id, reason } });
-      logger.info({ positionId: position.id, reason }, 'Stop-loss triggered');
+      const exit = await env.exit(position.id, 'STOP_LOSS', position.currentPrice ?? position.entryPrice);
+      await env.recordDecision({
+        kind: 'STOP_LOSS', marketId: position.marketId,
+        data: { positionId: position.id, reason, exited: exit.ok, ...(exit.reason ? { exitReason: exit.reason } : {}) },
+      });
+      logger.info({ positionId: position.id, reason, exited: exit.ok }, 'Stop-loss triggered');
     }
   }
 

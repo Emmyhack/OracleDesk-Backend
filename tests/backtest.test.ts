@@ -50,6 +50,7 @@ async function recordTraderCycle(closedTodayPnl = -5): Promise<unknown[]> {
 
   p.position.findMany = rec('position.findMany', (a) => {
     if (a?.where?.status?.in) return [{ pnl: closedTodayPnl }]; // closed today
+    if (a?.where?.sharesRaw) return [];                          // mark-to-market: no share-denominated positions here
     if (a?.include?.trade) {                                    // hedge scan
       return [{ ...positions[0], market: { id: 'm-stop', category: 'CRYPTO', currentYesProb: 0.3, totalLiquidity: 900 }, trade: { edgeDetected: 0.2 } }];
     }
@@ -102,6 +103,21 @@ async function recordTraderCycle(closedTodayPnl = -5): Promise<unknown[]> {
     return { mode: 'live', method: 'agent_buy', value: 1n, txHash: 'ab'.repeat(32) };
   };
   (publish as any).enqueueTracePublication = async (a: unknown) => { calls.push({ call: 'enqueueTracePublication', args: normalize(a) }); };
+
+  // Agent controls (#79): the gate is open, and a drawdown pause is only recorded.
+  const controls = await import('../src/services/agent-controls.service');
+  (controls as any).gateCycle = async () => 1;
+  (controls as any).pauseAgent = async (scope: string, p: { source: string; until?: Date }) => {
+    calls.push({ call: 'pauseAgent', scope, source: p.source });
+  };
+  // executeTrade reads fee_bps from get_market to record the fee paid (#78).
+  (chain as any).getOnChainMarket = async (...a: unknown[]) => { calls.push({ call: 'chain.getOnChainMarket', args: normalize(a) }); return { fee_bps: 100 }; };
+  // Exits go on-chain (#77); the characterization only records that the stop-loss reaches exitPosition.
+  const exits = await import('../src/services/exit.service');
+  (exits as any).exitPosition = async (id: string, opts: { reason: string }) => {
+    calls.push({ call: 'exitPosition', id, reason: opts.reason });
+    return { status: 'CONFIRMED', exitId: 'x', sharesSoldRaw: 0n, collateralOutRaw: 0n, closed: true };
+  };
 
   const { runTraderCycle } = await import('../src/agents/trader.agent');
   await runTraderCycle({ signal: new AbortController().signal });

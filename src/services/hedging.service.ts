@@ -11,19 +11,16 @@ const HEDGE_TRIGGER_EDGE_DECAY  = 0.50;  // Hedge when edge decays by 50%
 const HEDGE_SIZE_FRACTION       = 0.50;  // Hedge 50% of original position
 const MAX_DAILY_DRAWDOWN_PCT    = 0.03;  // 3% daily drawdown → pause agent
 const DRAWDOWN_PAUSE_HOURS      = 4;     // Pause for 4 hours on max drawdown
-const STOP_LOSS_BPS             = 1_500n; // Exit at a 15% liquidation-value loss
-const HEDGE_LOSS_BPS            = 1_000n; // Hedge at a 10% liquidation-value loss
+const STOP_LOSS_PCT_BPS         = 1_500n; // Exit once the liquidation value is 15% below cost
+const HEDGE_LOSS_PCT_BPS        = 1_000n; // Hedge once the liquidation value is 10% below cost
 
 /**
- * Unrealised loss as basis points of cost, from the mark-to-market columns
- * (#78): liquidation value minus cost, i.e. what selling now would lose.
- * Null for legacy rows that were never given shares.
+ * Start of the current day in UTC. The daily drawdown window used to be local
+ * midnight, which moved with the server's time zone: replicas in different
+ * zones disagreed about "today". UTC makes it the same everywhere (#79).
  */
-function liquidationLossBps(position: { costBasisRaw: any; unrealisedPnlRaw: any }): bigint | null {
-  if (position.costBasisRaw == null || position.unrealisedPnlRaw == null) return null;
-  const cost = decimalToBigint(position.costBasisRaw);
-  if (cost <= 0n) return null;
-  return (-decimalToBigint(position.unrealisedPnlRaw) * 10_000n) / cost;
+export function utcStartOfDay(now: Date = new Date()): Date {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
 }
 
 /** What the hedge scan needs to know about an open position. */
@@ -35,6 +32,9 @@ export interface HedgePositionInput {
   currentPrice: number | null;
   size:         number;
   pnl:          number;
+  /** Raw cost and liquidation-based unrealised PnL (#78); the loss test prefers them over `pnl`. */
+  costBasisRaw?:     bigint | null;
+  unrealisedPnlRaw?: bigint | null;
   /** The edge detected when the position was opened. */
   edgeDetected: number;
 }
@@ -47,9 +47,7 @@ export interface HedgePositionInput {
  * A position needs hedging when:
  * 1. The current market price has moved adversely by > 8%
  *    (edge from entry is now < 50% of original edge)
- * 2. OR selling the position now would realise a loss of 10% or more of its
- *    cost (liquidation value, #78; legacy rows without shares fall back to
- *    the float pnl)
+ * 2. OR the position is showing unrealised loss > 10% of size
  *
  * For each position needing a hedge, we search for:
  * - A market in the same category with OPPOSITE directional exposure
@@ -74,9 +72,8 @@ export async function planHedges(
     const currentEdge = entryEdge - priceChange;
 
     const edgeDegraded = currentEdge < entryEdge * (1 - HEDGE_TRIGGER_EDGE_DECAY);
-    const lossBps = liquidationLossBps(position);
-    const hasLoss = lossBps !== null
-      ? lossBps >= HEDGE_LOSS_BPS
+    const hasLoss = position.costBasisRaw != null && position.unrealisedPnlRaw != null
+      ? lossReaches(position.costBasisRaw, position.unrealisedPnlRaw, HEDGE_LOSS_PCT_BPS)
       : position.pnl < -(position.size * 0.10);
 
     if (!edgeDegraded && !hasLoss) continue;
@@ -118,6 +115,8 @@ export async function detectHedgeOpportunities(): Promise<HedgeRecommendation[]>
       currentPrice: position.currentPrice,
       size:         position.size,
       pnl:          position.pnl,
+      costBasisRaw:     position.costBasisRaw == null ? null : decimalToBigint(position.costBasisRaw),
+      unrealisedPnlRaw: position.unrealisedPnlRaw == null ? null : decimalToBigint(position.unrealisedPnlRaw),
       edgeDetected: position.trade?.edgeDetected ?? 0,
     })),
     findHedgeMarket,
@@ -187,8 +186,10 @@ export async function autoHedge(recommendation: HedgeRecommendation): Promise<an
 /**
  * Implements hard stop-loss logic.
  *
- * Called by the trader cycle every 15 minutes, after markOpenPositions().
- * Flags positions whose liquidation value is 15% or more below their cost.
+ * Called by the position monitor every 15 minutes.
+ * Closes positions where:
+ *   - Market has moved 15%+ against the position
+ *   - Daily drawdown of the entire portfolio exceeds 3%
  */
 export async function enforceStopLoss(positionId: string): Promise<{
   shouldClose: boolean;
@@ -202,17 +203,36 @@ export async function enforceStopLoss(positionId: string): Promise<{
     return { shouldClose: false };
   }
 
-  // Liquidation-based (#78): what the shares would fetch if sold now against
-  // the pool, not the mid price. Written by markOpenPositions() each cycle.
-  const lossBps = liquidationLossBps(position);
-  if (lossBps !== null) {
-    if (lossBps >= STOP_LOSS_BPS) {
-      return { shouldClose: true, reason: `STOP_LOSS: Liquidation value is ${(Number(lossBps) / 100).toFixed(1)}% below cost` };
-    }
-    return { shouldClose: false };
+  // Positions marked to market stop out on what selling them would return (#78).
+  if (position.costBasisRaw != null && position.unrealisedPnlRaw != null) {
+    return evaluateLiquidationStopLoss(decimalToBigint(position.costBasisRaw), decimalToBigint(position.unrealisedPnlRaw));
   }
+  return evaluateStopLoss(position);
+}
 
-  // Legacy rows (no shares recorded) keep the old price-move rule.
+/** True when the unrealised loss is at least `pctBps` of the cost basis. */
+export function lossReaches(costBasisRaw: bigint, unrealisedPnlRaw: bigint, pctBps: bigint): boolean {
+  return costBasisRaw > 0n && unrealisedPnlRaw < 0n && -unrealisedPnlRaw * 10_000n >= costBasisRaw * pctBps;
+}
+
+/**
+ * Stop-loss on liquidation value: close once unrealisedPnlRaw <= -15% of the
+ * cost basis. It sees price impact and fees, which a price-move rule does not.
+ */
+export function evaluateLiquidationStopLoss(costBasisRaw: bigint, unrealisedPnlRaw: bigint): {
+  shouldClose: boolean;
+  reason?: string;
+} {
+  if (!lossReaches(costBasisRaw, unrealisedPnlRaw, STOP_LOSS_PCT_BPS)) return { shouldClose: false };
+  const lossBps = (-unrealisedPnlRaw * 10_000n) / costBasisRaw;
+  return { shouldClose: true, reason: `STOP_LOSS: Liquidation value ${(Number(lossBps) / 100).toFixed(1)}% below cost` };
+}
+
+/** Legacy stop-loss rule for positions without shares: close once the price has moved 15% from entry. */
+export function evaluateStopLoss(position: { entryPrice: number; currentPrice: number | null }): {
+  shouldClose: boolean;
+  reason?: string;
+} {
   const currentPrice = position.currentPrice ?? position.entryPrice;
   const adverseMove = Math.abs(currentPrice - position.entryPrice) / position.entryPrice;
 
@@ -225,19 +245,14 @@ export async function enforceStopLoss(positionId: string): Promise<{
 
 /**
  * Checks if the daily drawdown limit has been breached.
- * If yes, persists a TRADER pause for DRAWDOWN_PAUSE_HOURS (#79); every
- * instance sees it, and the cycle gate (assertAgentActive) enforces it.
- *
- * "Today" is the UTC day (it used to be the server's local day, which differed
- * between instances).
+ * If yes, pauses new trade execution for DRAWDOWN_PAUSE_HOURS.
  */
 export async function checkDailyDrawdown(bankroll: number): Promise<{
   isPaused:      boolean;
   drawdownPct:   number;
   pauseUntil?:   Date;
 }> {
-  const now = new Date();
-  const todayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const todayStart = utcStartOfDay();
 
   const todayTrades = await prisma.position.findMany({
     where: {
@@ -271,31 +286,29 @@ export function evaluateDailyDrawdown(closedPnl: number[], bankroll: number, now
   const drawdownPct = dailyLoss / bankroll;
 
   if (drawdownPct >= MAX_DAILY_DRAWDOWN_PCT) {
-    const pauseUntil = new Date(Date.now() + DRAWDOWN_PAUSE_HOURS * 60 * 60 * 1000);
-    logger.warn({ drawdownPct, pauseUntil }, 'Daily drawdown limit reached — pausing agent');
-
-    await pauseAgent('TRADER', {
-      source: 'drawdown',
-      actor: 'system',
-      until: pauseUntil,
-      reason: `Daily drawdown ${(drawdownPct * 100).toFixed(2)}% reached the ${(MAX_DAILY_DRAWDOWN_PCT * 100).toFixed(0)}% limit`,
-    });
-
-    await writeAgentLog({
-      agentType: 'TRADER',
-      level:     'WARN',
-      action:    'DRAWDOWN_PAUSE',
-      data:      { drawdownPct, dailyLoss, pauseUntil: pauseUntil.toISOString() },
-    });
-
-    return { isPaused: true, drawdownPct, pauseUntil };
+    return {
+      isPaused: true,
+      drawdownPct,
+      dailyLoss,
+      pauseUntil: new Date(now.getTime() + DRAWDOWN_PAUSE_HOURS * 60 * 60 * 1000),
+    };
   }
   return { isPaused: false, drawdownPct, dailyLoss };
 }
 
-/** Logs and records a drawdown pause. */
+/**
+ * Logs and persists a drawdown pause. The pause lives in agent_controls, so
+ * the next cycle, a restart and every other instance see it (#79).
+ */
 export async function recordDrawdownPause(result: DrawdownEvaluation): Promise<void> {
   logger.warn({ drawdownPct: result.drawdownPct, pauseUntil: result.pauseUntil }, 'Daily drawdown limit reached — pausing agent');
+
+  await pauseAgent('TRADER', {
+    source: 'drawdown',
+    actor: 'system',
+    until: result.pauseUntil,
+    reason: `Daily drawdown ${(result.drawdownPct * 100).toFixed(2)}% reached the ${(MAX_DAILY_DRAWDOWN_PCT * 100).toFixed(0)}% limit`,
+  });
 
   await writeAgentLog({
     agentType: 'TRADER',

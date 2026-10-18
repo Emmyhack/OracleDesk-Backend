@@ -820,6 +820,32 @@ Body `{ reason?: string }`. Clears only the named row: resuming `TRADER` does no
 clear an `ALL` pause. Every pause, resume and automatic expiry writes an
 `agent_control_events` row (`before`, `after`, `actor`, `source`).
 
+#### `GET /admin/reconciliation/runs?limit=` (admin)
+
+Latest market-lifecycle reconciliation runs (#83), newest first (`limit` ≤ 100,
+default 20): `{ id, startedAt, finishedAt, scanned, repaired, reported, deferred, rpcCalls, error }`.
+
+#### `GET /admin/reconciliation/runs/:id` (admin)
+
+`{ run, findings }`, with `findings` paginated (`page`, `limit`). Each finding is
+`{ id, runId, marketId, onChainMarketId, driftClass, dbValue, chainValue, action, observedLedger, createdAt }`.
+
+`driftClass`: `MISSED_RESOLUTION`, `MISSED_VOID`, `CLOSED_BUT_ACTIVE`,
+`PRICE_STALE`, `CLOSE_TIME_MISMATCH`, `HASH_MISMATCH`, `NOT_FOUND_ON_CHAIN`,
+`STATUS_REGRESSION`. `action`: `REPAIRED`, `REPORTED` (report-only classes and
+dry runs), `DEFERRED` (the indexer is behind the observation and may still
+process the event itself; a finding deferred in three runs in a row is repaired
+anyway, with `chainValue.forced = true`) or `SKIPPED_NEWER` (a newer writer
+moved the row first). Repaired resolutions carry `chainValue.resolvedAtApproximate`:
+`resolvedAt` is the observation time, not the on-chain one.
+
+#### `POST /admin/reconciliation/run` (admin)
+
+Body `{ "dryRun"?: boolean, "maxMarkets"?: number }`. Starts a run in the
+background, under the same advisory lock as the cron (a run that cannot take
+the lock records itself as skipped). Response `202 Accepted`:
+`{ "runId": "uuid", "message": "Reconciliation run scheduled" }`.
+
 ### Oracle / resolution
 
 Outcomes are decided on-chain by the `resolver` contract (Reflector price

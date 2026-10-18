@@ -23,6 +23,26 @@
       "call": "position.findMany",
       "args": {
         "where": {
+          "status": "OPEN",
+          "sharesRaw": {
+            "not": null
+          }
+        },
+        "include": {
+          "market": {
+            "select": {
+              "id": true,
+              "onChainMarketId": true,
+              "status": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "call": "position.findMany",
+      "args": {
+        "where": {
           "status": "OPEN"
         }
       }
@@ -36,48 +56,9 @@
       }
     },
     {
-      "call": "position.findUnique",
-      "args": {
-        "where": {
-          "id": "p-stop"
-        },
-        "include": {
-          "trade": true
-        }
-      }
-    },
-    {
-      "call": "position.update",
-      "args": {
-        "where": {
-          "id": "p-stop"
-        },
-        "data": {
-          "status": "STOP_LOSS",
-          "currentPrice": 0.3,
-          "pnl": -20,
-          "closedAt": "<iso>",
-          "closeReason": "STOP_LOSS"
-        }
-      }
-    },
-    {
-      "call": "agentLog.create",
-      "args": {
-        "data": {
-          "agentType": "TRADER",
-          "level": "INFO",
-          "action": "POSITION_CLOSED",
-          "marketId": "m-stop",
-          "data": {
-            "positionId": "p-stop",
-            "closeReason": "STOP_LOSS",
-            "pnl": -20,
-            "closePrice": 0.3,
-            "correlation": {}
-          }
-        }
-      }
+      "call": "exitPosition",
+      "id": "p-stop",
+      "reason": "STOP_LOSS"
     },
     {
       "call": "position.findUnique",
@@ -156,7 +137,7 @@
           "marketId": "m-hedge",
           "data": {
             "originalMarketId": "m-stop",
-            "hedgeTradeId": "t-11",
+            "hedgeTradeId": "t-10",
             "hedgeDirection": "NO",
             "hedgeSize": 50,
             "rationale": "Edge decayed from 0.200 to 0.400. Partial hedge of 50 USDC via m-hedge reduces net exposure by ~50%.",
@@ -324,6 +305,12 @@
       ]
     },
     {
+      "call": "chain.getOnChainMarket",
+      "args": [
+        "7n"
+      ]
+    },
+    {
       "call": "chain.agentBuy",
       "args": {
         "market_id": "7n",
@@ -338,7 +325,7 @@
       "call": "trade.update",
       "args": {
         "where": {
-          "id": "t-23"
+          "id": "t-22"
         },
         "data": {
           "status": "EXECUTED",
@@ -352,13 +339,16 @@
       "args": {
         "data": {
           "marketId": "m-new",
-          "tradeId": "t-23",
+          "tradeId": "t-22",
           "direction": "YES",
           "status": "OPEN",
-          "entryPrice": 0.4,
-          "currentPrice": 0.4,
+          "entryPrice": 1,
+          "currentPrice": 1,
           "size": 250,
-          "pnl": 0
+          "pnl": 0,
+          "sharesRaw": "1",
+          "costBasisRaw": "2500000000",
+          "feesPaidRaw": "25000000"
         }
       }
     },
@@ -385,7 +375,7 @@
           "action": "TRADE_EXECUTED",
           "marketId": "m-new",
           "data": {
-            "tradeId": "t-23",
+            "tradeId": "t-22",
             "txHash": "abababababababababababababababababababababababababababababababab",
             "direction": "YES",
             "amount": 250,
@@ -424,6 +414,11 @@
           "pnl": true
         }
       }
+    },
+    {
+      "call": "pauseAgent",
+      "scope": "TRADER",
+      "source": "drawdown"
     },
     {
       "call": "agentLog.create",

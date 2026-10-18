@@ -234,3 +234,27 @@ test('backfill fills from indexed events, estimates otherwise and reports skips'
   const q = calcBuy(2_000_000_000n, 1_000_000_000n, 30_000_000n, 100n); // NO buys the NO reserve
   assert.deepEqual([est.sharesRaw, est.valuationSource], [q.sharesOut.toString(), 'estimated']);
 });
+
+test('executeTrade cancels the trade, not fails it, when the agent is paused (#79)', async () => {
+  const chain = await import('../src/services/chain.service');
+  const { prisma } = await import('../src/lib/prisma');
+  const { executeTrade } = await import('../src/services/trade.service');
+  const { AgentPausedError } = await import('../src/services/agent-controls.service');
+  const updates: any[] = [];
+  let positions = 0;
+  (prisma.market.findUnique as any) = async () => ({ id: 'm1', onChainMarketId: 3n });
+  (prisma.position.findFirst as any) = async () => null;
+  (prisma.trade.create as any) = async ({ data }: any) => ({ id: 't1', ...data });
+  (prisma.trade.update as any) = async ({ data }: any) => { updates.push(data); return {}; };
+  (prisma.position.create as any) = async () => { positions += 1; return {}; };
+  (prisma.agentLog as any).create = async () => ({});
+  (chain as any).quoteBuy = async () => 120_000_000n;
+  (chain as any).getOnChainMarket = async () => ({ fee_bps: 30 });
+  (chain as any).agentBuy = async () => { throw new AgentPausedError('TRADER', { reason: 'halt' }); };
+  await assert.rejects(
+    executeTrade({ marketId: 'm1', direction: 'YES', amount: 10, price: 0.5, kellyFraction: 0.1, edgeDetected: 0.2 } as any),
+    (e: any) => e.code === 'AGENT_PAUSED',
+  );
+  assert.equal(updates[0].status, 'CANCELLED');
+  assert.equal(positions, 0);
+});

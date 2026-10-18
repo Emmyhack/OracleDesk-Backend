@@ -3,6 +3,7 @@ import {
   generateMarketQuestion,
   checkDuplicate,
   createMarketFromProposal,
+  normalizeCategory,
   prepareResolvableProposal,
 } from '../services/market.service';
 import { seedPolicyRecord } from '../services/seed-policy.service';
@@ -135,8 +136,38 @@ export async function runMarketMakerCycle(
 
     signal.throwIfAborted();
 
-    // Step 4: Persist market to DB (PENDING until it exists on-chain)
-    const market = await createMarketFromProposal(proposal, resolutionDetails);
+    // Step 4: Seed policy. Decided before anything is written, pinned or sent:
+    // when the budget does not allow a minimum seed there is no DB row, no
+    // IPFS pin and no chain call.
+    const decision = await planMarketCreation({
+      category:             normalizeCategory(proposal.category),
+      closeTime:            new Date(proposal.expiry_timestamp * 1000),
+      p:                    proposal.initial_yes_probability,
+      ci:                   proposal.confidence_interval,
+      llmSuggestedSeedUsdc: proposal.minimum_liquidity_usdc,
+    });
+    if (decision.action === 'skip') {
+      logger.warn({ reason: decision.reason, question: proposal.market_question }, 'Market Maker Agent: seed policy skipped creation');
+      await writeAgentLog({
+        agentType: 'MARKET_MAKER',
+        level:     'WARN',
+        action:    'SEED_SKIPPED',
+        data:      { reason: decision.reason, question: proposal.market_question, inputs: decision.inputs },
+      }).catch(() => {});
+      return null;
+    }
+    const seedPolicy = seedPolicyRecord(decision);
+
+    signal.throwIfAborted();
+
+    // Step 5: Persist market to DB (PENDING until it exists on-chain). It opens
+    // at the adjusted price, and minimumLiquidity records the decided seed.
+    const created = await createMarketFromProposal({
+      ...proposal,
+      initial_yes_probability: decision.pAdj,
+      minimum_liquidity_usdc:  toDisplayUsdc(decision.seedRaw),
+    }, undefined, resolutionDetails);
+    const market = await prisma.market.update({ where: { id: created.id }, data: { seedPolicy: seedPolicy as object } });
     logger.info({ marketId: market.id, category: market.category }, 'Market Maker Agent: market created in DB');
 
     // Step 6: Commit the resolution spec and create the market through the

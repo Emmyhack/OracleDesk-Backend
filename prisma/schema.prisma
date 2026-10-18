@@ -183,6 +183,11 @@ model Market {
   resolutionHash     String?
   /// Revealed preimage of resolutionHash, kept so it can be registered with the resolver.
   resolutionSpec     Json?
+  /// Seed policy inputs, bounds, binding constraint and expected LP loss (#82).
+  seedPolicy         Json?
+  /// Highest ledger whose chain state this row reflects; guards writes from the indexer and the reconciler (#83).
+  chainSyncedLedger  Int?
+  lastReconciledAt   DateTime?          @db.Timestamptz(3)
   /// Resolvability block pinned in question document v2 (source id, URL, measurable, comparator, threshold, deadline, instructions). Null for markets created before #74.
   resolutionDetails  Json?
   createdAt          DateTime           @default(now())

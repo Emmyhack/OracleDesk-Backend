@@ -25,6 +25,7 @@ import { AppError } from '../middlewares/error.middleware';
 import { pinJson } from '../services/ipfs.service';
 import { publishTrace } from '../services/chain.service';
 import { ChainError } from '../services/stellar/errors';
+import { AgentPausedError } from '../services/agent-controls.service';
 import { agentSigner } from '../services/stellar/clients';
 import { defaultRegistryReader, type RegistryReader } from '../services/trace-audit.service';
 
@@ -35,6 +36,8 @@ const PERMANENT_CONTRACT_ERRORS = new Set(['AgentNotRegistered', 'EmptyAction', 
 const BASE_BACKOFF_MS = 30_000;
 const MAX_BACKOFF_MS = 60 * 60_000;
 const MARKET_WAIT_MS = 5 * 60_000;
+/** How long a trace waits when its agent is paused (#79). */
+const PAUSED_RECHECK_MS = 5 * 60_000;
 const DRY_RUN_RECHECK_MS = 6 * 60 * 60_000;
 const CLAIM_LEASE_MS = 2 * 60_000;
 /** How many of a market's newest registry traces the duplicate check reads. */
@@ -323,6 +326,12 @@ async function advance(row: PublicationRow, ctx: Ctx): Promise<Advance> {
 }
 
 async function handleError(row: PublicationRow, err: unknown, ctx: Ctx): Promise<TracePublicationStatus> {
+  // A paused agent publishes later; waiting is not a failed attempt.
+  if (err instanceof AgentPausedError) {
+    await update(ctx, row.id, { nextAttemptAt: after(ctx.now, PAUSED_RECHECK_MS) });
+    logger.info({ traceId: row.traceId }, 'Trace publication deferred: agent paused');
+    return row.status;
+  }
   const contractError = err instanceof ChainError ? err.contractError : null;
   const message = contractError ?? (err instanceof Error ? err.message : String(err));
   if (contractError && PERMANENT_CONTRACT_ERRORS.has(contractError)) {
