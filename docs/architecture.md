@@ -85,6 +85,62 @@ Outcomes are decided on-chain by the resolver contract. The backend only reads `
 
 `src/generated/` is copied from the pinned `contracts` submodule by `scripts/sync-contracts.mjs`, with a do-not-edit header and `// @ts-nocheck`. CI fails if it's stale.
 
+## LLM router (#157)
+
+All generation goes through `src/lib/llm/router.ts`. Each `LlmTask`
+(`market_generation`, `hedge_conditions`, `forecasting`, `attestation`,
+`generic_json`, `generic_text`) maps to an ordered list of `ModelSpec`s
+(provider, model, temperature, max tokens, timeout, optional base URL). The
+default policy reproduces the old Anthropic → Gemini behaviour. Override any
+task with `LLM_POLICY` (JSON) or `LLM_POLICY_FILE`; missing tasks keep the
+default, and an invalid task/spec fails at boot with a per-task message.
+
+Providers live in `src/lib/llm/providers/` (Anthropic, Gemini,
+OpenAI-compatible). They normalise SDK errors into `LlmError.kind`
+(`rate_limited`, `quota_exhausted`, `auth`, `invalid_request`, `timeout`,
+`server`, `content_filtered`, `empty`, `parse`). The router:
+
+- skips providers with no key (without counting a failure);
+- retries inline only when `retryAfterMs <= 5s`; longer waits cool the
+  provider down and fail over;
+- opens a 1-hour circuit on quota exhaustion;
+- cools a provider for 60s after 3 server/timeout failures;
+- fails over on auth/invalid-request/empty/parse;
+- parses JSON in the router, so an invalid response tries the next model;
+- returns provenance (`provider`, `model`, `attempts`, `latencyMs`, `usage`)
+  for agent logs and trace payloads (`llm: { provider, model } | null`).
+
+Text mode never sets a JSON response format; only `mode: "json"` does.
+
+## IPFS content store (#100)
+
+`pinJson()` writes the exact pinned bytes to `ipfs_content` (Postgres
+`bytea`) after the pin succeeds; a store failure is logged and does not fail
+the pin. `fetchVerifiedBytes(cid, expectedSha256, verifiedBy)`:
+
+1. reads the local row and re-hashes its bytes;
+2. returns it only when both the stored hash and the freshly computed hash
+   equal the expected hash (on-chain or pin hash);
+3. otherwise consults the gateway, stores bytes only after they verify, and
+   returns unverified bytes without caching so callers can report a mismatch.
+
+sha256 is the admission criterion; the CID is only a lookup key. A CID can
+never map to two hashes (`IPFS_CID_HASH_CONFLICT`). Objects above
+`IPFS_CACHE_MAX_OBJECT_BYTES` are not stored. An hourly job evicts
+`GATEWAY_VERIFIED` rows by least-recent access, then 30-day-old `PINNED` rows,
+never touching content referenced by an unpublished trace or a `PENDING`
+market (one SQL `NOT EXISTS` query, batches of 500).
+
+## Transparency reports (#159)
+
+`src/services/transparency-report.service.ts` builds a deterministic
+`oracledesk.transparency-report` v1 document from chain reads and
+`chain_events` only (no DB floats). Amounts are base-unit decimal strings.
+The daily job pins the canonical bytes, publishes the hash through the
+reasoning registry under the sentinel `u64::MAX` market id with action
+`report`, and persists the index row. A crash after pin re-publishes the
+stored bytes rather than recomputing. See `docs/transparency-reports.md`.
+
 ## Database Invariants & Schema Hardening
 
 The Postgres database enforces key invariants at the storage layer via Postgres enums and `CHECK` constraints:

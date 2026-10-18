@@ -287,7 +287,7 @@ export async function confirmCopyTrade(
     throw new AppError(400, 'MARKET_NOT_ON_CHAIN', 'Market is not active on-chain');
   }
 
-  const expectedOutcome: 'Yes' | 'No' = copyTrade.outcome === 'YES' ? 'Yes' : 'No';
+  const expectedOutcome: 'Yes' | 'No' = (copyTrade as any).outcome === 'YES' ? 'Yes' : 'No';
   const maxCollateral = BigInt(copyTrade.amountRaw ?? '0');
 
   try {

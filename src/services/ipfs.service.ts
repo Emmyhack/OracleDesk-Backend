@@ -7,6 +7,7 @@ import { secret } from '../config/secrets';
 import { logger } from '../lib/logger';
 import { AppError } from '../middlewares/error.middleware';
 import { canonicalBytes, sha256Hex } from '../utils/hash.util';
+import { getContentStore } from './content-store.service';
 import { bulkheads, deadline, sleep, TimeoutError } from '../lib/resilience';
 
 const PINATA_BASE = 'https://api.pinata.cloud';
@@ -168,6 +169,13 @@ export async function pinJson(
 
         try {
           const cid = await transport.pin(bytes, name, handle.signal);
+          // Write-through: the pin succeeded, so a cache failure must not fail
+          // the caller (the CID/hash are still returned and persisted).
+          await getContentStore()
+            .put({ cid, sha256: hash, bytes, origin: 'PINNED', verifiedBy: 'pin' })
+            .catch((err: unknown) => {
+              logger.warn({ err, cid, name }, 'IPFS content store write failed; continuing');
+            });
           logger.info({ name, cid, hash }, 'Pinned to IPFS');
           return { cid, hash, bytes };
         } catch (err) {

@@ -1,34 +1,7 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
-import { config } from '../../../config';
+import { secret } from '../../../config/secrets';
+import { getGenAI, isDailyQuotaError, parseRetryDelayMs } from '../../gemini';
 import type { LlmErrorKind, LlmProvider, LlmRequest, ModelSpec, ProviderCompletion } from '../types';
 import { LlmError } from '../types';
-
-const cache = new Map<string, GoogleGenerativeAI>();
-
-function clientFor(): GoogleGenerativeAI {
-  let client = cache.get('default');
-  if (!client) {
-    client = new GoogleGenerativeAI(config.GEMINI_API_KEY);
-    cache.set('default', client);
-  }
-  return client;
-}
-
-export function isDailyQuotaError(errMsg: string): boolean {
-  return (
-    errMsg.includes('GenerateRequestsPerDayPerProject') ||
-    errMsg.includes('GenerateContentInputTokensPerModelPerMinute-FreeTier') ||
-    (errMsg.includes('limit: 0') && errMsg.includes('free_tier'))
-  );
-}
-
-export function parseRetryDelayMs(errorMessage: string): number {
-  const floatMatch = errorMessage.match(/[Rr]etry in (\d+(?:\.\d+)?)s/);
-  if (floatMatch) return Math.ceil(parseFloat(floatMatch[1])) * 1000 + 3_000;
-  const jsonMatch = errorMessage.match(/"retryDelay"\s*:\s*"(\d+)s"/);
-  if (jsonMatch) return (parseInt(jsonMatch[1], 10) + 3) * 1000;
-  return 30_000;
-}
 
 function mapError(err: unknown): LlmError {
   const message = (err as Error)?.message ?? String(err);
@@ -56,10 +29,10 @@ function mapError(err: unknown): LlmError {
 
 export const geminiProvider: LlmProvider = {
   name: 'gemini',
-  available: () => Boolean(config.GEMINI_API_KEY),
+  available: () => secret('GEMINI_API_KEY') !== '',
   async complete(spec, req: LlmRequest): Promise<ProviderCompletion> {
     try {
-      const model = clientFor().getGenerativeModel({
+      const model = getGenAI().getGenerativeModel({
         model: spec.model,
         systemInstruction: req.system,
         generationConfig: {
@@ -71,7 +44,7 @@ export const geminiProvider: LlmProvider = {
           topP: req.mode === 'json' ? 0.9 : 0.95,
         },
       });
-      const result = await model.generateContent(req.user);
+      const result = await model.generateContent(req.user, { signal: req.signal });
       const text = result.response.text()?.trim();
       if (!text) throw new LlmError('empty', 'gemini', 'Gemini returned an empty response', undefined, []);
       const usage = result.response.usageMetadata;

@@ -7,6 +7,7 @@ import { logger } from './lib/logger';
 import { prisma } from './lib/prisma';
 import { startIngestionCron } from './cron/ingestion.cron';
 import { startMonitorCron } from './cron/monitor.cron';
+import { startReportCron } from './cron/report.cron';
 import { startTraceAuditCron } from './cron/trace-audit.cron';
 import { startTracePublicationCron } from './cron/trace-publication.cron';
 import { startEventListener } from './services/indexer.service';
@@ -58,6 +59,7 @@ async function bootstrap(): Promise<void> {
   // 4. Start cron jobs
   startIngestionCron();
   startMonitorCron();
+  startReportCron();
   startTraceAuditCron();
   startTracePublicationCron();
 

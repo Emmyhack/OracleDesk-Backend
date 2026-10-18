@@ -207,7 +207,7 @@ test('backfillEvents tick is bounded when getEvents hangs', async () => {
   const shortSignal = AbortSignal.timeout(40);
   await assert.rejects(
     async () => {
-      await backfillEvents(150, { source: fakeSource, emit: () => {} }, { signal: shortSignal });
+      await backfillEvents(150, { source: fakeSource as any, emit: () => {} }, { signal: shortSignal });
     },
     (err: any) => {
       assert.ok(err);

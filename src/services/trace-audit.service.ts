@@ -185,7 +185,7 @@ export async function runTraceAudit(opts: TraceAuditOptions = {}): Promise<Trace
   const maxFetches = opts.maxFetches ?? config.TRACE_AUDIT_MAX_FETCHES;
   const maxBytes = opts.maxBytes ?? config.TRACE_AUDIT_MAX_BYTES;
   const recheckHours = opts.recheckHours ?? config.TRACE_AUDIT_RECHECK_HOURS;
-  const fetchFn = opts.fetchBytesFn ?? ((cid, o) => fetchIpfsBytes(cid, o));
+  const fetchFn = opts.fetchBytesFn ?? ((cid) => fetchIpfsBytes(cid));
 
   let rpcCalls = 0;
   let fetches = 0;
@@ -197,7 +197,8 @@ export async function runTraceAudit(opts: TraceAuditOptions = {}): Promise<Trace
   });
 
   const knownAgents = new Set<string>();
-  if (CONTRACTS.deployedAgent) knownAgents.add(CONTRACTS.deployedAgent.toUpperCase());
+  const deployedAgent = (CONTRACTS as Record<string, string | undefined>).deployedAgent;
+  if (deployedAgent) knownAgents.add(deployedAgent.toUpperCase());
   try {
     const signer = agentSigner();
     if (signer?.publicKey) knownAgents.add(signer.publicKey.toUpperCase());

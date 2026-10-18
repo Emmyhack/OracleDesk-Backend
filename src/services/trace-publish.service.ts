@@ -14,6 +14,9 @@ import { fetchIpfsBytes } from './ipfs.service';
 import { getOnChainTrace, printable } from './chain.service';
 import { processPublication } from '../jobs/trace-publication.worker';
 import type { TraceAction } from '../lib/trace-actions';
+import { fetchVerifiedBytes, pinJson } from './ipfs.service';
+import { publishTrace } from './chain.service';
+import { agentSigner } from './stellar/clients';
 import type { TraceVerification } from '../types';
 
 /**

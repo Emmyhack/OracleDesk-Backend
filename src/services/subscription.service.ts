@@ -262,8 +262,8 @@ export async function upsertSpendingAllowance(params: {
 
   return prisma.spendingAllowance.upsert({
     where: { userId },
-    create: { userId, dailyLimit, perTraceLimit, currency },
-    update: { dailyLimit, perTraceLimit, currency, isActive: true },
+    create: { userId, dailyLimit, perTraceLimit, currency: currency as 'USDC' },
+    update: { dailyLimit, perTraceLimit, currency: currency as 'USDC', isActive: true },
   });
 }
 

@@ -3,7 +3,7 @@
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { writeAgentLog } from "../lib/agent-log";
-import { callLLMJSON } from '../lib/llm';
+import { completeLLM } from '../lib/llm';
 import { logger } from "../lib/logger";
 import type {
   MarketProposal,

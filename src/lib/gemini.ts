@@ -1,10 +1,3 @@
-/**
- * Compatibility shim over the Gemini provider (#157).
- *
- * The routing, health and retry policy now live in src/lib/llm/router.ts. This
- * module is kept so existing imports (and the generated default client export)
- * continue to work.
- */
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { secret, secretEntry } from '../config/secrets';
 import { logger } from './logger';
@@ -105,6 +98,8 @@ function parseRetryDelayMs(errorMessage: string): number {
   return 30_000; // conservative fallback
 }
 
+// ─── callGemini — plain text output ───────────────────────────────────────────
+// Use for summaries, analysis narratives (non-JSON).
 export async function callGemini(
   systemPrompt: string,
   userPrompt: string,

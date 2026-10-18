@@ -1,18 +1,22 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { config } from '../../../config';
+import { secret, secretEntry } from '../../../config/secrets';
 import type { LlmErrorKind, LlmProvider, LlmRequest, ModelSpec, ProviderCompletion } from '../types';
 import { LlmError } from '../types';
 
-const cache = new Map<string, Anthropic>();
+let cached: Anthropic | null = null;
+let cachedVersion = -1;
+let cachedBaseUrl = '';
 
-function clientFor(spec: ModelSpec): Anthropic {
-  const key = `${config.ANTHROPIC_API_KEY}|${spec.baseUrl ?? ''}`;
-  let client = cache.get(key);
-  if (!client) {
-    client = new Anthropic({ apiKey: config.ANTHROPIC_API_KEY, ...(spec.baseUrl ? { baseURL: spec.baseUrl } : {}) });
-    cache.set(key, client);
+/** Lazy client, rebuilt after key rotation (#145). */
+export function getAnthropicClient(baseUrl?: string): Anthropic | null {
+  const entry = secretEntry('ANTHROPIC_API_KEY');
+  if (!entry.current) return null;
+  if (!cached || entry.version !== cachedVersion || (baseUrl ?? '') !== cachedBaseUrl) {
+    cached = new Anthropic({ apiKey: entry.current, ...(baseUrl ? { baseURL: baseUrl } : {}) });
+    cachedVersion = entry.version;
+    cachedBaseUrl = baseUrl ?? '';
   }
-  return client;
+  return cached;
 }
 
 function mapError(err: unknown): LlmError {
@@ -36,11 +40,13 @@ function mapError(err: unknown): LlmError {
 
 export const anthropicProvider: LlmProvider = {
   name: 'anthropic',
-  available: () => Boolean(config.ANTHROPIC_API_KEY),
+  available: () => secret('ANTHROPIC_API_KEY') !== '',
   async complete(spec, req): Promise<ProviderCompletion> {
     let message: Anthropic.Message;
     try {
-      message = await clientFor(spec).messages.create(
+      const client = getAnthropicClient(spec.baseUrl);
+      if (!client) throw new LlmError('auth', 'anthropic', 'ANTHROPIC_API_KEY is not set');
+      message = await client.messages.create(
         {
           model: spec.model,
           max_tokens: Math.min(req.maxTokens ?? spec.maxTokens, spec.maxTokens),
@@ -54,6 +60,7 @@ export const anthropicProvider: LlmProvider = {
         { timeout: spec.timeoutMs, signal: req.signal },
       );
     } catch (err) {
+      if (err instanceof LlmError) throw err;
       throw mapError(err);
     }
 

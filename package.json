@@ -16,6 +16,7 @@
     "prisma:studio": "prisma studio",
     "sync:contracts": "node scripts/sync-contracts.mjs",
     "check:contracts": "node scripts/sync-contracts.mjs --check",
+    "verify:report": "node -r ts-node/register/transpile-only scripts/verify-report.ts",
     "lint:migrations": "bash scripts/lint-migrations.sh",
     "db:seed": "tsx prisma/seed.ts",
     "db:reset": "prisma migrate reset --force --skip-seed && npm run db:seed",
