@@ -3,6 +3,7 @@ import { Server } from 'socket.io';
 import app from './app';
 import { config } from './config';
 import { initSecrets, startSecretRefresh } from './config/secrets';
+import { assertEmbeddingConfig } from './services/embeddings.service';
 import { logger } from './lib/logger';
 import { prisma } from './lib/prisma';
 import { startIngestionCron } from './cron/ingestion.cron';
@@ -24,6 +25,14 @@ async function bootstrap(): Promise<void> {
     stopSecretRefresh = startSecretRefresh(config);
   } catch (err) {
     logger.fatal({ err: err instanceof Error ? err.message : err }, 'Failed to initialise secrets');
+    process.exit(1);
+  }
+
+  // 0b. A dimension the markets.questionEmbedding column cannot hold fails here, not on the first insert.
+  try {
+    assertEmbeddingConfig();
+  } catch (err) {
+    logger.fatal({ err: err instanceof Error ? err.message : err }, 'Invalid embedding configuration');
     process.exit(1);
   }
 

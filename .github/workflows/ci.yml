@@ -13,7 +13,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16-alpine
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: oracledesk
           POSTGRES_PASSWORD: oracledesk
@@ -75,6 +75,9 @@ jobs:
       # keys. --live is manual only and never runs in CI.
       - name: Evaluate market generation (replay)
         run: npm run eval:markets -- --replay
+      # #69: harness check for the dedup threshold sweep on the committed pair set.
+      - name: Calibrate dedup (fake provider)
+        run: npm run calibrate:dedup -- --provider fake
       - name: End-to-end x402 test
         run: npm run test:e2e:x402
       # Integration tier (#135): real Postgres 16 + Redis 7 from the service

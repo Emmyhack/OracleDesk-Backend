@@ -32,6 +32,10 @@ import {
   type SanitizedSignal,
 } from './llm-guard.service';
 import { ALLOWED_ORACLES, SOURCE_WEIGHTS, meaningfulTokens } from './market-policy';
+import { config } from '../config';
+import { extractQuestionDates, dayDiff } from '../lib/question-dates';
+import { extractEntities, sharedEntities, uniqueEntities } from './dedup-entities';
+import { getEmbeddingProvider, getVectorIndex, normalizeQuestion, type Neighbour } from './embeddings.service';
 
 // The proposal schemas live in src/lib/llm-schema.ts (single source for the
 // zod shape, the Anthropic tool schema and the Gemini response schema).
@@ -382,30 +386,192 @@ function bigrams(tokens: string[]): Set<string> {
 }
 
 /**
- * The pure lexical rule behind {@link isDuplicateMarket} (#67): the question
- * list is a parameter, so the offline evaluation runs it without Prisma.
+ * The first existing question the lexical rule (Jaccard > 0.55, or 3+ shared
+ * bigrams) calls a duplicate, with its Jaccard score. Pure (#67).
  */
-export function isDuplicateOf(question: string, existing: string[]): boolean {
+export function findLexicalMatch(question: string, existing: string[]): { index: number; jaccard: number } | null {
   const newTokens    = meaningfulTokens(question);
   const newTokensSet = new Set(newTokens);
   const newBigrams   = bigrams(newTokens);
 
-  for (const text of existing) {
-    const existingTokens = meaningfulTokens(text);
+  for (let index = 0; index < existing.length; index++) {
+    const existingTokens = meaningfulTokens(existing[index]);
 
     // Pass 1: Jaccard similarity on meaningful tokens (threshold 0.55)
     const intersection = existingTokens.filter(w => newTokensSet.has(w)).length;
     const union        = new Set([...newTokens, ...existingTokens]).size;
     const jaccard      = union === 0 ? 0 : intersection / union;
-    if (jaccard > 0.55) return true;
+    if (jaccard > 0.55) return { index, jaccard };
 
     // Pass 2: Key-entity n-gram overlap; 3+ shared meaningful bigrams → duplicate
     const existingBigrams = bigrams(existingTokens);
     const bigramOverlap   = [...newBigrams].filter(bg => existingBigrams.has(bg)).length;
-    if (bigramOverlap >= 3) return true;
+    if (bigramOverlap >= 3) return { index, jaccard };
   }
 
-  return false;
+  return null;
+}
+
+/** The pure lexical rule behind {@link isDuplicateMarket}: the question list is a parameter. */
+export function isDuplicateOf(question: string, existing: string[]): boolean {
+  return findLexicalMatch(question, existing) !== null;
+}
+
+// ─── Semantic dedup (#69) ─────────────────────────────────────────────────────
+
+export interface DedupMatch {
+  marketId: string;
+  question: string;
+  /** Cosine similarity (semantic) or Jaccard score (lexical). */
+  similarity: number;
+  reason: string;
+}
+
+export interface DedupResult {
+  duplicate: boolean;
+  method: 'semantic' | 'lexical';
+  match?: DedupMatch;
+}
+
+/** At or above this similarity two questions are the same market whatever else differs. */
+export const DEDUP_CERTAIN_SIM = 0.95;
+const NEIGHBOURS = 10;
+const DAY_MS = 86_400_000;
+
+type DedupProposal = Pick<MarketProposal, 'market_question' | 'category' | 'expiry_timestamp'>;
+
+/**
+ * Nearest PENDING/ACTIVE markets by cosine similarity (HNSW), best first.
+ * Throws if embedding or the query fails; checkDuplicate turns that into the
+ * lexical fallback. `category` and `expiry` are not used to filter: the same
+ * event can be filed under two categories, and dates are judged in stage two.
+ */
+export async function findSemanticDuplicates(
+  question: string,
+  _context: { category: string; expiry: Date },
+): Promise<Neighbour[]> {
+  const provider = getEmbeddingProvider();
+  if (!provider) return [];
+  const [vector] = await provider.embed([normalizeQuestion(question)]);
+  return getVectorIndex().nearest(vector, provider.model, NEIGHBOURS);
+}
+
+/** Numbers in a normalised question (dates are already gone), as canonical strings. */
+function figures(question: string): Set<string> {
+  const out = new Set<string>();
+  // Not "q3" or "p500": digits glued to a letter are part of a name.
+  for (const m of normalizeQuestion(question).matchAll(/(?<![a-z\d.])\d+(?:\.\d+)?/g)) out.add(String(parseFloat(m[0])));
+  return out;
+}
+
+/**
+ * Stage two, for a neighbour that cleared the similarity threshold. "Same
+ * subject, different date" is a different market, and so are two rungs of a
+ * ladder ("above $70,000" / "above $90,000"), so a candidate is a duplicate
+ * only when, in order:
+ *   1. the resolution dates (expiry, and any date written in both questions)
+ *      are within the window;
+ *   2. neither question states a figure the other lacks while the other also
+ *      states one the first lacks (conflicting numbers);
+ *   3. the questions share an entity and neither adds an entity the other
+ *      lacks while the other adds one too (Lakers vs Celtics).
+ * Similarity ≥ 0.95 skips step 3 only: near-identical text with an entity our
+ * gazetteer cannot map is still a repeat, but never across dates or figures.
+ * Pure.
+ */
+export function confirmDuplicate(
+  proposal: { question: string; expiry: Date },
+  candidate: { question: string; expiry: Date; similarity: number },
+  windowDays = config.DEDUP_DATE_WINDOW_DAYS,
+): { duplicate: boolean; reason: string } {
+  const expiryGap = Math.abs(proposal.expiry.getTime() - candidate.expiry.getTime()) / DAY_MS;
+  if (expiryGap > windowDays) {
+    return { duplicate: false, reason: `resolution dates differ by ${expiryGap.toFixed(1)} days (window ${windowDays})` };
+  }
+
+  // Dates written in the text refine the expiry comparison when both have one.
+  const written = (q: string, expiry: Date) => {
+    const dates = extractQuestionDates(q, new Date(expiry.getTime() - 60 * DAY_MS));
+    return dates.length > 0 ? dates[dates.length - 1] : null;
+  };
+  const a = written(proposal.question, proposal.expiry);
+  const b = written(candidate.question, candidate.expiry);
+  if (a && b && Math.abs(dayDiff(a, b)) > windowDays) {
+    return { duplicate: false, reason: `dates in the questions differ by ${Math.abs(dayDiff(a, b))} days (window ${windowDays})` };
+  }
+
+  const figuresA = figures(proposal.question);
+  const figuresB = figures(candidate.question);
+  const onlyA = [...figuresA].filter((x) => !figuresB.has(x));
+  const onlyB = [...figuresB].filter((x) => !figuresA.has(x));
+  if (onlyA.length > 0 && onlyB.length > 0) {
+    return { duplicate: false, reason: `different figures (${onlyA.join(', ')} vs ${onlyB.join(', ')})` };
+  }
+
+  if (candidate.similarity >= DEDUP_CERTAIN_SIM) {
+    return { duplicate: true, reason: `similarity ${candidate.similarity.toFixed(3)} ≥ ${DEDUP_CERTAIN_SIM}; same date window` };
+  }
+
+  const entitiesA = extractEntities(proposal.question);
+  const entitiesB = extractEntities(candidate.question);
+  const shared = sharedEntities(entitiesA, entitiesB);
+  if (shared.length === 0) return { duplicate: false, reason: 'no shared entity' };
+  const [extraA, extraB] = uniqueEntities(entitiesA, entitiesB);
+  if (extraA.length > 0 && extraB.length > 0) {
+    return { duplicate: false, reason: `different subjects (${extraA.join(', ')} vs ${extraB.join(', ')})` };
+  }
+
+  return { duplicate: true, reason: `shared entities ${shared.join(', ')}; resolution within ${windowDays} days` };
+}
+
+async function lexicalCheck(question: string): Promise<DedupResult> {
+  const active = await prisma.market.findMany({
+    where:  { status: { in: ['PENDING', 'ACTIVE'] } },
+    select: { id: true, question: true },
+  });
+  const hit = findLexicalMatch(question, active.map((m) => m.question));
+  if (!hit) return { duplicate: false, method: 'lexical' };
+  const m = active[hit.index];
+  return { duplicate: true, method: 'lexical', match: { marketId: m.id, question: m.question, similarity: hit.jaccard, reason: 'lexical overlap (Jaccard > 0.55 or 3+ shared bigrams)' } };
+}
+
+/**
+ * Duplicate check for a proposal (#69). With an embedding provider: nearest
+ * neighbours by cosine similarity, candidates at or above DEDUP_SIM_THRESHOLD,
+ * then the entity and date stage. Markets the vector index cannot see (no
+ * embedding yet, or another model's) are compared lexically so nothing is
+ * skipped. Without a provider, or if embedding or the query fails, the lexical
+ * check runs instead and the result says so; this never throws for a provider
+ * problem and never blocks the cycle.
+ */
+export async function checkDuplicate(proposal: DedupProposal): Promise<DedupResult> {
+  const provider = getEmbeddingProvider();
+  if (!provider) return lexicalCheck(proposal.market_question);
+
+  const expiry = new Date(proposal.expiry_timestamp * 1000);
+  try {
+    const neighbours = await findSemanticDuplicates(proposal.market_question, { category: String(proposal.category), expiry });
+    for (const n of neighbours.filter((x) => x.similarity >= config.DEDUP_SIM_THRESHOLD)) {
+      const verdict = confirmDuplicate(
+        { question: proposal.market_question, expiry },
+        { question: n.question, expiry: n.expiryTimestamp, similarity: n.similarity },
+      );
+      if (verdict.duplicate) {
+        return { duplicate: true, method: 'semantic', match: { marketId: n.marketId, question: n.question, similarity: n.similarity, reason: verdict.reason } };
+      }
+    }
+
+    const unseen = await getVectorIndex().unembedded(provider.model);
+    const hit = findLexicalMatch(proposal.market_question, unseen.map((m) => m.question));
+    if (hit) {
+      const m = unseen[hit.index];
+      return { duplicate: true, method: 'lexical', match: { marketId: m.id, question: m.question, similarity: hit.jaccard, reason: 'lexical overlap with a market that has no embedding yet' } };
+    }
+    return { duplicate: false, method: 'semantic' };
+  } catch (err) {
+    logger.warn({ err: (err as Error)?.message?.slice(0, 200) }, 'Semantic dedup unavailable; falling back to the lexical check');
+    return lexicalCheck(proposal.market_question);
+  }
 }
 
 // ─── Internal helper ──────────────────────────────────────────────────────────

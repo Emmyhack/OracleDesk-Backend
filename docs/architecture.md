@@ -211,6 +211,82 @@ providers through `setAnthropicClient()` / `setGeminiModelFactory()` and replay 
 shapes in `tests/fixtures/llm/` (hand-built examples of the API shapes, not
 captures from a live account).
 
+## Semantic duplicate detection (#69)
+
+The lexical check (token Jaccard > 0.55 or 3+ shared bigrams) misses
+paraphrases and flags unrelated questions that share boilerplate. With
+`EMBEDDING_PROVIDER=gemini|openai` the market maker compares embeddings in
+pgvector instead; with `none` (the default) nothing changes.
+
+**Storage.** `markets.questionEmbedding vector(768)` and `embeddingModel`, added
+by migration `…_market_embeddings` (`CREATE EXTENSION vector`). Prisma cannot read
+or write `Unsupported` columns, so every access is `$queryRaw` / `$executeRaw`
+with the vector bound as `$n::vector` (a `'[0.1,…]'` string), never interpolated.
+The index is `markets_question_embedding_hnsw`, HNSW with `vector_cosine_ops`,
+**partial** on `status IN ('PENDING','ACTIVE')`: pgvector filters after the index
+scan, so a full index would fill its 40-candidate list with old resolved markets
+and hide a near duplicate. The dedup query repeats the predicate, which is what
+lets the planner use it; at a few hundred rows the planner correctly prefers an
+exact scan and sort, which has perfect recall. The index is not in
+`schema.prisma`: `prisma migrate dev` must not be allowed to drop it (check with
+`prisma migrate diff` before accepting a generated migration). The dimension is
+fixed at 768 (Gemini `text-embedding-004`; OpenAI `text-embedding-3-small` with
+`dimensions: 768`); `EMBEDDING_DIM` must equal it, a provider with another size
+is rejected, and a mismatch stops the server at boot.
+
+**Embedding.** `normalizeQuestion()` lowercases, collapses dates to `<date>` (the
+second stage compares dates itself), writes numbers as plain digits (`$70,000`,
+`70k` → `70000`), strips punctuation and caps the text at 512 characters. A new
+market is embedded fire-and-forget after `createMarketFromProposal`; the
+ingestion cron then sweeps `questionEmbedding IS NULL` rows (one batch of 32 per
+tick), and `npm run backfill:embeddings [-- --reembed]` embeds everything else.
+Vectors from two models are never compared: the query filters on
+`embeddingModel`, so after changing `EMBEDDING_MODEL` run
+`backfill:embeddings -- --reembed`.
+
+**Decision** (`checkDuplicate` in `market.service.ts`, returns
+`{ duplicate, method, match? }`, logged to AgentLog as `DEDUP_CHECK` /
+`DUPLICATE_SKIPPED`):
+
+1. *Candidates*: the 10 nearest PENDING/ACTIVE neighbours by cosine similarity;
+   those at or above `DEDUP_SIM_THRESHOLD` continue.
+2. *Confirmation* (`confirmDuplicate`, pure), in order: (a) the resolution dates
+   are within `DEDUP_DATE_WINDOW_DAYS` (default 3), both the expiries and any
+   date written in both questions; (b) the questions do not each state a figure
+   the other lacks (`$70,000` vs `$90,000` are two rungs of a ladder); (c) they
+   share an entity from the rule-based extractor (`dedup-entities.ts`: a gazetteer
+   of central banks, assets, indicators, countries and sources, plus proper
+   nouns) and neither adds an entity the other lacks (Lakers vs Celtics).
+   Similarity ≥ 0.95 skips (c) only, never the date or figure checks.
+3. *Fallback*: markets the vector search cannot see (no embedding yet, or from
+   another model) are compared lexically so nothing is skipped silently. With no
+   provider, or if embedding or the query throws, the lexical check runs and the
+   result says `method: "lexical"`; the cycle is never blocked.
+
+**Calibrating the threshold.** `tests/fixtures/dedup-pairs.json` holds 158 labelled
+pairs (44 paraphrases and 16 formatting variants that are duplicates; different
+date, different entity, boilerplate collision, different strike and unrelated
+pairs that are not). `npm run calibrate:dedup` embeds them, sweeps thresholds
+0.50–0.99 and reports precision, recall and F1 for semantic only, semantic +
+confirmation, and the lexical rule, and recommends the threshold with the highest
+recall at precision ≥ 0.95. `--provider gemini|openai --record` writes the
+vectors to `tests/fixtures/dedup-vectors.<model>.json`, and `--vectors <file>`
+replays them without a key.
+
+The committed run uses `--provider fake`, a deterministic hashing embedder with
+a small synonym map. It validates the harness and the confirmation stage, **not**
+a model: on it the lexical rule scores precision 17.9 % / recall 28.3 %
+(boilerplate makes it flag unrelated questions), and semantic + confirmation
+scores precision 100 % at t = 0.90 with recall 26.7 % because the fake vectors do
+not place paraphrases close together. `DEDUP_SIM_THRESHOLD=0.85` is therefore a
+provisional default; run the calibration with the real provider and replace it
+before enabling `EMBEDDING_PROVIDER` in production.
+
+**Infrastructure.** pgvector is needed by the migration: `docker-compose.yml`, CI
+and the integration containers use `pgvector/pgvector:pg16` (Debian, glibc; the
+old `postgres:16-alpine` is musl, so recreate an existing dev volume or `REINDEX`
+text indexes before switching). Managed Postgres needs `CREATE EXTENSION vector`.
+
 ## Calibration (#68)
 
 `src/services/calibration.service.ts` answers whether agent probabilities are

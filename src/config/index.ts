@@ -120,6 +120,17 @@ const envSchema = z
     // Time /readyz reports "draining" before the HTTP server stops accepting.
     SHUTDOWN_DRAIN_MS: z.string().default('5000').transform(Number),
 
+    // ── Semantic dedup (#69) ──────────────────────────────────────────────
+    // none keeps the lexical check. The vector column is vector(768): the
+    // dimension must match the migration, and the provider rejects a mismatch.
+    EMBEDDING_PROVIDER: z.enum(['none', 'gemini', 'openai']).default('none'),
+    EMBEDDING_MODEL: optionalString,
+    EMBEDDING_DIM: z.string().default('768').transform(Number).pipe(z.number().int().positive()),
+    // Cosine similarity at which a nearest neighbour becomes a duplicate candidate.
+    DEDUP_SIM_THRESHOLD: z.string().default('0.85').transform(Number).pipe(z.number().min(0).max(1)),
+    // Two markets whose resolution dates are within this many days are "the same date".
+    DEDUP_DATE_WINDOW_DAYS: z.string().default('3').transform(Number).pipe(z.number().min(0)),
+
     // ── Calibration (#68) ─────────────────────────────────────────────────
     // Slices with fewer resolved markets report insufficientData instead of noise.
     MIN_CALIBRATION_MARKETS: z.string().default('20').transform(Number)

@@ -3,7 +3,7 @@
  *
  * - CI (or any machine with services already running): set TEST_DATABASE_URL
  *   (an admin connection, used for CREATE DATABASE) and TEST_REDIS_URL.
- * - Locally: Testcontainers starts postgres:16-alpine and redis:7-alpine.
+ * - Locally: Testcontainers starts pgvector/pgvector:pg16 (Postgres 16 with the vector extension, #69) and redis:7-alpine.
  *   Containers are reused across runs only when TESTCONTAINERS_REUSE_ENABLE=true.
  * - Neither available: returns null so the suite skips with one clear message.
  */
@@ -23,7 +23,7 @@ export async function ensureContainers(): Promise<Services | null> {
     const { PostgreSqlContainer } = await import('@testcontainers/postgresql');
     const { RedisContainer } = await import('@testcontainers/redis');
     const reuse = process.env.TESTCONTAINERS_REUSE_ENABLE === 'true';
-    let pg = new PostgreSqlContainer('postgres:16-alpine');
+    let pg = new PostgreSqlContainer('pgvector/pgvector:pg16');
     let redis = new RedisContainer('redis:7-alpine');
     if (reuse) {
       pg = pg.withReuse();

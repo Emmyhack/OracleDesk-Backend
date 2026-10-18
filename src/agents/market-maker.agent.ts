@@ -1,10 +1,11 @@
 import { aggregateSignals } from '../services/ingestion.service';
 import {
   generateMarketQuestion,
-  isDuplicateMarket,
+  checkDuplicate,
   createMarketFromProposal,
 } from '../services/market.service';
 import { generateReasoningTrace } from '../services/reasoning.service';
+import { embedMarket } from '../services/embeddings.service';
 import { createMarketOnChain } from '../services/market-chain.service';
 import { enqueueTracePublication } from '../services/trace-publish.service';
 import { TRACE_ACTIONS } from '../lib/trace-actions';
@@ -91,9 +92,16 @@ export async function runMarketMakerCycle(
     signal.throwIfAborted();
 
     // Step 3: Deduplicate
-    const isDuplicate = await isDuplicateMarket(proposal.market_question);
-    if (isDuplicate) {
-      logger.info({ question: proposal.market_question },
+    const dedup = await checkDuplicate(proposal);
+    await writeAgentLog({
+      agentType: 'MARKET_MAKER',
+      level:     dedup.duplicate ? 'WARN' : 'INFO',
+      action:    dedup.duplicate ? 'DUPLICATE_SKIPPED' : 'DEDUP_CHECK',
+      marketId:  dedup.match?.marketId,
+      data:      { method: dedup.method, duplicate: dedup.duplicate, match: dedup.match },
+    }).catch(() => {});
+    if (dedup.duplicate) {
+      logger.info({ method: dedup.method, similarity: dedup.match?.similarity, matchedMarketId: dedup.match?.marketId },
         'Market Maker Agent: duplicate market — skipping');
       return null;
     }
@@ -103,6 +111,11 @@ export async function runMarketMakerCycle(
     // Step 4: Persist market to DB (PENDING until it exists on-chain)
     const market = await createMarketFromProposal(proposal, proposalProvenance);
     logger.info({ marketId: market.id, category: market.category }, 'Market Maker Agent: market created in DB');
+
+    // Embed for the next cycle's dedup. Fire-and-forget: a failure leaves the
+    // vector NULL and the ingestion cron's sweep retries it.
+    void embedMarket(market.id).catch((err) =>
+      logger.warn({ err: (err as Error)?.message?.slice(0, 200), marketId: market.id }, 'Embedding failed; the sweep will retry'));
 
     // Step 5: Commit the resolution spec and create the market through the
     // treasury. dry-run simulates; the market then stays PENDING.

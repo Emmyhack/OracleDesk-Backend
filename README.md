@@ -48,7 +48,7 @@ git submodule update --init      # if you cloned without --recurse-submodules
 nvm use
 npm ci
 npm run sync:contracts           # no-op unless the submodule moved
-docker compose up -d             # Postgres on 127.0.0.1:5433, Redis on 6379
+docker compose up -d             # Postgres (with pgvector) on 127.0.0.1:5433, Redis on 6379
 cp .env.example .env             # works as-is with the Compose services
 npx prisma migrate dev
 npm run dev                      # http://localhost:8000
@@ -107,6 +107,9 @@ The full contract with the frontend, including request and response shapes, erro
 | `npm run dev` | Dev server with reload |
 | `npm run build` / `npm start` | Compile to `dist/` / build and run |
 | `npm test` | Compile and run `tests/*.test.ts` with `node:test` |
+| `npm run eval:markets -- --replay` | Offline evaluation of market generation against recorded model output (no keys; see `docs/architecture.md`) |
+| `npm run calibrate:dedup` | Calibrate the semantic dedup threshold on labelled pairs (`--provider fake` needs nothing) |
+| `npm run backfill:embeddings` | Embed markets that have no question vector (`-- --reembed` after a model change) |
 | `npm run test:integration` | Integration tests against real Postgres + Redis (Docker or `TEST_DATABASE_URL`/`TEST_REDIS_URL`; see CONTRIBUTING.md) |
 | `npm run test:all` | Unit then integration tests |
 | `npm run sync:contracts` | Copy generated contract code from `contracts/` into `src/generated/` |
