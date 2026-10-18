@@ -1,0 +1,8 @@
+{
+  "caseId": "ent-box-office",
+  "kind": "proposal",
+  "promptKey": "b5fab6beb16e66d61e8209785fd650d9713ac835b952565ed31259363e58d0ee",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will the sci-fi sequel gross more than $130 million domestically in its opening weekend of October 23-25, 2026?\",\"initial_yes_probability\":0.55,\"resolution_oracle\":\"BOX_OFFICE_MOJO\",\"expiry_timestamp\":1793016000,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"ENTERTAINMENT\",\"confidence_interval\":{\"lower\":0.45,\"upper\":0.65},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"n1\"]}"
+}

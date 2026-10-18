@@ -1,0 +1,34 @@
+{
+  "id": "ent-billboard",
+  "asOf": "2026-10-18T12:00:00Z",
+  "signals": {
+    "news": [
+      {
+        "source": "NEWSAPI",
+        "title": "New single debuts at number two",
+        "content": "It trails last week's leader by 4,000 units.",
+        "publishedAt": "2026-10-18T11:55:00.000Z",
+        "relevanceScore": 0.7,
+        "category": "ENTERTAINMENT"
+      }
+    ],
+    "fed": [],
+    "macro": [],
+    "signalCount": 1
+  },
+  "existing": [
+    {
+      "question": "Will the Lakers win the 2026 NBA championship?",
+      "category": "SPORTS"
+    },
+    {
+      "question": "Will Bitcoin trade above $100,000 before year end?",
+      "category": "CRYPTO"
+    }
+  ],
+  "labels": {
+    "category": "ENTERTAINMENT",
+    "expectDuplicateOf": null,
+    "notes": "Good case."
+  }
+}

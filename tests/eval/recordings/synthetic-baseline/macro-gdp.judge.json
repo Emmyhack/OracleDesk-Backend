@@ -1,0 +1,8 @@
+{
+  "caseId": "macro-gdp",
+  "kind": "judge",
+  "promptKey": "848671f351f2a6f4a5071d303caf3717a265d491e1fb60c7087c4d05efac547e",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":1,\"ambiguity_notes\":\"Synthetic judge verdict.\"}"
+}

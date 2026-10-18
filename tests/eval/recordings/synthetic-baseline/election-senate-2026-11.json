@@ -1,0 +1,8 @@
+{
+  "caseId": "election-senate-2026-11",
+  "kind": "proposal",
+  "promptKey": "7de542cba08debb0250d9cc8b4c3fe2b1bf8d68fe8eed412e44f0d13010b98b9",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will Republicans hold a majority in the US Senate after the November 3, 2026 elections?\",\"initial_yes_probability\":0.55,\"resolution_oracle\":\"AP_ELECTIONS\",\"expiry_timestamp\":1793793600,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"ELECTION\",\"confidence_interval\":{\"lower\":0.45,\"upper\":0.65},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"n1\"]}"
+}

@@ -2,7 +2,11 @@
 # throwaway values, not secrets: the ports are bound to 127.0.0.1.
 services:
   postgres:
-    image: postgres:16-alpine
+    # pgvector/pgvector is Postgres 16 plus the vector extension (#69). It is
+    # Debian-based (glibc) where postgres:16-alpine is musl, so a data volume
+    # created with the alpine image should be recreated (`docker compose down -v`),
+    # or its text indexes rebuilt with REINDEX, before switching.
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: oracledesk
       POSTGRES_PASSWORD: oracledesk

@@ -1,0 +1,34 @@
+{
+  "id": "crypto-btc-70k",
+  "asOf": "2026-10-02T12:00:00Z",
+  "signals": {
+    "news": [
+      {
+        "source": "NEWSAPI",
+        "title": "Bitcoin climbs above $70,000 ahead of ETF decision",
+        "content": "Traders await an SEC decision on a spot ether fund.",
+        "publishedAt": "2026-10-02T11:55:00.000Z",
+        "relevanceScore": 0.7,
+        "category": "CRYPTO"
+      }
+    ],
+    "fed": [],
+    "macro": [],
+    "signalCount": 1
+  },
+  "existing": [
+    {
+      "question": "Will the Lakers win the 2026 NBA championship?",
+      "category": "SPORTS"
+    },
+    {
+      "question": "Will Bitcoin trade above $100,000 before year end?",
+      "category": "CRYPTO"
+    }
+  ],
+  "labels": {
+    "category": "CRYPTO",
+    "expectDuplicateOf": null,
+    "notes": "CHAINLINK is an allowed oracle."
+  }
+}

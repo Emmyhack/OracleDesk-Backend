@@ -351,6 +351,61 @@ backend's last check against reasoning-registry. The frontend must still run
 its own check before rendering content (see `docs/frontend-integration.md` in
 the contracts repo).
 
+#### Provenance (`oracledesk.trace.provenance/1`)
+
+Every trace pinned after #66 carries a `provenance` block, both in the pinned
+document (so it is part of the bytes `traceHash` commits to) and in the
+`ReasoningTrace.provenance` column. `Market.generationProvenance` holds the
+entry for the call that proposed the market.
+
+```json
+{
+  "schema": "oracledesk.trace.provenance/1",
+  "llm": [
+    {
+      "source": "llm",
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-6",
+      "promptId": "market-proposal",
+      "promptVersion": 1,
+      "promptHash": "64-hex",
+      "params": { "temperature": 0.2, "maxTokens": 4096 },
+      "usage": { "inputTokens": 1412, "outputTokens": 231 },
+      "latencyMs": 2310,
+      "attempts": 1,
+      "outputSha256": "64-hex"
+    },
+    { "source": "default", "promptId": "hedge-conditions", "promptVersion": 1, "reason": "LLM_FAILED" }
+  ],
+  "generator": { "service": "oracledesk-backend", "version": "1.0.0", "commit": "abc1234" }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `schema` | Version string of this block. Check it before reading the rest. |
+| `llm[]` | One entry per generation step, in order: the market proposal (creation traces only), then the hedge conditions. |
+| `source` | `llm`: a model produced the output. `default`: a hard-coded safe default was used (`reason` is `LLM_FAILED` or `LLM_BUDGET_EXCEEDED`); such an entry has no model fields. |
+| `provider`, `model` | Who answered. When Gemini served the call, `fallbackFrom` names the provider that failed first. |
+| `promptId`, `promptVersion`, `promptHash` | The registered prompt (`src/lib/prompts`). `promptHash = sha256(canonicalJson({ id, version, system, user }))` over the *template*, not the rendered text. `adhoc`/`0` marks a call that did not use the registry. |
+| `params` | Sampling temperature and the `max_tokens` the serving provider was finally given. |
+| `usage` | Tokens summed over the serving provider's requests; `null` when the SDK reported none. |
+| `latencyMs` | Wall time of the whole call, fallback and repair rounds included. Differs on every run. |
+| `attempts` | Provider requests made, repair rounds and Gemini 429 retries included. |
+| `fallbackFrom` | `{ provider, model, errorClass }`; `errorClass` is one of `validation`, `rate_limited`, `timeout`, `auth`, `circuit_open`, `budget`, `unavailable`, `server_error`, `error`. Provider messages are never recorded. |
+| `outputSha256` | sha256 of the raw model output (canonical JSON of the tool input for Anthropic, the response text for Gemini). Raw prompts and outputs are never stored. |
+| `generator` | The service and its `package.json` version; `commit` appears when `GIT_SHA` is set. |
+
+The block is optional: traces created before #66 have none, and consumers must
+treat it as absent. Readers must also ignore unknown keys.
+
+`GET /traces/:id` returns the full block with access. Without access, and in
+`GET /traces`, `provenance` is reduced to
+`{ "summary": { "providers": ["anthropic"], "promptVersions": ["hedge-conditions@1", "market-proposal@1"], "source": "llm" | "default" | "mixed" } }`
+(`summary` is `null` for traces without provenance).
+
+The payload's former `llm: { provider, model }` field is replaced by this block.
+
 #### `GET /traces`
 
 Query: `agentType`, `marketId`, `page`, `limit`. Response: preview traces,
@@ -438,6 +493,84 @@ Unchanged. `PUT` body `{ dailyLimit: number, perTraceLimit: number, currency?: "
 #### `GET /traces/payments` (auth)
 
 The user's last 100 `PaymentEvent`s, newest first.
+
+### Agent calibration (#68)
+
+Are the agents' probabilities calibrated? When an agent says 70 %, does YES
+happen about 70 % of the time? A daily job joins resolved markets with the
+traces written before resolution and stores metrics per slice.
+
+#### `GET /agents/calibration` (public)
+
+Query (all optional): `window` (`30d`, `90d`, `all`; default `90d`),
+`groupBy` (`agentType`, `category`, `decisionType`, `promptVersion`, `model`,
+`agentType_category`; default `agentType`), `agentType` (`MARKET_MAKER` or
+`TRADER`) and `category`. The two filters only apply to the groupings that
+contain them (`agentType`, `category`, `agentType_category`); otherwise `400
+VALIDATION_ERROR`. The response carries `Cache-Control: public, max-age=300`.
+
+```json
+{
+  "window": "90d",
+  "groupBy": "agentType",
+  "computedAt": "2026-10-18T03:10:00.000Z",
+  "minCalibrationMarkets": 20,
+  "weighting": "time",
+  "slices": [
+    {
+      "groupKey": "TRADER",
+      "insufficientData": false,
+      "nMarkets": 61, "nTraces": 140, "nEff": 48.3,
+      "brier": 0.21, "logLoss": 0.61, "clipped": 0,
+      "buckets": [{ "lower": 0.6, "upper": 0.7, "count": 7.4, "nEff": 6.1, "meanPredicted": 0.64, "observed": 0.57, "wilson95": { "lower": 0.28, "upper": 0.82 } }],
+      "quantileBuckets": ["…"],
+      "murphy": { "reliability": 0.012, "resolution": 0.018, "uncertainty": 0.249 },
+      "baseline": { "brier": 0.23, "agentBrier": 0.21, "nTraces": 140, "meaningful": true, "note": "…" },
+      "shrinkageK": 0.84
+    },
+    { "groupKey": "MARKET_MAKER", "insufficientData": true, "nMarkets": 4, "nTraces": 4, "nEff": 4 }
+  ]
+}
+```
+
+`computedAt` is `null` and `slices` empty until the first snapshot exists.
+
+| Metric | Definition |
+|---|---|
+| `brier` | Weighted mean of `(p − o)²`, `o` = 1 for YES. Lower is better; 0.25 is "always say 50 %". |
+| `logLoss` | Weighted mean of `−ln(p_outcome)` with `p` clipped to `[1e-4, 1 − 1e-4]`; `clipped` counts the samples that were clipped. |
+| `buckets` | Ten equal-width bins by predicted probability: `count` (weight), `meanPredicted`, `observed` frequency and a Wilson 95 % interval computed at the bucket's effective sample size. `quantileBuckets` are ten equal-weight bins. Empty bins have `null` fields. |
+| `murphy` | Murphy (1973) decomposition: Brier ≈ `reliability − resolution + uncertainty`. Small reliability = calibrated; large resolution = the forecasts separate outcomes; uncertainty is the base-rate variance. |
+| `baseline` | The market's own Brier (`marketProbability` at trace time) on the same traces, next to the agent's Brier on them, so skill versus the market is visible. `MARKET_CREATION` traces are left out: their `marketProbability: 0.5` is a placeholder, not a price. `null` when no trace has a market price. |
+| `nMarkets`, `nTraces`, `nEff` | Resolved markets and traces in the slice; `nEff = (Σw)² / Σw²` after weighting. |
+| `shrinkageK` | Least-squares factor `k` in `p′ = 0.5 + k (p − 0.5)`, bounded to `[0.3, 1]`. |
+
+**Weighting.** Each market has total weight 1 in a slice, so a market with
+fifty trader traces cannot outvote one with a single trace. `time` (default,
+`CALIBRATION_WEIGHTING`) weights a trace by how long its estimate was current,
+until the next trace in the slice or `resolvedAt`; `last` keeps only the final
+trace and `first` only the first.
+
+**Exclusions.** Voided markets (`CANCELLED`, `resolvedOutcome` null) are
+dropped entirely, because counting them as NO would bias every figure. Traces
+created at or after `resolvedAt` are dropped, since they could know the
+outcome. Only markets with an `onChainMarketId` are counted, i.e. resolved
+through the indexer; legacy rows resolved by other means are ignored.
+
+**Minimum sample.** A slice with fewer than `MIN_CALIBRATION_MARKETS` (default
+20) resolved markets returns `insufficientData: true` and its counts, with no
+metrics. The trader additionally requires 50 markets before it uses a fitted
+`k` other than 1.
+
+**Slices by prompt and model** read the first entry of the trace's
+`provenance.llm` (see the provenance block above); traces without provenance
+fall under `unknown`.
+
+#### `POST /agents/calibration/recompute` (auth, admin)
+
+Runs the daily job now and returns `{ computedAt, rows, windows, slices,
+insufficient }`. `409 CALIBRATION_IN_PROGRESS` if another instance holds the
+advisory lock.
 
 ### Per-trace unlock via x402 (not this backend)
 

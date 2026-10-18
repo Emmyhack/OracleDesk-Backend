@@ -73,6 +73,22 @@ export function assertPlainJson(value: unknown, path = '$'): void {
   }
 }
 
+/**
+ * Stricter than {@link assertPlainJson}, for blocks that are embedded in a
+ * pinned document by hand (#66): additionally rejects `undefined` (canonicalJson
+ * would drop the key silently) and non-finite numbers (JSON turns them into
+ * null). Key order does not matter; canonicalJson sorts.
+ */
+export function assertCanonicalSafe(value: unknown, path = '$'): void {
+  if (value === undefined) throw new NonPlainJsonError(path, 'undefined');
+  if (typeof value === 'number' && !Number.isFinite(value)) throw new NonPlainJsonError(path, 'non-finite number');
+  assertPlainJson(value, path);
+  if (Array.isArray(value)) value.forEach((v, i) => assertCanonicalSafe(v, `${path}[${i}]`));
+  else if (value !== null && typeof value === 'object') {
+    for (const [k, v] of Object.entries(value)) assertCanonicalSafe(v, `${path}.${k}`);
+  }
+}
+
 /** Canonical bytes for a JSON document. Hash and upload these exact bytes. */
 export function canonicalBytes(value: unknown): Buffer {
   return Buffer.from(canonicalJson(value), 'utf8');

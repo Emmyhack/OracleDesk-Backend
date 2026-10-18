@@ -1,0 +1,34 @@
+{
+  "id": "ecb-cut-2026-12",
+  "asOf": "2026-10-18T12:00:00Z",
+  "signals": {
+    "news": [
+      {
+        "source": "NEWSAPI",
+        "title": "ECB policymakers split on December rate cut",
+        "content": "Several governing council members favour waiting for more inflation data.",
+        "publishedAt": "2026-10-18T11:55:00.000Z",
+        "relevanceScore": 0.7,
+        "category": "ECB"
+      }
+    ],
+    "fed": [],
+    "macro": [],
+    "signalCount": 1
+  },
+  "existing": [
+    {
+      "question": "Will the Lakers win the 2026 NBA championship?",
+      "category": "SPORTS"
+    },
+    {
+      "question": "Will Bitcoin trade above $100,000 before year end?",
+      "category": "CRYPTO"
+    }
+  ],
+  "labels": {
+    "category": "ECB",
+    "expectDuplicateOf": null,
+    "notes": "Baseline good ECB case."
+  }
+}

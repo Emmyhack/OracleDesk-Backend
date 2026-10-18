@@ -6,6 +6,7 @@ import { config } from '../config';
 import { postgresContentStore } from '../services/content-store.service';
 import { correlation, newId, runWithContext } from '../lib/context';
 import { purgeExpiredIdempotencyKeys } from '../middlewares/idempotency.middleware';
+import { computeAndStoreSnapshots } from '../services/calibration.service';
 import { recordCronRun } from './registry';
 
 let runningTraderCycleId: string | null = null;
@@ -43,6 +44,19 @@ export function startMonitorCron(): void {
       logger.error({ err }, 'Monitor cron: trader cycle failed');
     } finally {
       runningTraderCycleId = null;
+    }
+  }));
+
+  // Calibration snapshots (#68) — daily at 03:10. The computation takes a
+  // Postgres advisory lock, so with several instances only one does the work.
+  cron.schedule('10 3 * * *', () => tick('calibration', async () => {
+    const startedAt = new Date();
+    try {
+      await computeAndStoreSnapshots();
+      recordCronRun('calibration', 'success', startedAt, new Date());
+    } catch (err) {
+      recordCronRun('calibration', 'failure', startedAt, new Date(), err);
+      logger.error({ err }, 'Monitor cron: calibration snapshots failed');
     }
   }));
 

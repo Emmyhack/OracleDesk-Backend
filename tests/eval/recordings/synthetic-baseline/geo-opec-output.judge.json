@@ -1,0 +1,8 @@
+{
+  "caseId": "geo-opec-output",
+  "kind": "judge",
+  "promptKey": "94f02d01d2dc2ed5a6676c05de3cbf0e5410fca62541d0788ff31cd9ce7ba81c",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":1,\"ambiguity_notes\":\"Synthetic judge verdict.\"}"
+}

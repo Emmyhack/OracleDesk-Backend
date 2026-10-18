@@ -58,7 +58,23 @@ export const logger = pino({
     return { ...correlation(), kind: ctx.kind, ...(ctx.userId ? { userId: ctx.userId } : {}) };
   },
   // Never log credentials, even if a caller passes a whole request or config.
-  redact: LOG_REDACT,
+  redact: {
+    paths: [
+      'req.headers.authorization',
+      'headers.authorization',
+      'authorization',
+      '*.JWT_SECRET',
+      '*.AUTH_SIGNING_SECRET',
+      '*.AGENT_SECRET_KEY',
+      '*.PINATA_SECRET_API_KEY',
+      '*.ANTHROPIC_API_KEY',
+      '*.GEMINI_API_KEY',
+      '*.OPENAI_API_KEY',
+      'secret',
+      'token',
+    ],
+    censor: '[redacted]',
+  },
   serializers: {
     err: pino.stdSerializers.err,
     error: pino.stdSerializers.err,

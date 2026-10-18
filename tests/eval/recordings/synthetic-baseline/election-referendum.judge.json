@@ -1,0 +1,8 @@
+{
+  "caseId": "election-referendum",
+  "kind": "judge",
+  "promptKey": "8d5e352fba879fffd69a1c9bfbf57d1c86f6d24f74630df4552ccb4bf48750fb",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":1,\"ambiguity_notes\":\"Synthetic judge verdict.\"}"
+}

@@ -2,6 +2,7 @@ import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma';
 import { sendSuccess, sendError, parsePagination, buildPaginationMeta } from '../utils/response.util';
+import { summarizeProvenance } from '../lib/llm/provenance';
 import { verifyTraceOnChain } from '../services/trace-publish.service';
 import {
   getTracWithAccessControl,
@@ -58,6 +59,7 @@ export async function listTraces(req: Request, res: Response): Promise<void> {
         onChainTraceId:      true,
         publishTxHash:       true,
         previewSources:      true,
+        provenance:          true,
         lastAuditStatus:     true,
         lastAuditedAt:       true,
         createdAt:           true,
@@ -67,8 +69,9 @@ export async function listTraces(req: Request, res: Response): Promise<void> {
     prisma.reasoningTrace.count({ where }),
   ]);
 
-  const formattedTraces = traces.map((t) => ({
+  const formattedTraces = traces.map(({ provenance, ...t }) => ({
     ...t,
+    provenance: { summary: summarizeProvenance(provenance) },
     audit: t.lastAuditStatus ? { status: t.lastAuditStatus, checkedAt: t.lastAuditedAt } : null,
   }));
 

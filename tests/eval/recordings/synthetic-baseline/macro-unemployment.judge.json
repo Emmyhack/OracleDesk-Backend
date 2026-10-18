@@ -1,0 +1,8 @@
+{
+  "caseId": "macro-unemployment",
+  "kind": "judge",
+  "promptKey": "5d1df3866b471d9ce68f796c04e1c86a72910a3b945d1cec88238e3e5848b926",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":1,\"ambiguity_notes\":\"Synthetic judge verdict.\"}"
+}

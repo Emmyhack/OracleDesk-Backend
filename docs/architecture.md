@@ -53,6 +53,34 @@ Publication is durable (#131). Each trace that should be on-chain gets a `trace_
 
 Transient errors retry with backoff `min(2^attempts × 30 s, 1 h)`. Rows are claimed with `FOR UPDATE SKIP LOCKED` and leased, and chain calls run after the claim commits, so several processes can run the worker. `verified` is set only by indexer confirmation (or the duplicate checks, which read the same on-chain record) and by `POST /traces/verify`; dry-run never confirms a row or sets `verified`. The creation trace is pinned with `onChainMarketId: null` when its market is still pending and is **not** re-pinned later: that would change `trace_hash`; the `market_id` argument of `publish_trace` provides the link. Action strings live in `src/lib/trace-actions.ts`.
 
+### LLM provenance (#66)
+
+A pinned trace used to prove only that *these bytes were committed*. It now
+also says what produced the decision. `tracePayload.provenance`
+(`oracledesk.trace.provenance/1`, documented in `docs/api.md`) is added before
+canonicalisation, so it is inside the pinned bytes and the on-chain hash. It is
+built by `callLLMStructured` (provider, model, prompt id/version/hash, params,
+usage, latency, attempts, `fallbackFrom`, `outputSha256`) and assembled in
+`generateReasoningTrace`, which merges the market proposal's entry (passed as
+`upstreamProvenance` by the market maker) with its own hedge-conditions entry.
+Hedge conditions that came from the hard-coded defaults are recorded as
+`source: "default"`, with no model fields.
+
+Prompts live in `src/lib/prompts/`, one file per version. `contentHash` covers
+the template text, so editing a template changes the hash;
+`tests/prompts.test.ts` compares every `{ id, version, contentHash }` with
+`tests/fixtures/prompts.snapshot.json` and fails with "template changed; bump
+version". A change ships as a new version file and a new registry entry; old
+versions stay importable for replay and evaluation.
+
+What provenance proves: that the backend *claimed*, at pin time and under the
+agent's commitment, that this provider, model and prompt version produced the
+output whose hash is `outputSha256`. What it does not prove: that the model
+really produced it. Nothing is signed by the provider, and the raw prompt and
+output are not published (they contain third-party text), so a reader can check
+a copy of the output against `outputSha256` but cannot reproduce the call.
+Provider error messages are never recorded, only a bounded `errorClass`.
+
 ### End-to-end x402 test (#64)
 
 The paid product relies on one invariant: the bytes `pinJson` pins are the
@@ -256,6 +284,171 @@ falls back to a plain-text Gemini call (never a JSON one). Tests replace the
 providers through `setAnthropicClient()` / `setGeminiModelFactory()` and replay the
 shapes in `tests/fixtures/llm/` (hand-built examples of the API shapes, not
 captures from a live account).
+
+## Semantic duplicate detection (#69)
+
+The lexical check (token Jaccard > 0.55 or 3+ shared bigrams) misses
+paraphrases and flags unrelated questions that share boilerplate. With
+`EMBEDDING_PROVIDER=gemini|openai` the market maker compares embeddings in
+pgvector instead; with `none` (the default) nothing changes.
+
+**Storage.** `markets.questionEmbedding vector(768)` and `embeddingModel`, added
+by migration `…_market_embeddings` (`CREATE EXTENSION vector`). Prisma cannot read
+or write `Unsupported` columns, so every access is `$queryRaw` / `$executeRaw`
+with the vector bound as `$n::vector` (a `'[0.1,…]'` string), never interpolated.
+The index is `markets_question_embedding_hnsw`, HNSW with `vector_cosine_ops`,
+**partial** on `status IN ('PENDING','ACTIVE')`: pgvector filters after the index
+scan, so a full index would fill its 40-candidate list with old resolved markets
+and hide a near duplicate. The dedup query repeats the predicate, which is what
+lets the planner use it; at a few hundred rows the planner correctly prefers an
+exact scan and sort, which has perfect recall. The index is not in
+`schema.prisma`: `prisma migrate dev` must not be allowed to drop it (check with
+`prisma migrate diff` before accepting a generated migration). The dimension is
+fixed at 768 (Gemini `text-embedding-004`; OpenAI `text-embedding-3-small` with
+`dimensions: 768`); `EMBEDDING_DIM` must equal it, a provider with another size
+is rejected, and a mismatch stops the server at boot.
+
+**Embedding.** `normalizeQuestion()` lowercases, collapses dates to `<date>` (the
+second stage compares dates itself), writes numbers as plain digits (`$70,000`,
+`70k` → `70000`), strips punctuation and caps the text at 512 characters. A new
+market is embedded fire-and-forget after `createMarketFromProposal`; the
+ingestion cron then sweeps `questionEmbedding IS NULL` rows (one batch of 32 per
+tick), and `npm run backfill:embeddings [-- --reembed]` embeds everything else.
+Vectors from two models are never compared: the query filters on
+`embeddingModel`, so after changing `EMBEDDING_MODEL` run
+`backfill:embeddings -- --reembed`.
+
+**Decision** (`checkDuplicate` in `market.service.ts`, returns
+`{ duplicate, method, match? }`, logged to AgentLog as `DEDUP_CHECK` /
+`DUPLICATE_SKIPPED`):
+
+1. *Candidates*: the 10 nearest PENDING/ACTIVE neighbours by cosine similarity;
+   those at or above `DEDUP_SIM_THRESHOLD` continue.
+2. *Confirmation* (`confirmDuplicate`, pure), in order: (a) the resolution dates
+   are within `DEDUP_DATE_WINDOW_DAYS` (default 3), both the expiries and any
+   date written in both questions; (b) the questions do not each state a figure
+   the other lacks (`$70,000` vs `$90,000` are two rungs of a ladder); (c) they
+   share an entity from the rule-based extractor (`dedup-entities.ts`: a gazetteer
+   of central banks, assets, indicators, countries and sources, plus proper
+   nouns) and neither adds an entity the other lacks (Lakers vs Celtics).
+   Similarity ≥ 0.95 skips (c) only, never the date or figure checks.
+3. *Fallback*: markets the vector search cannot see (no embedding yet, or from
+   another model) are compared lexically so nothing is skipped silently. With no
+   provider, or if embedding or the query throws, the lexical check runs and the
+   result says `method: "lexical"`; the cycle is never blocked.
+
+**Calibrating the threshold.** `tests/fixtures/dedup-pairs.json` holds 158 labelled
+pairs (44 paraphrases and 16 formatting variants that are duplicates; different
+date, different entity, boilerplate collision, different strike and unrelated
+pairs that are not). `npm run calibrate:dedup` embeds them, sweeps thresholds
+0.50–0.99 and reports precision, recall and F1 for semantic only, semantic +
+confirmation, and the lexical rule, and recommends the threshold with the highest
+recall at precision ≥ 0.95. `--provider gemini|openai --record` writes the
+vectors to `tests/fixtures/dedup-vectors.<model>.json`, and `--vectors <file>`
+replays them without a key.
+
+The committed run uses `--provider fake`, a deterministic hashing embedder with
+a small synonym map. It validates the harness and the confirmation stage, **not**
+a model: on it the lexical rule scores precision 17.9 % / recall 28.3 %
+(boilerplate makes it flag unrelated questions), and semantic + confirmation
+scores precision 100 % at t = 0.90 with recall 26.7 % because the fake vectors do
+not place paraphrases close together. `DEDUP_SIM_THRESHOLD=0.85` is therefore a
+provisional default; run the calibration with the real provider and replace it
+before enabling `EMBEDDING_PROVIDER` in production.
+
+**Infrastructure.** pgvector is needed by the migration: `docker-compose.yml`, CI
+and the integration containers use `pgvector/pgvector:pg16` (Debian, glibc; the
+old `postgres:16-alpine` is musl, so recreate an existing dev volume or `REINDEX`
+text indexes before switching). Managed Postgres needs `CREATE EXTENSION vector`.
+
+## Calibration (#68)
+
+`src/services/calibration.service.ts` answers whether agent probabilities are
+calibrated. Postgres does the heavy lifting in one query
+(`reasoning_traces JOIN markets` for `RESOLVED` markets with an outcome and an
+`onChainMarketId`, traces strictly before `resolvedAt`); TypeScript weights,
+slices and scores the rows with pure functions (`brier`, `logLoss`,
+`reliability`, `murphy`, `fitShrinkage`). Metric definitions, the weighting
+policy and the exclusions are in `docs/api.md` ("Agent calibration").
+
+- **Snapshots.** `computeAndStoreSnapshots()` stores every
+  window (`30d`, `90d`, `all`) × grouping × key in `calibration_snapshots`
+  (append-only; the API serves the newest `computedAt`). A cron at 03:10 runs it
+  inside a transaction holding `pg_try_advisory_xact_lock`, so only one
+  instance computes.
+- **Index.** `reasoning_traces (marketId, createdAt)` serves the join. Postgres
+  uses it for selective windows (a nested loop of one index range scan per
+  market: 7 ms for 334 markets / 3 340 traces in a test database) and prefers a
+  sequential scan when most markets match (`all`, 55 ms for 200 000 traces).
+- **Trader shrinkage** (`CALIBRATION_SHRINKAGE_ENABLED`, default off). Before
+  sizing, the trader moves its estimate to `0.5 + k (p − 0.5)` with `k` from the
+  latest `all`-window `(TRADER, category)` snapshot, then `(TRADER)`, then 1,
+  only when at least 50 resolved markets back the fit; `k` is bounded to
+  `[0.3, 1]`, so it can only shrink. The factor is recorded in the trace as a
+  `CALIBRATION` entry in `sourcesUsed`.
+- **Limits.** Few resolved markets give noisy numbers: read the Wilson
+  intervals and `nEff`. Calibration says nothing about the trader's *edge* while
+  its probability still equals the market price (`rawValue: marketProb`), and
+  `MARKET_CREATION` has no meaningful market baseline.
+
+## Evaluating market generation (#67)
+
+`npm run eval:markets` measures whether a prompt, model or schema change makes
+proposals better or worse. It is offline: the corpus pins the inputs and
+recordings pin the model's answers, so a run is deterministic and needs no
+keys, database or network.
+
+- **Corpus** (`tests/eval/corpus/<id>.json`, 44 cases): an `asOf` date, the
+  signals (titles and short snippets only, as the prompt truncates them), the
+  fixed list of existing questions used for dedup, and the human `labels`
+  (`category`, `expectDuplicateOf`, `notes`). The committed cases are synthetic,
+  including adversarial ones (past-dated signals, ambiguous events, a sports
+  story with no fixture date, a paraphrase of an existing market, an injected
+  headline). Add real ones from `SignalCache` after stripping keys and PII.
+- **Prompts** are built by `buildMarketPrompts(signals, existing, now, { nonceSeed })`,
+  a pure function: no Prisma, no clock. The runner passes `now = asOf` and a
+  nonce seed derived from the case id, so the prompt is a pure function of the
+  case. `isDuplicateOf(question, existing)` is the pure form of the lexical dedup.
+- **Transport**: `setLlmTransport()` (`src/lib/llm.ts`). Replay reads
+  `tests/eval/recordings/<model>/<id>.json` (and `<id>.judge.json`), each
+  keyed by `sha256(system + user)`. A prompt change changes the key, so replay
+  fails with `recording missing … re-run with --live --record` instead of
+  grading stale output. `--live` uses the real providers; `--record` writes the
+  recordings after refusing any key-looking string.
+- **Graders** (`scripts/eval/graders.ts`), each `{ pass, score, detail }`:
+
+  | Grader | Rule | Judge |
+  |---|---|---|
+  | `schemaValid` | `validateMarketQuestion` parses it | – |
+  | `binary` | one yes/no question; no "or", "how many", "which", bucket ranges | `binary` |
+  | `resolutionSource` | `resolution_oracle` is in `ALLOWED_ORACLES` | `verifiable` |
+  | `dateSanity` | `asOf + 1 d ≤ expiry ≤ asOf + 90 d`, and within 2 days of the latest date written in the question | – |
+  | `category` | equals the label (unlabelled cases are skipped) | – |
+  | `duplicateAccuracy` | `isDuplicateOf` agrees with `expectDuplicateOf` | – |
+  | `ciConsistency` | `lower < p < upper`, width ≤ 0.4 | – |
+
+  A parse failure fails every grader for that case, so a bad prompt cannot hide
+  behind a smaller denominator. The judge (`scripts/eval/judge-prompt.v1.ts`,
+  id, version and hash recorded in each report) can fail a case but never
+  rescues a hard rule failure; rule/judge disagreements are listed separately.
+- **Thresholds** (`tests/eval/thresholds.json`) are minimum pass rates per
+  grader. The report shows counts and Wilson 95 % intervals next to each rate:
+  with 44 cases a difference of a few points is noise. Exit codes: 0 ok, 1 a
+  threshold regressed, 2 the run failed (for example a missing recording).
+- **Reports**: `eval-results/<mode>-<model>.json` and `.md` (prompt and corpus
+  hashes, git sha, per-grader and per-category rates, the worst 10 cases).
+
+CI runs `npm run eval:markets -- --replay` after `npm test`.
+
+**Add a case**: write `tests/eval/corpus/<id>.json`, run it live once
+(`ANTHROPIC_API_KEY=… npm run eval:markets -- --live --record --model <name> --case <id>`)
+and commit the corpus file and the two recordings. **After a prompt change**:
+re-record the whole set the same way (without `--case`), review the diff, and
+commit; only then adjust `thresholds.json`.
+
+The `synthetic-baseline` recordings shipped with the harness are hand-written
+(`scripts/eval/seed-synthetic.ts`), not captures of a live model, and their
+thresholds only guard the graders; the first live run should replace them.
 
 ## Prompt-injection defences (#70)
 

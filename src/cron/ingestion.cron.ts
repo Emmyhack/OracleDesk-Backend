@@ -1,5 +1,6 @@
 import cron from 'node-cron';
 import { runMarketMakerCycle } from '../agents/market-maker.agent';
+import { backfillEmbeddings } from '../services/embeddings.service';
 import { logger } from '../lib/logger';
 import { newId, runWithContext } from '../lib/context';
 import { recordCronRun } from './registry';
@@ -30,6 +31,10 @@ export function startIngestionCron(): void {
       const startedAt = new Date();
       try {
         await runMarketMakerCycle();
+        // Retry sweep (#69): embed markets whose vector is still NULL (a failed
+        // fire-and-forget, or created before an embedding provider was set up).
+        await backfillEmbeddings(32, { maxBatches: 1 }).catch((err) =>
+          logger.warn({ err: (err as Error)?.message?.slice(0, 200) }, 'Ingestion cron: embedding sweep failed'));
         recordCronRun('ingestion', 'success', startedAt, new Date());
       } catch (err) {
         recordCronRun('ingestion', 'failure', startedAt, new Date(), err);

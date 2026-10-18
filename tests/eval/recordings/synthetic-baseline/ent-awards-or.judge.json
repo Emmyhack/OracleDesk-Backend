@@ -1,0 +1,8 @@
+{
+  "caseId": "ent-awards-or",
+  "kind": "judge",
+  "promptKey": "b59ce8986a5dd7bf0617029782fb5d87c1abfcffe1ad071cc947d1f32e0212f0",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":0,\"verifiable\":1,\"ambiguity_notes\":\"Two-way choice and beyond 90 days.\"}"
+}

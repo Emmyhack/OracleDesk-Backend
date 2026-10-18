@@ -1,0 +1,34 @@
+{
+  "id": "sports-nba-finals",
+  "asOf": "2026-05-28T12:00:00Z",
+  "signals": {
+    "news": [
+      {
+        "source": "NEWSAPI",
+        "title": "Lakers face Celtics in NBA Finals Game 1",
+        "content": "Game 1 is Thursday, June 4.",
+        "publishedAt": "2026-05-28T11:55:00.000Z",
+        "relevanceScore": 0.7,
+        "category": "SPORTS"
+      }
+    ],
+    "fed": [],
+    "macro": [],
+    "signalCount": 1
+  },
+  "existing": [
+    {
+      "question": "Will the Lakers win the 2026 NBA championship?",
+      "category": "SPORTS"
+    },
+    {
+      "question": "Will Bitcoin trade above $100,000 before year end?",
+      "category": "CRYPTO"
+    }
+  ],
+  "labels": {
+    "category": "SPORTS",
+    "expectDuplicateOf": null,
+    "notes": "Good case."
+  }
+}

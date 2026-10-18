@@ -1,0 +1,8 @@
+{
+  "caseId": "politics-ambiguous",
+  "kind": "proposal",
+  "promptKey": "a9f45f8c1f6bc3684794ab47a182b7d3c3604421fd9857ef0f1d4ba3093706e7",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will the tax package be good for the economy?\",\"initial_yes_probability\":0.5,\"resolution_oracle\":\"POLITICO\",\"expiry_timestamp\":1793361600,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"POLITICS\",\"confidence_interval\":{\"lower\":0.4,\"upper\":0.6},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"n1\"]}"
+}

@@ -1,0 +1,8 @@
+{
+  "caseId": "ecb-wrong-category",
+  "kind": "proposal",
+  "promptKey": "615e67f0ea1408663f896acf8b4c1992f41f2c847f2f3db8054d9ee2848d3085",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will the European Central Bank change its deposit facility rate at its December 10, 2026 meeting?\",\"initial_yes_probability\":0.4,\"resolution_oracle\":\"ECB\",\"expiry_timestamp\":1796904000,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"MACRO\",\"confidence_interval\":{\"lower\":0.3,\"upper\":0.5},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"n1\"]}"
+}

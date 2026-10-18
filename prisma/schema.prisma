@@ -183,6 +183,13 @@ model Market {
   resolutionHash     String?
   /// Revealed preimage of resolutionHash, kept so it can be registered with the resolver.
   resolutionSpec     Json?
+  /// LlmProvenance of the call that proposed this market (#66). Null for older rows.
+  generationProvenance Json?
+  /// Embedding of the normalised question (#69), vector(768). Read and written with raw SQL only.
+  /// The HNSW index markets_question_embedding_hnsw lives in the migration, not here.
+  questionEmbedding  Unsupported("vector(768)")?
+  /// Model that produced questionEmbedding; vectors are compared only within one model.
+  embeddingModel     String?
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
 
@@ -293,6 +300,8 @@ model ReasoningTrace {
   betFraction         Float?
   betSizeUsdc         Float?
   hedgeConditions     Json?             // string[]
+  /// TraceProvenance embedded in the pinned payload (#66). Null for older traces.
+  provenance          Json?
   agentWallet         String?
   signature           String?
   ipfsCid             String?
@@ -324,7 +333,24 @@ model ReasoningTrace {
   @@index([verified])
   @@index([traceHash])
   @@index([createdAt])
+  @@index([marketId, createdAt])
   @@map("reasoning_traces")
+}
+
+/// Daily calibration metrics per slice (#68). Append-only; the API serves the latest computedAt.
+model CalibrationSnapshot {
+  id         String   @id @default(uuid())
+  computedAt DateTime @default(now()) @db.Timestamptz(3)
+  /// '30d' | '90d' | 'all'
+  window     String
+  /// 'agentType' | 'category' | 'decisionType' | 'promptVersion' | 'model' | 'agentType_category'
+  groupBy    String
+  groupKey   String
+  /// brier, logLoss, baseline, buckets, murphy, nMarkets, nTraces, nEff, shrinkageK
+  metrics    Json
+
+  @@index([window, groupBy, computedAt])
+  @@map("calibration_snapshots")
 }
 
 /// A subscriber copying an agent's trade

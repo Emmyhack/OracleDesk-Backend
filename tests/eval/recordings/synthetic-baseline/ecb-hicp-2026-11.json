@@ -1,0 +1,8 @@
+{
+  "caseId": "ecb-hicp-2026-11",
+  "kind": "proposal",
+  "promptKey": "8224b839e52a7367236c85a3a4df003159c1b004cb6202fda7b2fc412af6e329",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will euro area annual HICP inflation for October 2026 be reported above 2.0%?\",\"initial_yes_probability\":0.58,\"resolution_oracle\":\"ECB\",\"expiry_timestamp\":1793707200,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"ECB\",\"confidence_interval\":{\"lower\":0.48,\"upper\":0.68},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"m1\"]}"
+}

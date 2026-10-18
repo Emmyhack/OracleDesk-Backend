@@ -1,0 +1,8 @@
+{
+  "caseId": "election-turnout",
+  "kind": "judge",
+  "promptKey": "9280dca031d099abf2e72b06170e710f7d81fdbf1d7d90b926e749993d4eba31",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":0,\"ambiguity_notes\":\"No named metric, state, or baseline year.\"}"
+}

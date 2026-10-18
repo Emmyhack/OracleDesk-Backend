@@ -1,0 +1,8 @@
+{
+  "caseId": "ent-rt-score",
+  "kind": "judge",
+  "promptKey": "f2840d20e4e964a5b49029045330d2ca218383274d7d915c495d43f58dd187ac",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":1,\"ambiguity_notes\":\"Synthetic judge verdict.\"}"
+}

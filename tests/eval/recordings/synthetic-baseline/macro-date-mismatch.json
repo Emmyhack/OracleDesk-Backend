@@ -1,0 +1,8 @@
+{
+  "caseId": "macro-date-mismatch",
+  "kind": "proposal",
+  "promptKey": "06fc8bfb31a1a33dd4e705fdc2f75f9f248e42b510e4187039efe75c22b1470a",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will US core CPI rise more than 0.3% month over month in the report published on October 14, 2026?\",\"initial_yes_probability\":0.4,\"resolution_oracle\":\"BLS\",\"expiry_timestamp\":1794657600,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"MACRO\",\"confidence_interval\":{\"lower\":0.3,\"upper\":0.5},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"f1\"]}"
+}

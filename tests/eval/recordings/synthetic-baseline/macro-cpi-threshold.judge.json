@@ -1,0 +1,8 @@
+{
+  "caseId": "macro-cpi-threshold",
+  "kind": "judge",
+  "promptKey": "dac9e4536aef771945822214ba6f3a27db74e38a34f1b1c6aec02333d722866f",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":1,\"ambiguity_notes\":\"Synthetic judge verdict.\"}"
+}

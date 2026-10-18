@@ -1,0 +1,8 @@
+{
+  "caseId": "election-unknown-oracle",
+  "kind": "proposal",
+  "promptKey": "6b30f1e0326fe95aa55c85e34d4264c5efac87b3a98ff750d70229e4b13bb3f6",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will the Democratic candidate win the Georgia governor race on November 3, 2026?\",\"initial_yes_probability\":0.46,\"resolution_oracle\":\"Bloomberg\",\"expiry_timestamp\":1793707200,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"ELECTION\",\"confidence_interval\":{\"lower\":0.36,\"upper\":0.56},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"n1\"]}"
+}

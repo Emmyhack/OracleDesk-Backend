@@ -1,0 +1,8 @@
+{
+  "caseId": "crypto-eth-etf",
+  "kind": "proposal",
+  "promptKey": "c727e2b612534e9cb89e79ace28edf180c6c75a7959e7cbcba37b87eb3a7b022",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will the SEC approve staking within spot ether ETFs by October 24, 2026?\",\"initial_yes_probability\":0.35,\"resolution_oracle\":\"NEWSAPI\",\"expiry_timestamp\":1792843200,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"CRYPTO\",\"confidence_interval\":{\"lower\":0.25,\"upper\":0.45},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"n1\"]}"
+}

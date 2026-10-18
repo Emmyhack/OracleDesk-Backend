@@ -1,0 +1,8 @@
+{
+  "caseId": "ecb-cut-2026-12",
+  "kind": "proposal",
+  "promptKey": "4a3ad9bd8e3e91bba8e5cf0d1245aea4e74335632befe6b7e4f39d38e6cf692d",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will the European Central Bank cut its deposit facility rate at its December 10, 2026 meeting?\",\"initial_yes_probability\":0.42,\"resolution_oracle\":\"ECB\",\"expiry_timestamp\":1796904000,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"ECB\",\"confidence_interval\":{\"lower\":0.32,\"upper\":0.52},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"n1\"]}"
+}

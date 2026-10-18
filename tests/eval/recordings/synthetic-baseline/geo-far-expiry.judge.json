@@ -1,0 +1,8 @@
+{
+  "caseId": "geo-far-expiry",
+  "kind": "judge",
+  "promptKey": "9e082b963822791d5fa22101f6e56aca756c6fba3d206fb1ce9f62651f1eda71",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":1,\"ambiguity_notes\":\"Synthetic judge verdict.\"}"
+}

@@ -1,0 +1,8 @@
+{
+  "caseId": "sports-wrong-category",
+  "kind": "judge",
+  "promptKey": "dc93a8dbdf8057097e2f78fb7d60441b848353440ddb008e8a8ebd773892354c",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":1,\"ambiguity_notes\":\"Synthetic judge verdict.\"}"
+}
