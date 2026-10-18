@@ -1,0 +1,8 @@
+{
+  "caseId": "macro-unemployment",
+  "kind": "proposal",
+  "promptKey": "6ce396367329d1ed8509d092b06ec55cb9d341e2d441234d6bfb00004374d7b7",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will the US unemployment rate for October 2026 be reported at or above 4.3%?\",\"initial_yes_probability\":0.4,\"resolution_oracle\":\"BLS\",\"expiry_timestamp\":1793966400,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"MACRO\",\"confidence_interval\":{\"lower\":0.3,\"upper\":0.5},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"f1\"]}"
+}

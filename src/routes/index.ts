@@ -7,6 +7,7 @@ import tradeRoutes     from './trade.routes';
 import oracleRoutes    from './oracle.routes';
 import adminRoutes     from './admin.routes';
 import reportRoutes    from './reports.routes';
+import agentsRoutes    from './agents.routes';
 
 const router = Router();
 
@@ -18,5 +19,6 @@ router.use('/trade',     tradeRoutes);
 router.use('/oracle',    oracleRoutes);
 router.use('/admin',     adminRoutes);
 router.use('/reports',   reportRoutes);
+router.use('/agents',    agentsRoutes);
 
 export default router;

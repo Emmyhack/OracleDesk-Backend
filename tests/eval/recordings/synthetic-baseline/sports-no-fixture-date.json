@@ -1,0 +1,8 @@
+{
+  "caseId": "sports-no-fixture-date",
+  "kind": "proposal",
+  "promptKey": "90be2f926f0df0948476996636ecfcccc8913e3c663da7697f8a4cc7ef82632e",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will the striker complete a transfer to Real Madrid?\",\"initial_yes_probability\":0.4,\"resolution_oracle\":\"BBC_SPORT\",\"expiry_timestamp\":1784116800,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"SPORTS\",\"confidence_interval\":{\"lower\":0.3,\"upper\":0.5},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"n1\"]}"
+}

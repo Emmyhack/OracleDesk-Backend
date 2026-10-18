@@ -1,0 +1,8 @@
+{
+  "caseId": "sports-nba-finals",
+  "kind": "judge",
+  "promptKey": "7756d59feab911ad3c9f4df3b6aff020d4242b2e84b04cf7485f46b6ba94a931",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":1,\"ambiguity_notes\":\"Synthetic judge verdict.\"}"
+}

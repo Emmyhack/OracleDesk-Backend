@@ -1,0 +1,8 @@
+{
+  "caseId": "ent-billboard",
+  "kind": "judge",
+  "promptKey": "b7a05c409efe9fd634f6240a038f9f8806421a75072e925473c2d4ae799a8b52",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":1,\"ambiguity_notes\":\"Synthetic judge verdict.\"}"
+}

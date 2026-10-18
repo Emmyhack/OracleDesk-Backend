@@ -13,10 +13,8 @@ import { logger } from '../lib/logger';
 import { config } from '../config';
 import { deadline } from '../lib/resilience';
 import { shutdownController } from '../lib/shutdown';
-
-const BANKROLL = 10_000;  // $10,000 USDC starting bankroll
-const MIN_MARKET_LIQUIDITY = 500;
-const MIN_EDGE = 0.08;
+import { prodTraderEnv } from './trader-env';
+import { DEFAULT_PARAMS, runTraderPolicy } from './trader-policy';
 
 /**
  * Trader Agent — main execution loop.
@@ -134,90 +132,5 @@ export async function runTraderCycle(opts?: { signal?: AbortSignal }): Promise<v
     await writeAgentLog({ agentType: 'TRADER', level: 'ERROR', action: 'CYCLE_FAILED', error: String(err) });
   } finally {
     handle.cleanup?.();
-  }
-}
-
-async function analyzeAndTradeMarket(market: any, signals: any, signal?: AbortSignal): Promise<void> {
-  try {
-    // Skip if we already have an open position in this market
-    const existingPosition = await prisma.position.findFirst({
-      where: { marketId: market.id, status: 'OPEN' },
-    });
-    if (existingPosition) return;
-
-    // Estimate probability using signal weighting
-    const marketProb = market.currentYesProb ?? market.initialYesProb;
-    const sourceSignals = signals.news.slice(0, 3).map((s: any) => ({
-      source:   s.source,
-      weight:   0.7,
-      signal:   s.title,
-      rawValue: marketProb,
-    }));
-
-    const { probability: agentProb, confidenceInterval } = calculateProbability(
-      sourceSignals,
-      marketProb,
-    );
-
-    // Compute edge
-    const edge = agentProb - marketProb;
-
-    // Guard: insufficient edge
-    if (Math.abs(edge) < MIN_EDGE) return;
-
-    // Kelly sizing — use conservative end of CI
-    const conservativeProb = edge > 0 ? confidenceInterval.lower : 1 - confidenceInterval.upper;
-    const kellyResult = calculateKellySize({
-      agentProbability:  Math.max(0.01, conservativeProb),
-      marketProbability: marketProb,
-      bankroll:          BANKROLL,
-      netOdds:           edge > 0 ? (1 - marketProb) / marketProb : marketProb / (1 - marketProb),
-    });
-
-    if (kellyResult.betSize <= 0) return;
-
-    // Correlation check — may reduce position size
-    const correlation = await checkCorrelation(market.id, kellyResult.betSize, BANKROLL);
-    const finalSize = correlation.adjustedPositionSize;
-
-    if (finalSize < 1) {
-      logger.debug({ marketId: market.id }, 'Position size too small after correlation adjustment — skipping');
-      return;
-    }
-
-    const direction = edge > 0 ? 'YES' : 'NO';
-    const price     = direction === 'YES' ? marketProb : 1 - marketProb;
-
-    signal?.throwIfAborted();
-
-    // Generate reasoning trace BEFORE executing
-    const { trace, tracePayload } = await generateReasoningTrace({
-      marketId:            market.id,
-      agentType:           'TRADER',
-      decisionType:        'OPEN_POSITION',
-      sourcesUsed:         sourceSignals,
-      probabilityEstimate: agentProb,
-      marketProbability:   marketProb,
-      edge,
-      confidenceInterval,
-      betFraction:         kellyResult.halfKelly,
-      betSizeUsdc:         finalSize,
-    });
-
-    // Execute trade (Never abort between chain write and DB update)
-    await executeTrade({
-      marketId:      market.id,
-      direction,
-      amount:        finalSize,
-      price,
-      kellyFraction: kellyResult.halfKelly,
-      edgeDetected:  edge,
-      traceId:       trace.id,
-      tracePayload,
-    });
-
-    logger.info({ marketId: market.id, direction, amount: finalSize, edge }, 'Trader Agent: trade executed');
-  } catch (err) {
-    logger.warn({ err, marketId: market.id }, 'Trader Agent: market analysis failed');
   }
 }

@@ -202,6 +202,7 @@ model Market {
   @@index([expiryTimestamp])
   @@index([settlementCurrency])
   @@index([resolvedAt])
+  @@index([lastReconciledAt])
   @@map("markets")
 }
 
@@ -374,6 +375,8 @@ model ReasoningTrace {
   betFraction         Float?
   betSizeUsdc         Float?
   hedgeConditions     Json?             // string[]
+  /// TraceProvenance embedded in the pinned payload (#66). Null for older traces.
+  provenance          Json?
   agentWallet         String?
   signature           String?
   ipfsCid             String?
@@ -405,7 +408,24 @@ model ReasoningTrace {
   @@index([verified])
   @@index([traceHash])
   @@index([createdAt])
+  @@index([marketId, createdAt])
   @@map("reasoning_traces")
+}
+
+/// Daily calibration metrics per slice (#68). Append-only; the API serves the latest computedAt.
+model CalibrationSnapshot {
+  id         String   @id @default(uuid())
+  computedAt DateTime @default(now()) @db.Timestamptz(3)
+  /// '30d' | '90d' | 'all'
+  window     String
+  /// 'agentType' | 'category' | 'decisionType' | 'promptVersion' | 'model' | 'agentType_category'
+  groupBy    String
+  groupKey   String
+  /// brier, logLoss, baseline, buckets, murphy, nMarkets, nTraces, nEff, shrinkageK
+  metrics    Json
+
+  @@index([window, groupBy, computedAt])
+  @@map("calibration_snapshots")
 }
 
 /// A subscriber copying an agent's trade
@@ -462,6 +482,8 @@ model Subscription {
   /// CHECK: subscriptions_tx_hash_format (txHash IS NULL OR 64 hex chars)
   txHash     String?            @unique
   expiresAt  DateTime?
+  /// Set when the PASS_EXPIRING socket event was claimed for this pass (#94).
+  expiryNotifiedAt DateTime?
   createdAt  DateTime           @default(now())
   updatedAt  DateTime           @updatedAt
 
@@ -527,11 +549,15 @@ model ChainEvent {
   txHash         String
   /// Decoded event params (bigints as strings).
   params         Json
+  /// True once the event reached the event bus (or has nothing to publish).
+  /// Rows stored before the bus existed are true.
+  published      Boolean  @default(false)
   createdAt      DateTime @default(now())
 
   @@index([contractName, eventName])
   @@index([ledger])
   @@index([txHash])
+  @@index([published, ledger])
   @@map("chain_events")
 }
 
@@ -774,4 +800,51 @@ model IdempotencyKey {
   @@unique([scope, method, route, key])
   @@index([expiresAt])
   @@map("idempotency_keys")
+}
+
+
+/// Empirical pairwise market correlations, recomputed on a schedule (#80).
+model CorrelationSnapshot {
+  id           String   @id @default(uuid())
+  computedAt   DateTime @default(now()) @db.Timestamptz(3)
+  gridStepSecs Int
+  windowDays   Int
+  /// [{ a, b, rho, n, method: 'empirical'|'prior', sample, prior, delta }], backend market ids with a < b.
+  pairs        Json
+
+  @@index([computedAt])
+  @@map("correlation_snapshots")
+}
+
+/// One drift finding from the market lifecycle reconciler (#83).
+model MarketDriftReport {
+  id              String   @id @default(uuid())
+  runId           String
+  marketId        String
+  onChainMarketId BigInt
+  driftClass      String
+  dbValue         Json
+  chainValue      Json
+  /// REPAIRED | REPORTED | DEFERRED | SKIPPED_NEWER
+  action          String
+  observedLedger  Int
+  createdAt       DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([runId])
+  @@index([driftClass, createdAt])
+  @@map("market_drift_reports")
+}
+
+model ReconcileRun {
+  id         String    @id @default(uuid())
+  startedAt  DateTime  @default(now()) @db.Timestamptz(3)
+  finishedAt DateTime?           @db.Timestamptz(3)
+  scanned    Int       @default(0)
+  repaired   Int       @default(0)
+  reported   Int       @default(0)
+  deferred   Int       @default(0)
+  rpcCalls   Int       @default(0)
+  error      String?
+
+  @@map("reconcile_runs")
 }

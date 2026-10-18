@@ -1,0 +1,8 @@
+{
+  "caseId": "fed-or-multi",
+  "kind": "proposal",
+  "promptKey": "1c84929258702319830e47f2893ecf2cbf95823fb897cd4913f1c612ddcf0609",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will the Federal Reserve hold or cut rates at its September 17, 2026 meeting?\",\"initial_yes_probability\":0.9,\"resolution_oracle\":\"FRED\",\"expiry_timestamp\":1789646400,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"FED\",\"confidence_interval\":{\"lower\":0.8,\"upper\":0.95},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"f1\"]}"
+}

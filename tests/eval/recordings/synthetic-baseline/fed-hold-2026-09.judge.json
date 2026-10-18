@@ -1,0 +1,8 @@
+{
+  "caseId": "fed-hold-2026-09",
+  "kind": "judge",
+  "promptKey": "2a74edc268dbf0c00f5051bb903bd8708eb6a3cdd767f9b11bc58616712b089a",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":1,\"ambiguity_notes\":\"Synthetic judge verdict.\"}"
+}

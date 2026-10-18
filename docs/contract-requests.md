@@ -85,3 +85,14 @@ The backend publishes traces with `create_market`, `buy_yes` and `buy_no`
 (`src/lib/trace-actions.ts`). The contracts repo's TypeScript agents use
 `create_market` and `buy`. Consumers that group traces by action should treat
 `buy` as either direction, or the two sides should agree on one vocabulary.
+
+## Note: traces now carry a `provenance` block (backend #66)
+
+Pinned trace documents gained a top-level `provenance` object
+(`oracledesk.trace.provenance/1`, see `docs/api.md` in the backend). The
+x402 service serves the pinned bytes untouched, so its consumers receive the
+block as part of `content`. They should tolerate unknown keys in the trace
+document and treat `provenance` as optional: traces pinned earlier do not have
+it. `agents/core/trace.ts` `canonicalize` needs no change; the block holds only
+strings, numbers, booleans, `null` and plain objects. The former
+`llm: { provider, model }` key is gone.

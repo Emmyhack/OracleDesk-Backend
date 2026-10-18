@@ -1,0 +1,8 @@
+{
+  "caseId": "crypto-ci-outside",
+  "kind": "proposal",
+  "promptKey": "bc32b2c9e1213c4a4a63eb1642ecdc732bd4891ba311294c3dd4af95112b7ced",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will the Solana network upgrade activate on mainnet by October 20, 2026?\",\"initial_yes_probability\":0.85,\"resolution_oracle\":\"NEWSAPI\",\"expiry_timestamp\":1792497600,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"CRYPTO\",\"confidence_interval\":{\"lower\":0.55,\"upper\":0.8},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"n1\"]}"
+}

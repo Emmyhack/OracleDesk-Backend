@@ -18,6 +18,7 @@
     "prisma:studio": "prisma studio",
     "sync:contracts": "node scripts/sync-contracts.mjs",
     "check:contracts": "node scripts/sync-contracts.mjs --check",
+    "backtest": "node -r ts-node/register/transpile-only scripts/backtest.ts",
     "verify:report": "node -r ts-node/register/transpile-only scripts/verify-report.ts",
     "lint:migrations": "bash scripts/lint-migrations.sh",
     "db:seed": "tsx prisma/seed.ts",
@@ -32,6 +33,7 @@
     "@anthropic-ai/sdk": "~0.96.0",
     "@google/generative-ai": "~0.24.1",
     "@prisma/client": "~6.19.3",
+    "@socket.io/redis-streams-adapter": "0.3.1",
     "@stellar/stellar-sdk": "^16.3.1",
     "axios": "~1.16.1",
     "bcrypt": "~6.0.0",
@@ -74,9 +76,10 @@
     "@types/uuid": "~10.0.0",
     "nodemon": "~3.1.14",
     "pg": "^8.23.1",
+    "socket.io-client": "4.8.3",
     "testcontainers": "^12.2.1",
     "ts-node-dev": "~2.0.0",
-    "typescript": "~6.0.3",
-    "tsx": "^4.23.15"
+    "tsx": "^4.23.15",
+    "typescript": "~6.0.3"
   }
 }

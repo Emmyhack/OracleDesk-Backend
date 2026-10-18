@@ -1,0 +1,8 @@
+{
+  "caseId": "politics-shutdown",
+  "kind": "proposal",
+  "promptKey": "06b9ec6a100b74335688c41c4ec5f589fe18728f8b066dccef73daf632e69ff1",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will a federal government shutdown begin on or before October 1, 2026?\",\"initial_yes_probability\":0.4,\"resolution_oracle\":\"AP_POLITICS\",\"expiry_timestamp\":1790856000,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"POLITICS\",\"confidence_interval\":{\"lower\":0.3,\"upper\":0.5},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"n1\"]}"
+}

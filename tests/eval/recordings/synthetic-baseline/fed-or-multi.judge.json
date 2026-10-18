@@ -1,0 +1,8 @@
+{
+  "caseId": "fed-or-multi",
+  "kind": "judge",
+  "promptKey": "f6f622e2dec4190aeefc8d4aebddd658c24205729dbf9a46a9f3d1fd744101d3",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":0,\"verifiable\":1,\"ambiguity_notes\":\"Two outcomes are bundled.\"}"
+}

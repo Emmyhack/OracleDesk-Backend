@@ -224,6 +224,7 @@ Threshold-based SEP-10 verification is a backlog item.
   "confidenceInterval": { "lower": 0.55, "upper": 0.7 },
   "totalLiquidity": 150,
   "seedAmountRaw": "1500000000",
+  "seedPolicy": { "seedRaw": "1500000000", "initialYesBps": 6200, "pAdj": 0.62, "expectedLpLossRaw": "180000000", "binding": "LP_LOSS_BUDGET", "inputs": { "…": "…" } },
   "expiryTimestamp": "2026-11-01T00:00:00.000Z",
   "onChainMarketId": "0",
   "creationTxHash": "a1b2…",
@@ -241,6 +242,30 @@ Threshold-based SEP-10 verification is a backlog item.
 from market-core; the frontend reads them directly with
 `get_market(onChainMarketId)`. `currentYesProb` and `totalLiquidity` are the
 backend's cached display values and can lag the chain.
+
+**Seed and opening price (#82).** `seedAmountRaw` is the treasury capital
+(7-decimal base units, decimal string) that `treasury.agent_create_market` put
+into the pool; the treasury is the market's LP. It is not the LLM's
+`minimum_liquidity_usdc` any more: that number is advisory, and the seed policy
+(`seed-policy.service.ts`) derives the seed from the category, time to close,
+the confidence interval and the treasury's headroom, then records how in
+`seedPolicy` (`null` for markets created before the policy or by admin tooling):
+`seedRaw`, `initialYesBps`, `pAdj`, the `expectedLpLossRaw` (what an informed
+trader who pushes the price to the farthest edge of the confidence interval
+would cost the LP), the `binding` bound (`BASE`, `MAX_TRADE`, `MAX_MARKET`,
+`MM_DAILY_SHARE`, `DAILY_HEADROOM`, `AVAILABLE_FRACTION`, `AGGREGATE_CAP` or
+`LP_LOSS_BUDGET`) and every input and bound.
+
+`initialYesProb` is the price the market **opened at**, not the model's raw
+estimate: the estimate is shrunk toward 0.5 in proportion to the width of its
+confidence interval, `pAdj = 0.5 + (p − 0.5)(1 − w·0.5)` with
+`w = clamp(width / 0.6, 0, 1)`, so uncertain proposals do not open at confident
+prices. It equals `initial_yes_bps / 10000` on chain, and it is what the
+pinned question document and the creation trace's `marketProbability` carry. The
+model's own estimate stays in the creation trace as `probabilityEstimate`.
+When the treasury budget does not allow at least the on-chain minimum seed
+(100 USDC), no market is created at all: nothing is written to the database or
+pinned to IPFS, and the market maker logs `SEED_SKIPPED` with the reason.
 
 `resolutionSpec` is the revealed preimage of `resolutionHash` (ADR 0001).
 Publishing it doesn't weaken the commitment: the hash was fixed on-chain
@@ -392,6 +417,61 @@ backend's last check against reasoning-registry. The frontend must still run
 its own check before rendering content (see `docs/frontend-integration.md` in
 the contracts repo).
 
+#### Provenance (`oracledesk.trace.provenance/1`)
+
+Every trace pinned after #66 carries a `provenance` block, both in the pinned
+document (so it is part of the bytes `traceHash` commits to) and in the
+`ReasoningTrace.provenance` column. `Market.generationProvenance` holds the
+entry for the call that proposed the market.
+
+```json
+{
+  "schema": "oracledesk.trace.provenance/1",
+  "llm": [
+    {
+      "source": "llm",
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-6",
+      "promptId": "market-proposal",
+      "promptVersion": 1,
+      "promptHash": "64-hex",
+      "params": { "temperature": 0.2, "maxTokens": 4096 },
+      "usage": { "inputTokens": 1412, "outputTokens": 231 },
+      "latencyMs": 2310,
+      "attempts": 1,
+      "outputSha256": "64-hex"
+    },
+    { "source": "default", "promptId": "hedge-conditions", "promptVersion": 1, "reason": "LLM_FAILED" }
+  ],
+  "generator": { "service": "oracledesk-backend", "version": "1.0.0", "commit": "abc1234" }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `schema` | Version string of this block. Check it before reading the rest. |
+| `llm[]` | One entry per generation step, in order: the market proposal (creation traces only), then the hedge conditions. |
+| `source` | `llm`: a model produced the output. `default`: a hard-coded safe default was used (`reason` is `LLM_FAILED` or `LLM_BUDGET_EXCEEDED`); such an entry has no model fields. |
+| `provider`, `model` | Who answered. When Gemini served the call, `fallbackFrom` names the provider that failed first. |
+| `promptId`, `promptVersion`, `promptHash` | The registered prompt (`src/lib/prompts`). `promptHash = sha256(canonicalJson({ id, version, system, user }))` over the *template*, not the rendered text. `adhoc`/`0` marks a call that did not use the registry. |
+| `params` | Sampling temperature and the `max_tokens` the serving provider was finally given. |
+| `usage` | Tokens summed over the serving provider's requests; `null` when the SDK reported none. |
+| `latencyMs` | Wall time of the whole call, fallback and repair rounds included. Differs on every run. |
+| `attempts` | Provider requests made, repair rounds and Gemini 429 retries included. |
+| `fallbackFrom` | `{ provider, model, errorClass }`; `errorClass` is one of `validation`, `rate_limited`, `timeout`, `auth`, `circuit_open`, `budget`, `unavailable`, `server_error`, `error`. Provider messages are never recorded. |
+| `outputSha256` | sha256 of the raw model output (canonical JSON of the tool input for Anthropic, the response text for Gemini). Raw prompts and outputs are never stored. |
+| `generator` | The service and its `package.json` version; `commit` appears when `GIT_SHA` is set. |
+
+The block is optional: traces created before #66 have none, and consumers must
+treat it as absent. Readers must also ignore unknown keys.
+
+`GET /traces/:id` returns the full block with access. Without access, and in
+`GET /traces`, `provenance` is reduced to
+`{ "summary": { "providers": ["anthropic"], "promptVersions": ["hedge-conditions@1", "market-proposal@1"], "source": "llm" | "default" | "mixed" } }`
+(`summary` is `null` for traces without provenance).
+
+The payload's former `llm: { provider, model }` field is replaced by this block.
+
 #### `GET /traces`
 
 Query: `agentType`, `marketId`, `page`, `limit`. Response: preview traces,
@@ -480,6 +560,84 @@ Unchanged. `PUT` body `{ dailyLimit: number, perTraceLimit: number, currency?: "
 
 The user's last 100 `PaymentEvent`s, newest first.
 
+### Agent calibration (#68)
+
+Are the agents' probabilities calibrated? When an agent says 70 %, does YES
+happen about 70 % of the time? A daily job joins resolved markets with the
+traces written before resolution and stores metrics per slice.
+
+#### `GET /agents/calibration` (public)
+
+Query (all optional): `window` (`30d`, `90d`, `all`; default `90d`),
+`groupBy` (`agentType`, `category`, `decisionType`, `promptVersion`, `model`,
+`agentType_category`; default `agentType`), `agentType` (`MARKET_MAKER` or
+`TRADER`) and `category`. The two filters only apply to the groupings that
+contain them (`agentType`, `category`, `agentType_category`); otherwise `400
+VALIDATION_ERROR`. The response carries `Cache-Control: public, max-age=300`.
+
+```json
+{
+  "window": "90d",
+  "groupBy": "agentType",
+  "computedAt": "2026-10-18T03:10:00.000Z",
+  "minCalibrationMarkets": 20,
+  "weighting": "time",
+  "slices": [
+    {
+      "groupKey": "TRADER",
+      "insufficientData": false,
+      "nMarkets": 61, "nTraces": 140, "nEff": 48.3,
+      "brier": 0.21, "logLoss": 0.61, "clipped": 0,
+      "buckets": [{ "lower": 0.6, "upper": 0.7, "count": 7.4, "nEff": 6.1, "meanPredicted": 0.64, "observed": 0.57, "wilson95": { "lower": 0.28, "upper": 0.82 } }],
+      "quantileBuckets": ["…"],
+      "murphy": { "reliability": 0.012, "resolution": 0.018, "uncertainty": 0.249 },
+      "baseline": { "brier": 0.23, "agentBrier": 0.21, "nTraces": 140, "meaningful": true, "note": "…" },
+      "shrinkageK": 0.84
+    },
+    { "groupKey": "MARKET_MAKER", "insufficientData": true, "nMarkets": 4, "nTraces": 4, "nEff": 4 }
+  ]
+}
+```
+
+`computedAt` is `null` and `slices` empty until the first snapshot exists.
+
+| Metric | Definition |
+|---|---|
+| `brier` | Weighted mean of `(p − o)²`, `o` = 1 for YES. Lower is better; 0.25 is "always say 50 %". |
+| `logLoss` | Weighted mean of `−ln(p_outcome)` with `p` clipped to `[1e-4, 1 − 1e-4]`; `clipped` counts the samples that were clipped. |
+| `buckets` | Ten equal-width bins by predicted probability: `count` (weight), `meanPredicted`, `observed` frequency and a Wilson 95 % interval computed at the bucket's effective sample size. `quantileBuckets` are ten equal-weight bins. Empty bins have `null` fields. |
+| `murphy` | Murphy (1973) decomposition: Brier ≈ `reliability − resolution + uncertainty`. Small reliability = calibrated; large resolution = the forecasts separate outcomes; uncertainty is the base-rate variance. |
+| `baseline` | The market's own Brier (`marketProbability` at trace time) on the same traces, next to the agent's Brier on them, so skill versus the market is visible. `MARKET_CREATION` traces are left out: their `marketProbability: 0.5` is a placeholder, not a price. `null` when no trace has a market price. |
+| `nMarkets`, `nTraces`, `nEff` | Resolved markets and traces in the slice; `nEff = (Σw)² / Σw²` after weighting. |
+| `shrinkageK` | Least-squares factor `k` in `p′ = 0.5 + k (p − 0.5)`, bounded to `[0.3, 1]`. |
+
+**Weighting.** Each market has total weight 1 in a slice, so a market with
+fifty trader traces cannot outvote one with a single trace. `time` (default,
+`CALIBRATION_WEIGHTING`) weights a trace by how long its estimate was current,
+until the next trace in the slice or `resolvedAt`; `last` keeps only the final
+trace and `first` only the first.
+
+**Exclusions.** Voided markets (`CANCELLED`, `resolvedOutcome` null) are
+dropped entirely, because counting them as NO would bias every figure. Traces
+created at or after `resolvedAt` are dropped, since they could know the
+outcome. Only markets with an `onChainMarketId` are counted, i.e. resolved
+through the indexer; legacy rows resolved by other means are ignored.
+
+**Minimum sample.** A slice with fewer than `MIN_CALIBRATION_MARKETS` (default
+20) resolved markets returns `insufficientData: true` and its counts, with no
+metrics. The trader additionally requires 50 markets before it uses a fitted
+`k` other than 1.
+
+**Slices by prompt and model** read the first entry of the trace's
+`provenance.llm` (see the provenance block above); traces without provenance
+fall under `unknown`.
+
+#### `POST /agents/calibration/recompute` (auth, admin)
+
+Runs the daily job now and returns `{ computedAt, rows, windows, slices,
+insufficient }`. `409 CALIBRATION_IN_PROGRESS` if another instance holds the
+advisory lock.
+
 ### Per-trace unlock via x402 (not this backend)
 
 **Decision: the frontend calls the contracts repo's `x402/` service
@@ -506,6 +664,20 @@ The agent's (treasury's) portfolio. Response:
 `{ totalUsdc, deployedCapital, availableCapital, openPositions, totalPnl, dailyPnl, builderFeesEarned, correlationRisk, availableCapitalRaw }`.
 `availableCapitalRaw` is `treasury.available_capital()` read live (`null` if
 the RPC read fails). The float fields are the DB's view.
+
+`correlationRisk` (#80): `{ pairs, totalExposure, isOverExposed, matrix, method, snapshotId }`.
+Each pair is `{ marketIdA, marketIdB, correlationScore, relationship, method }`
+for open positions with `|correlationScore| ≥ 0.60`. `correlationScore` is the
+estimate used for sizing: the latest correlation snapshot's value for the pair
+(`method: "empirical"`, or `"prior"` when the pair had too little overlap), or
+the hand-written category matrix (`method: "matrix"`) when there is no snapshot,
+it is older than two hours or it lacks the pair. `relationship` follows the sign
+(`POSITIVE`, `NEGATIVE`, or `NONE` when |ρ| < 0.05). `matrix` is
+`{ marketIds, values }`, the full correlation matrix of the (up to 50 largest)
+open positions projected onto the nearest positive-semidefinite matrix; the pair
+scores are the raw pairwise values. `method` is `"snapshot"` when any pair used
+the snapshot. The trader's reasoning traces carry the same
+`correlation: { pairs, method, snapshotId }` for the size they were cut to.
 
 #### `GET /portfolio/positions`
 
@@ -679,6 +851,190 @@ decides an outcome.**
 `409 MARKET_NOT_ON_CHAIN`, `502 CHAIN_READ_FAILED`.
 
 
+### Resolution signers (auth, per-market signer)
+
+A market created with the default `signers` spec (ADR 0001) commits to an
+m-of-n set of resolution signers. External signers use this API to find the
+markets waiting for them, read the evidence, build the `resolver.attest`
+transaction for their own wallet, and watch progress. The API only
+coordinates: the resolver contract still enforces membership, the close time
+and one attestation per signer and outcome. The backend never holds a
+signer's key.
+
+Signers log in with the normal SEP-10 flow (`POST /auth/challenge`,
+`POST /auth/verify`). Whether a wallet may act on a market is decided
+**per market from the spec committed at creation**, not from
+`RESOLUTION_SIGNERS` (which may have changed since). The stored spec is trusted
+only if it re-hashes to `Market.resolutionHash` and to the market's on-chain
+`resolution_hash`. `:marketId` is the backend market UUID.
+
+Every route needs a Bearer token and is rate limited to 30 requests a minute
+per IP.
+
+Flow:
+
+1. `GET /signer/markets`: markets that closed and await you.
+2. `GET /signer/markets/:marketId/evidence`: the pinned question and sources.
+3. `POST /signer/markets/:marketId/attest/prepare` with `{ "outcome": "YES" }`.
+4. Sign the returned `xdr` in your wallet. You are the transaction source, so
+   no Soroban authorization entries are needed.
+5. `POST /signer/markets/:marketId/attest/submit` with `{ "xdr": "<signed>" }`.
+6. `GET /signer/markets/:marketId/progress`.
+
+#### `GET /signer/markets?page&limit`
+Markets whose committed signer set contains your wallet, that have closed, are
+not finalized on the resolver, and that you have not attested to yet. Oldest
+close first.
+
+```json
+{ "marketId": "uuid", "onChainMarketId": "5", "question": "…", "closedAt": "…",
+  "resolutionSource": "FRED:DGS10", "resolverState": "SignersPending",
+  "blockedReason": null, "preparedOutcomes": ["YES"] }
+```
+
+`blockedReason` is `"SPEC_NOT_REVEALED"` while the spec has not been
+registered on the resolver (`resolverState: "Unconfigured"`): every attestation
+would fail until it is, so it is listed rather than hidden.
+
+#### `GET /signer/markets/:marketId/evidence`
+The question document pinned at `metaUri`, returned only if its sha256 equals
+`Market.questionHash`; otherwise `502 IPFS_RETRIEVAL_FAILED`.
+
+```json
+{ "marketId": "uuid", "onChainMarketId": "5",
+  "question": { "version": 1, "question": "…", "closeTime": 1767225600, "resolutionSource": "…" },
+  "questionHash": "64-hex", "questionUri": "ipfs://…",
+  "resolutionSource": "FRED:DGS10", "closeTime": 1767225600,
+  "spec": { "kind": "signers", "signers": ["G…"], "threshold": 2, "disputeWindow": 86400 },
+  "resolutionHash": "64-hex",
+  "evidenceTraces": [{ "id": "uuid", "ipfsCid": "bafy…", "traceHash": "64-hex", "url": "/api/v1/traces/uuid" }] }
+```
+
+`evidenceTraces` are existing `RESOLUTION_ATTESTATION` reasoning traces for the
+market, if any. This API serves evidence that exists; it does not produce it.
+
+#### `POST /signer/markets/:marketId/attest/prepare?allowConflict=true|false`
+Body `{ "outcome": "YES" | "NO" }`. Returns an unsigned, simulated transaction:
+
+```json
+{ "xdr": "AAAA…", "networkPassphrase": "Test SDF Network ; September 2015",
+  "validUntil": "2026-10-18T12:05:00.000Z", "outcome": "YES" }
+```
+
+The transaction has time bounds (about 5 minutes). Preparing the same outcome
+again while it is still valid returns the same transaction. If you already have
+a **confirmed** attestation for the other outcome the API refuses with
+`409 CONFLICTING_ATTESTATION` (the contract would accept it; the API will not
+help a signer equivocate) unless you pass `allowConflict=true`.
+
+#### `POST /signer/markets/:marketId/attest/submit`
+Body `{ "xdr": "<signed envelope, max 20000 chars>" }`. The envelope must hash
+to exactly the prepared transaction, be unexpired and carry your signature.
+The API broadcasts it and waits up to 30 seconds for the ledger.
+
+* `200 { "status": "CONFIRMED", "outcome", "txHash", "ledger" }`
+* `202 { "status": "SUBMITTED", … }`: broadcast, not yet seen in a ledger. Poll
+  `/progress`; preparing again settles it against the network.
+
+#### `GET /signer/markets/:marketId/progress`
+```json
+{ "threshold": 2, "signers": ["G…"], "counts": { "YES": 1, "NO": 0 },
+  "countsSource": "api-observed",
+  "attestedBy": [{ "signer": "G…", "outcome": "YES", "txHash": "64-hex", "ledger": 123 }],
+  "thresholdReached": false, "split": false, "equivocators": [],
+  "proposal": null, "attestationsOutsideApi": false,
+  "resolverState": "SignersPending" }
+```
+
+`counts` come from attestations confirmed through this API only
+(`countsSource: "api-observed"`); the resolver has no per-attestation event or
+count view. `proposal` (`{ "outcome", "proposedAt" }`) comes from the indexed
+`ResolutionProposed` event. Disagreement is surfaced, not hidden: `split` is
+true when both outcomes have votes, `equivocators` lists wallets that attested
+both, and `attestationsOutsideApi` is true when a proposal exists that the
+observed counts cannot explain.
+
+Error codes:
+
+| Status | Code | Meaning |
+|---|---|---|
+| 400 | `VALIDATION_ERROR` | Bad id, outcome, flag or body. |
+| 400 | `INVALID_SIGNED_XDR` | Not a transaction envelope for this network (fee-bump envelopes are refused). |
+| 400 | `SIGNATURE_INVALID` | The envelope is not signed by your wallet over the prepared hash. |
+| 401 | `UNAUTHORIZED` / `INVALID_TOKEN` / `TOKEN_EXPIRED` | See Auth. |
+| 403 | `NOT_A_SIGNER` | Your wallet is not in the market's committed signer set (also when the resolver itself reports `NotSigner`). |
+| 404 | `MARKET_NOT_FOUND` | |
+| 409 | `MARKET_NOT_ON_CHAIN`, `SPEC_NOT_COMMITTED`, `NOT_A_SIGNER_MARKET` | The market has no committed signer spec. |
+| 409 | `SPEC_MISMATCH` | The stored spec does not match `resolutionHash` or the on-chain hash. Nothing is served. |
+| 409 | `SPEC_NOT_REVEALED` | The spec is not registered on the resolver (`MarketNotConfigured`). |
+| 409 | `MARKET_NOT_CLOSED`, `ALREADY_FINALIZED`, `ALREADY_ATTESTED` | The resolver's own checks. |
+| 409 | `CONFLICTING_ATTESTATION` | See `prepare`. |
+| 409 | `ATTESTATION_IN_FLIGHT` | An earlier submission for this outcome has not resolved yet. |
+| 409 | `SIGNER_ACCOUNT_NOT_FOUND` | Your account does not exist on this network. |
+| 409 | `PREPARED_TX_MISMATCH` | The envelope is not one prepared for this market and wallet. |
+| 409 | `PREPARED_TX_FAILED` | That prepared transaction already failed; prepare a new one. |
+| 409 | `STALE_SEQUENCE` | Your account sequence changed after `prepare`; prepare again. |
+| 410 | `PREPARED_TX_EXPIRED` | Past `validUntil`; prepare again. |
+| 422 | `SIMULATION_FAILED` | The resolver rejected the call; `details.contractError` names it. |
+| 422 | `EXTRA_SIGNERS_REQUIRED` | The transaction needs authorization from someone other than you. |
+| 422 | `BROADCAST_REJECTED`, `ATTESTATION_FAILED` | The network rejected or failed the transaction (`details.resultCode`). |
+| 429 | `RATE_LIMITED` | |
+| 502 | `IPFS_RETRIEVAL_FAILED`, `PREPARE_FAILED`, `BROADCAST_FAILED` | Upstream problem. |
+| 503 | `NETWORK_BUSY` | The network asked to retry later. |
+
+### Dispute monitor (auth, admin)
+
+When signers reach a market's threshold the resolver stores a proposal and the
+outcome only becomes final after the dispute window; until then the guardian
+(the resolver admin) can cancel it. The dispute monitor reviews every
+`ResolutionProposed` event independently and alerts guardians. The runbook is in
+[architecture.md](architecture.md#disputes-and-guardian-actions).
+
+`windowRemainingSecs` is measured against the **latest ledger close time**
+(from RPC, else the indexer's newest event), not server time; `meta.ledgerTime`
+shows both and where the ledger time came from (`rpc`, `indexer`, or `server`
+as a last resort).
+
+#### `GET /admin/disputes?status=open|all&page&limit`
+Reviews, newest first (`open` is the default: not finalized or cancelled).
+
+```json
+{ "id": "uuid", "onChainMarketId": "5", "proposedOutcome": "YES",
+  "proposedAt": "1767225600", "windowEndsAt": "1767312000",
+  "windowRemainingSecs": 85800, "windowRemainingServerSecs": 85791,
+  "verdict": "DISAGREE", "independentOutcome": "NO", "confidence": 0.93,
+  "evidence": { "items": [{ "id": "e1", "source": "FRED", "kind": "primary", "cited": true }] },
+  "evidenceHash": "64-hex", "acknowledgedBy": null, "resolvedAs": null }
+```
+
+`verdict` is `PENDING`, `AGREE`, `DISAGREE`, `INSUFFICIENT` or `ERROR`. A
+proposal found only by polling has `proposedAt`/`windowEndsAt` `null` and
+`proposedOutcome: "UNKNOWN"`.
+
+#### `POST /admin/disputes/:id/ack`
+Marks the review acknowledged by the calling admin. Acknowledged reviews stop
+escalating.
+
+#### `POST /admin/disputes/:id/cancel-tx`, `POST /admin/disputes/:id/void-tx`
+Returns an unsigned, simulated `cancel_proposal` / `guardian_void_market`
+transaction whose source is `RESOLVER_GUARDIAN_ADDRESS`, for the guardian's own
+wallet. The backend never signs or sends it.
+
+```json
+{ "xdr": "AAAA…", "networkPassphrase": "…", "validUntil": "…",
+  "guardian": "G…", "kind": "cancel_proposal", "onChainMarketId": "5" }
+```
+
+| Status | Code | Meaning |
+|---|---|---|
+| 400 | `VALIDATION_ERROR` | Bad id or `status`. |
+| 403 | `FORBIDDEN` | Not an admin. |
+| 404 | `DISPUTE_NOT_FOUND` | |
+| 409 | `GUARDIAN_MISMATCH` | Simulation was not authorized: `RESOLVER_GUARDIAN_ADDRESS` is not the resolver admin. |
+| 409 | `NO_PROPOSAL`, `ALREADY_FINALIZED` | Nothing to cancel. |
+| 422 | `SIMULATION_FAILED` | `details.contractError` names the resolver error. |
+| 503 | `GUARDIAN_NOT_CONFIGURED` | `RESOLVER_GUARDIAN_ADDRESS` is not set. |
+
 ### Treasury admin console (auth, admin)
 
 The backend never holds the treasury admin key. It prepares unsigned,
@@ -760,6 +1116,86 @@ events; event names are unchanged.
 is no `io.emit` anywhere in `src/`), so these listeners received nothing. The
 indexer now emits them.
 
+Public events are published by the indexer to an internal event bus and
+delivered by one elected instance, so every client gets each event once
+regardless of which API instance it is connected to. Payloads below are
+unchanged. See [architecture.md](architecture.md#event-bus-and-socket-fan-out-93).
+
+### Connecting and authenticating
+
+Anonymous connections work and receive the public events below. To receive
+private events, send the same JWT the REST API uses in the handshake `auth`
+payload. **Never put it in the query string**: URLs end up in proxy and access
+logs, and a handshake with `query.token` is refused.
+
+```js
+const socket = io(API_ORIGIN, { auth: { token } });
+socket.on('connect_error', (err) => {
+  // err.message and err.data.code: INVALID_TOKEN | TOKEN_EXPIRED | TOKEN_IN_QUERY
+});
+```
+
+The token is verified exactly like `Authorization: Bearer` (HS256 only). An
+invalid or expired token fails the handshake, so a reconnect with a stale
+token does not silently become anonymous; fetch a new token first.
+
+An authenticated socket joins the room `user:<userId>`. Every tab of one user
+receives that user's private events.
+
+**Session lifetime.** A session ends when its token's `exp` passes. The server
+emits `SESSION_EXPIRED` (`{ "reason": "TOKEN_EXPIRED" }`) and removes the
+socket from its user room. The socket stays connected, so public events
+continue. To continue receiving private events without reconnecting, send a
+fresh token for the **same user**:
+
+```js
+socket.emit('reauth', { token: newToken }, (ack) => {
+  // { ok: true, exp } | { ok: false, code: 'INVALID_TOKEN' | 'TOKEN_EXPIRED' | 'USER_MISMATCH' }
+});
+```
+
+`USER_MISMATCH` means the token belongs to a different user than the socket's
+session; open a new connection instead.
+
+**Multiple API instances.** Private events are emitted to the room and reach the
+user's sockets on every instance through the socket.io Redis Streams adapter
+(enabled when `EVENT_BUS_ENABLED=true`, the default). With
+`EVENT_BUS_ENABLED=false` there is no adapter and an event reaches only sockets
+connected to the instance that emitted it.
+
+### Private events
+
+Sent only to the owner's room, never broadcast, and never contain another
+user's data.
+
+#### `PAYMENT_CONFIRMED`
+After a daily-pass payment was verified on-chain and committed. Not sent again
+when the same transaction hash is re-submitted.
+
+```json
+{ "subscriptionId": "uuid", "type": "DAILY_PASS", "txHash": "64-hex",
+  "amountRaw": "5000000", "expiresAt": "2026-10-19T12:00:00.000Z" }
+```
+
+#### `PASS_EXPIRING`
+Once per daily pass, when it has less than an hour left.
+
+```json
+{ "subscriptionId": "uuid", "expiresAt": "2026-10-19T12:00:00.000Z" }
+```
+
+#### `COPY_TRADE_CONFIRMED`
+When a copy trade becomes `EXECUTED`, whether the user confirmed it or the
+indexer or sweep matched the on-chain `Trade` event first. `verified` is true
+when the buy was matched to that event (every path that sets `EXECUTED` does
+this today).
+
+```json
+{ "copyTradeId": "uuid", "txHash": "64-hex", "status": "EXECUTED", "verified": true }
+```
+
+### Public events
+
 ### `TRADE_EXECUTED`
 
 Emitted when the indexer stores a market-core `trade` event.
@@ -789,6 +1225,13 @@ The old payload had `amount` (float USDC), `price` (0–1) and `probChange`
 > A trace's `verified` flag means its `trace_hash` was confirmed on-chain: set
 > by the indexer when it sees the matching `TracePublished` event (or by
 > `POST /traces/verify`), never from a write result alone and never in dry-run.
+
+### `MARKET_DRIFT`
+
+Admins only (#83): sockets that connect with `auth: { token: <admin JWT> }` join
+the `admins` room. Emitted by the reconciler for integrity findings that are
+never auto-repaired (`HASH_MISMATCH`, `STATUS_REGRESSION`, `NOT_FOUND_ON_CHAIN`):
+`{ runId, marketId, onChainMarketId, driftClass, dbValue, chainValue }`.
 
 ### `REASONING_PUBLISHED`
 

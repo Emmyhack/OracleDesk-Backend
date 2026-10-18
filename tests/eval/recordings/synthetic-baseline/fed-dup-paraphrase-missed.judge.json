@@ -1,0 +1,8 @@
+{
+  "caseId": "fed-dup-paraphrase-missed",
+  "kind": "judge",
+  "promptKey": "13042a0064c78b4b7a0087080bcf5d92108be38ba40c9af3b16b6c92532f3bd9",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":1,\"ambiguity_notes\":\"Synthetic judge verdict.\"}"
+}

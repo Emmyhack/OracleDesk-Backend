@@ -1,0 +1,43 @@
+{
+  "id": "fed-hold-2026-09",
+  "asOf": "2026-09-10T12:00:00Z",
+  "signals": {
+    "news": [
+      {
+        "source": "NEWSAPI",
+        "title": "Fed signals rates on hold as inflation cools",
+        "content": "Officials indicated the federal funds rate will remain unchanged at the September 17 FOMC meeting.",
+        "publishedAt": "2026-09-10T11:55:00.000Z",
+        "relevanceScore": 0.7,
+        "category": "FED"
+      }
+    ],
+    "fed": [
+      {
+        "source": "FRED",
+        "title": "FEDFUNDS: 4.33",
+        "content": "FEDFUNDS = 4.33 (+0.000 vs prior). Date: 2026-08-01",
+        "publishedAt": "2026-09-10T11:55:00.000Z",
+        "relevanceScore": 0.7,
+        "category": "FED"
+      }
+    ],
+    "macro": [],
+    "signalCount": 2
+  },
+  "existing": [
+    {
+      "question": "Will the Lakers win the 2026 NBA championship?",
+      "category": "SPORTS"
+    },
+    {
+      "question": "Will Bitcoin trade above $100,000 before year end?",
+      "category": "CRYPTO"
+    }
+  ],
+  "labels": {
+    "category": "FED",
+    "expectDuplicateOf": null,
+    "notes": "Date written in the question matches the expiry."
+  }
+}

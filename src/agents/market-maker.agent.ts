@@ -1,12 +1,15 @@
 import { aggregateSignals } from '../services/ingestion.service';
 import {
   generateMarketQuestion,
-  isDuplicateMarket,
+  checkDuplicate,
   createMarketFromProposal,
   prepareResolvableProposal,
 } from '../services/market.service';
+import { seedPolicyRecord } from '../services/seed-policy.service';
+import { toDisplayUsdc } from '../lib/amounts';
+import { prisma } from '../lib/prisma';
 import { generateReasoningTrace } from '../services/reasoning.service';
-import { createMarketOnChain } from '../services/market-chain.service';
+import { createMarketOnChain, planMarketCreation } from '../services/market-chain.service';
 import { enqueueTracePublication } from '../services/trace-publish.service';
 import { TRACE_ACTIONS } from '../lib/trace-actions';
 import { writeAgentLog } from '../lib/agent-log';
@@ -80,8 +83,9 @@ export async function runMarketMakerCycle(
 
     // Step 2: Generate market proposal via the LLM
     let proposal;
+    let proposalProvenance;
     try {
-      proposal = await generateMarketQuestion(signals, genCtx);
+      ({ proposal, provenance: proposalProvenance } = await generateMarketQuestion(signals, genCtx));
     } catch (err) {
       if (err instanceof LlmBudgetExceeded) {
         // One agent log per day, not one per 15-minute cycle.
@@ -115,9 +119,16 @@ export async function runMarketMakerCycle(
     signal.throwIfAborted();
 
     // Step 3: Deduplicate
-    const isDuplicate = await isDuplicateMarket(proposal.market_question);
-    if (isDuplicate) {
-      logger.info({ question: proposal.market_question },
+    const dedup = await checkDuplicate(proposal);
+    await writeAgentLog({
+      agentType: 'MARKET_MAKER',
+      level:     dedup.duplicate ? 'WARN' : 'INFO',
+      action:    dedup.duplicate ? 'DUPLICATE_SKIPPED' : 'DEDUP_CHECK',
+      marketId:  dedup.match?.marketId,
+      data:      { method: dedup.method, duplicate: dedup.duplicate, match: dedup.match },
+    }).catch(() => {});
+    if (dedup.duplicate) {
+      logger.info({ method: dedup.method, similarity: dedup.match?.similarity, matchedMarketId: dedup.match?.marketId },
         'Market Maker Agent: duplicate market — skipping');
       return null;
     }
@@ -128,12 +139,12 @@ export async function runMarketMakerCycle(
     const market = await createMarketFromProposal(proposal, resolutionDetails);
     logger.info({ marketId: market.id, category: market.category }, 'Market Maker Agent: market created in DB');
 
-    // Step 5: Commit the resolution spec and create the market through the
+    // Step 6: Commit the resolution spec and create the market through the
     // treasury. dry-run simulates; the market then stays PENDING.
     // Note: Do not abort between a chain submission and its DB write.
     let onChainMarketId: bigint | null = null;
     try {
-      const result = await createMarketOnChain(market);
+      const result = await createMarketOnChain(market, undefined, { seedRaw: decision.seedRaw, initialYesBps: decision.initialYesBps });
       if (result.mode === 'live') onChainMarketId = result.value;
     } catch (err) {
       logger.error({ err, marketId: market.id }, 'Market Maker Agent: on-chain creation failed; market stays PENDING');
@@ -141,7 +152,7 @@ export async function runMarketMakerCycle(
 
     signal.throwIfAborted();
 
-    // Step 6: Reasoning trace for the creation decision
+    // Step 7: Reasoning trace for the creation decision
     const { trace, tracePayload } = await generateReasoningTrace({
       marketId:            market.id,
       agentType:           'MARKET_MAKER',
@@ -153,14 +164,15 @@ export async function runMarketMakerCycle(
         rawValue: proposal.initial_yes_probability,
       })),
       probabilityEstimate: proposal.initial_yes_probability,
-      marketProbability:   0.5,
-      edge:                proposal.initial_yes_probability - 0.5,
+      marketProbability:   decision.pAdj,
+      edge:                proposal.initial_yes_probability - decision.pAdj,
       confidenceInterval:  proposal.confidence_interval,
+      seedPolicy,
     }, { purpose: priority === 'admin' ? 'admin_trace_hedge' : 'trace_hedge', priority });
 
     signal.throwIfAborted();
 
-    // Step 7: Queue the trace for pinning + publication to reasoning-registry.
+    // Step 8: Queue the trace for pinning + publication to reasoning-registry.
     // The queue publishes it once the market is on-chain (#131). The payload is
     // fixed now: re-pinning later with a new onChainMarketId would change traceHash.
     try {

@@ -1,0 +1,8 @@
+{
+  "caseId": "crypto-wide-ci",
+  "kind": "proposal",
+  "promptKey": "7cf45ccf4f40a0dfabb81dce1cfb763da4d21ed9ad6eb4536ab3e70f33a1f34e",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will the exchange halt withdrawals for more than 24 hours before October 25, 2026?\",\"initial_yes_probability\":0.3,\"resolution_oracle\":\"NEWSAPI\",\"expiry_timestamp\":1792929600,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"CRYPTO\",\"confidence_interval\":{\"lower\":0.05,\"upper\":0.6},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"n1\"]}"
+}

@@ -1,0 +1,38 @@
+{
+  "id": "fed-dup-paraphrase-missed",
+  "asOf": "2026-09-10T12:00:00Z",
+  "signals": {
+    "news": [],
+    "fed": [
+      {
+        "source": "FRED",
+        "title": "FEDFUNDS: 4.33",
+        "content": "FEDFUNDS = 4.33 (+0.000 vs prior).",
+        "publishedAt": "2026-09-10T11:55:00.000Z",
+        "relevanceScore": 0.7,
+        "category": "FED"
+      }
+    ],
+    "macro": [],
+    "signalCount": 1
+  },
+  "existing": [
+    {
+      "question": "Will the Lakers win the 2026 NBA championship?",
+      "category": "SPORTS"
+    },
+    {
+      "question": "Will Bitcoin trade above $100,000 before year end?",
+      "category": "CRYPTO"
+    },
+    {
+      "question": "Will the Fed hold rates at its September meeting?",
+      "category": "FED"
+    }
+  ],
+  "labels": {
+    "category": "FED",
+    "expectDuplicateOf": "Will the Fed hold rates at its September meeting?",
+    "notes": "Known weakness: a paraphrase the lexical check misses (motivates semantic dedup, #69)."
+  }
+}

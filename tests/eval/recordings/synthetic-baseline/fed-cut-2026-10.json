@@ -1,0 +1,8 @@
+{
+  "caseId": "fed-cut-2026-10",
+  "kind": "proposal",
+  "promptKey": "5b62712a638901af674f48c8cd1b8519c472b3e6508208c391ea1d5d17e4f086",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will the Federal Reserve lower the federal funds target range at its October 28, 2026 meeting?\",\"initial_yes_probability\":0.6,\"resolution_oracle\":\"CME_FEDWATCH\",\"expiry_timestamp\":1793188800,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"FED\",\"confidence_interval\":{\"lower\":0.5,\"upper\":0.7},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"n1\"]}"
+}

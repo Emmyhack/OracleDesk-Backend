@@ -91,3 +91,16 @@ test('PATCH /trade/copy/:id/confirm without auth is 401', async () => {
     assert.equal(res.status, 401);
   });
 });
+
+test('admin reconciliation routes require an admin (#83)', async () => {
+  const { signToken } = await import('../src/middlewares/auth.middleware');
+  await withServer(async (base) => {
+    const token = signToken('u1', Keypair.random().publicKey());
+    for (const [method, path] of [['POST', '/admin/reconciliation/run'], ['GET', '/admin/reconciliation/runs'], ['GET', '/admin/reconciliation/runs/abc']]) {
+      const anon = await fetch(`${base}/api/v1${path}`, { method });
+      assert.equal(anon.status, 401, `${method} ${path}`);
+      const nonAdmin = await fetch(`${base}/api/v1${path}`, { method, headers: { authorization: `Bearer ${token}` } });
+      assert.equal(nonAdmin.status, 403, `${method} ${path}`);
+    }
+  });
+});

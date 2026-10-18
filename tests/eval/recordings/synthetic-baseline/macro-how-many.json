@@ -1,0 +1,8 @@
+{
+  "caseId": "macro-how-many",
+  "kind": "proposal",
+  "promptKey": "e62fe192ccc40995b273d22cbd267faa37e0b2eeeb2657b22d63cc59f94bc9bf",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"How many jobs will the US economy add in October 2026?\",\"initial_yes_probability\":0.5,\"resolution_oracle\":\"BLS\",\"expiry_timestamp\":1793966400,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"MACRO\",\"confidence_interval\":{\"lower\":0.4,\"upper\":0.6},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"f1\"]}"
+}

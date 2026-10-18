@@ -1,0 +1,8 @@
+{
+  "caseId": "ent-box-office",
+  "kind": "judge",
+  "promptKey": "86bfe6ce534fc9f1de4a9fa5a7688894d928c7c42a8df715673f2c7b73252e88",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":1,\"ambiguity_notes\":\"Synthetic judge verdict.\"}"
+}

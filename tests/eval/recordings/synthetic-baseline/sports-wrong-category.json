@@ -1,0 +1,8 @@
+{
+  "caseId": "sports-wrong-category",
+  "kind": "proposal",
+  "promptKey": "65dcf66cf0ca40f9e2422c439836ad075313a4342b2a92f18d86d6ecea10caf8",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will the IOC select a Middle Eastern host city for the 2036 Games on September 25, 2026?\",\"initial_yes_probability\":0.4,\"resolution_oracle\":\"ESPN\",\"expiry_timestamp\":1790337600,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"GEOPOLITICAL\",\"confidence_interval\":{\"lower\":0.3,\"upper\":0.5},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"n1\"]}"
+}

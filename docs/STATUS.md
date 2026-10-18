@@ -9,7 +9,7 @@ Last updated: 2026-10-07. This is the honest account of the Stellar port of the 
 
 ## Toolchain
 
-Node v24.13.1, npm 11.8.0 (CI: Node 22 via `.nvmrc`), TypeScript 6.0.3, Express 5.2.1, Prisma 6.19.3, zod 4.4.3, `@stellar/stellar-sdk` 16.3.1 (the bindings' major), Stellar CLI 27.1.0, gitleaks 8.30.1, Docker 29.8.2 with `postgres:16-alpine` and `redis:7-alpine`. Contracts submodule pinned at `OracleDesk-SmartContract@eb5f3fd`.
+Node v24.13.1, npm 11.8.0 (CI: Node 22 via `.nvmrc`), TypeScript 6.0.3, Express 5.2.1, Prisma 6.19.3, zod 4.4.3, `@stellar/stellar-sdk` 16.3.1 (the bindings' major), Stellar CLI 27.1.0, gitleaks 8.30.1, Docker 29.8.2 with `pgvector/pgvector:pg16` (Postgres 16 plus the `vector` extension, required by the #69 migration; managed Postgres needs `CREATE EXTENSION vector`) and `redis:7-alpine`. Contracts submodule pinned at `OracleDesk-SmartContract@eb5f3fd`.
 
 ## Phases
 

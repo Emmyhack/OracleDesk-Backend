@@ -1,0 +1,8 @@
+{
+  "caseId": "ecb-wrong-category",
+  "kind": "judge",
+  "promptKey": "c0ea737ce9eab746a2e4d76b7daede72bc2fe336e384126de99f84ba141addc4",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":1,\"ambiguity_notes\":\"Synthetic judge verdict.\"}"
+}

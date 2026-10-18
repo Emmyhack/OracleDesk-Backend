@@ -1,0 +1,8 @@
+{
+  "caseId": "edge-injection-in-signal",
+  "kind": "judge",
+  "promptKey": "fc72aa45388a7c65449c1cf5b1dc7890b7d85bd18868388de6188c92ad8a48f6",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":1,\"ambiguity_notes\":\"Synthetic judge verdict.\"}"
+}

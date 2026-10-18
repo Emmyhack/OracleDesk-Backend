@@ -1,0 +1,9 @@
+{
+  "schemaValid": 0.9,
+  "binary": 0.8,
+  "resolutionSource": 0.8,
+  "dateSanity": 0.8,
+  "category": 0.85,
+  "duplicateAccuracy": 0.85,
+  "ciConsistency": 0.9
+}

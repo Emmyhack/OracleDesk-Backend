@@ -1,0 +1,8 @@
+{
+  "caseId": "election-referendum",
+  "kind": "proposal",
+  "promptKey": "0f5ba16330e731ade59600c8c3ebba19db3b703a61c4ed00157771fdc9efab73",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will California voters approve the housing bond measure on November 3, 2026?\",\"initial_yes_probability\":0.6,\"resolution_oracle\":\"AP_ELECTIONS\",\"expiry_timestamp\":1793707200,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"ELECTION\",\"confidence_interval\":{\"lower\":0.5,\"upper\":0.7},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"n1\"]}"
+}

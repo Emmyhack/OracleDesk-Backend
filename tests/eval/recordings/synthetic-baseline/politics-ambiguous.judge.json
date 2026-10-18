@@ -1,0 +1,8 @@
+{
+  "caseId": "politics-ambiguous",
+  "kind": "judge",
+  "promptKey": "ed5b86b73b85cb88ddc55a3d9aabdb70e6ccf6d40bea3e6df4153701825fce35",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":0,\"verifiable\":0,\"ambiguity_notes\":\"Subjective and unverifiable.\"}"
+}

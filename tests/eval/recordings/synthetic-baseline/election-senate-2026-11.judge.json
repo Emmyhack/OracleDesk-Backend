@@ -1,0 +1,8 @@
+{
+  "caseId": "election-senate-2026-11",
+  "kind": "judge",
+  "promptKey": "5cf2be8f01bb9a9a5e32dd8cb2acf5a3e3f10b84d7a0f84073538880adc04bdc",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":1,\"ambiguity_notes\":\"Synthetic judge verdict.\"}"
+}

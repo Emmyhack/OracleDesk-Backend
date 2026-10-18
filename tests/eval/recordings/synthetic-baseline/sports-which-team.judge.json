@@ -1,0 +1,8 @@
+{
+  "caseId": "sports-which-team",
+  "kind": "judge",
+  "promptKey": "5131b0051ef268bcc798f72822c2de412d8c5a1382a8d275825fcbf7e668ac5e",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":0,\"verifiable\":1,\"ambiguity_notes\":\"Many outcomes.\"}"
+}

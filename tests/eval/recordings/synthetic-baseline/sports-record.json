@@ -1,0 +1,8 @@
+{
+  "caseId": "sports-record",
+  "kind": "proposal",
+  "promptKey": "c7499db16f9845b6675eae957ebcec503cf873b470d6003dba62adf8e7c0e64f",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will the quarterback break the career passing yards record in the game on September 14, 2026?\",\"initial_yes_probability\":0.55,\"resolution_oracle\":\"SPORTS_REFERENCE\",\"expiry_timestamp\":1789387200,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"SPORTS\",\"confidence_interval\":{\"lower\":0.45,\"upper\":0.65},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"n1\"]}"
+}
