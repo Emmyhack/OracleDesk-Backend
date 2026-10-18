@@ -21,12 +21,15 @@ declare global {
   }
 }
 
-function decode(req: Request): { user?: JwtPayload; error?: 'missing' | 'expired' | 'invalid' } {
-  const authHeader = req.headers.authorization;
-  if (!authHeader?.startsWith('Bearer ')) return { error: 'missing' };
-  const token = authHeader.slice(7);
+const VERIFY_OPTIONS: jwt.VerifyOptions = { algorithms: ['HS256'] };
+
+/**
+ * Verifies an access token. Shared by the HTTP middleware and the socket
+ * handshake so both accept exactly the same tokens (HS256 only).
+ */
+export function verifyAccessToken(token: string): { user?: JwtPayload; error?: 'expired' | 'invalid' } {
   try {
-    return { user: jwt.verify(token, secret('JWT_SECRET')) as JwtPayload };
+    return { user: jwt.verify(token, secret('JWT_SECRET'), VERIFY_OPTIONS) as JwtPayload };
   } catch (err) {
     // Expiry is a property of the token, not the key. Never retry it with the
     // previous secret: that would turn an expired token into a valid one.
@@ -35,11 +38,17 @@ function decode(req: Request): { user?: JwtPayload; error?: 'missing' | 'expired
     const previous = previousSecret('JWT_SECRET');
     if (!previous) return { error: 'invalid' };
     try {
-      return { user: jwt.verify(token, previous) as JwtPayload };
+      return { user: jwt.verify(token, previous, VERIFY_OPTIONS) as JwtPayload };
     } catch {
       return { error: 'invalid' };
     }
   }
+}
+
+function decode(req: Request): { user?: JwtPayload; error?: 'missing' | 'expired' | 'invalid' } {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return { error: 'missing' };
+  return verifyAccessToken(authHeader.slice(7));
 }
 
 /** Tag the request's log context with the caller (mutates this request's own store object). */
@@ -85,6 +94,14 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction): v
   }
   next();
 }
+
+/**
+ * Signer routes (#91). Only checks that a valid session exists: whether this
+ * wallet is a signer of a given market depends on that market's committed spec,
+ * so it is decided per market in signer-portal.service.ts after the market id
+ * has been validated.
+ */
+export const requireSigner = requireAuth;
 
 /**
  * Generate a signed JWT for a user

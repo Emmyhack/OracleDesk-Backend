@@ -16,7 +16,7 @@ export const rpcServer = new rpc.Server(config.STELLAR_RPC_URL, {
 
 type Signer = Pick<ClientOptions, 'publicKey' | 'signTransaction' | 'signAuthEntry'>;
 
-function baseOptions(contractId: string, signer: Signer = {}): ClientOptions {
+export function baseOptions(contractId: string, signer: Signer = {}): ClientOptions {
   return {
     contractId,
     rpcUrl: config.STELLAR_RPC_URL,

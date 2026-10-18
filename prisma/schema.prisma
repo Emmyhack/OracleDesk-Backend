@@ -207,6 +207,7 @@ model Market {
   @@index([expiryTimestamp])
   @@index([settlementCurrency])
   @@index([resolvedAt])
+  @@index([resolutionSpec], type: Gin)
   @@map("markets")
 }
 
@@ -406,6 +407,8 @@ model Subscription {
   /// CHECK: subscriptions_tx_hash_format (txHash IS NULL OR 64 hex chars)
   txHash     String?            @unique
   expiresAt  DateTime?
+  /// Set when the PASS_EXPIRING socket event was claimed for this pass (#94).
+  expiryNotifiedAt DateTime?
   createdAt  DateTime           @default(now())
   updatedAt  DateTime           @updatedAt
 
@@ -471,11 +474,15 @@ model ChainEvent {
   txHash         String
   /// Decoded event params (bigints as strings).
   params         Json
+  /// True once the event reached the event bus (or has nothing to publish).
+  /// Rows stored before the bus existed are true.
+  published      Boolean  @default(false)
   createdAt      DateTime @default(now())
 
   @@index([contractName, eventName])
   @@index([ledger])
   @@index([txHash])
+  @@index([published, ledger])
   @@map("chain_events")
 }
 
@@ -718,4 +725,76 @@ model IdempotencyKey {
   @@unique([scope, method, route, key])
   @@index([expiresAt])
   @@map("idempotency_keys")
+}
+
+/// External resolution signer attestations coordinated through the signer API (#91).
+/// `status`: PREPARED | SUBMITTED | CONFIRMED | FAILED.
+model SignerAttestation {
+  id              String   @id @default(uuid())
+  marketId        String
+  onChainMarketId BigInt
+  signer          String
+  /// YES | NO
+  outcome         String
+  status          String
+  preparedXdr     String
+  /// Hash of the prepared envelope (network-bound); signatures do not change it.
+  preparedHash    String
+  validUntil      DateTime
+  txHash          String?
+  ledger          Int?
+  error           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([onChainMarketId, signer, outcome])
+  @@index([marketId])
+  @@map("signer_attestations")
+}
+
+/// Independent review of one ResolutionProposed event (#92).
+/// `verdict`: PENDING | AGREE | DISAGREE | INSUFFICIENT | ERROR.
+model DisputeReview {
+  id                 String    @id @default(uuid())
+  onChainMarketId    BigInt
+  /// chain_events.id of the ResolutionProposed event (or `missed:<market>` for the polling fallback).
+  proposalEventId    String    @unique
+  proposedOutcome    String
+  /// Ledger seconds. Null when the proposal was found by polling and its time is unknown.
+  proposedAt         BigInt?
+  windowEndsAt       BigInt?
+  verdict            String
+  independentOutcome String?
+  confidence         Float?
+  evidence           Json?
+  evidenceHash       String?
+  acknowledgedBy     String?
+  acknowledgedAt     DateTime?
+  /// FINALIZED | CANCELLED | null
+  resolvedAs         String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([verdict])
+  @@index([onChainMarketId])
+  @@map("dispute_reviews")
+}
+
+/// One alert sent (or attempted) for a review, deduplicated by `dedupeKey`.
+model AlertDelivery {
+  id        String    @id @default(uuid())
+  reviewId  String
+  /// INFO | WARN | CRITICAL
+  level     String
+  sink      String
+  /// reviewId:level:sink
+  dedupeKey String    @unique
+  /// SENT | FAILED
+  status    String
+  attempts  Int       @default(0)
+  sentAt    DateTime?
+  error     String?
+
+  @@index([reviewId])
+  @@map("alert_deliveries")
 }

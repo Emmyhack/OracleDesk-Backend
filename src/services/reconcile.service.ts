@@ -137,7 +137,7 @@ export async function reconcile(
     orderBy: [{ ledger: 'asc' }, { id: 'asc' }],
   });
   for (const row of stored) {
-    await reprojectEvent(decodedFromStored(row as any), deps.emit ?? (() => undefined));
+    await reprojectEvent(decodedFromStored(row as any));
   }
 
   const payments = { reverified: 0, failed: [] as Array<{ txHash: string; code: string }>, unverifiable: 0 };
