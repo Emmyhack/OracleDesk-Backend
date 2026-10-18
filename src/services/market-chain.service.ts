@@ -26,6 +26,7 @@ import { ChainError } from './stellar/errors';
 import { MIN_SEED_RAW, initialYesBps, decideSeed, type SeedDecision, type SeedPolicyConfig } from './seed-policy.service';
 import { agentSigner } from './stellar/clients';
 import { pinJson } from './ipfs.service';
+import type { QuestionResolutionBlock } from './resolvability.service';
 
 // The seed policy owns both (it must stay free of config and database imports).
 export { MIN_SEED_RAW, initialYesBps };
@@ -42,10 +43,17 @@ export function defaultResolutionSpec(): ResolutionSpecJson {
   };
 }
 
-/** The question document pinned to IPFS; its sha256 is the on-chain question_hash. */
+/**
+ * The question document pinned to IPFS; its sha256 is the on-chain question_hash.
+ *
+ * Version 2 (#74) adds a `resolution` block when the market has resolution
+ * details. Markets without them keep the exact v1 shape, so their pinned bytes
+ * (and hashes) are unchanged. Readers must ignore unknown fields.
+ */
 export function questionDocument(market: Market, resolutionHashHex: string) {
+  const details = market.resolutionDetails as QuestionResolutionBlock | null | undefined;
   return {
-    version: 1,
+    version: details ? 2 : 1,
     question: market.question,
     category: market.category,
     contractCategory: toContractCategory(market.category),
@@ -53,6 +61,7 @@ export function questionDocument(market: Market, resolutionHashHex: string) {
     resolutionSource: market.resolutionOracle ?? null,
     resolutionHash: resolutionHashHex,
     backendMarketId: market.id,
+    ...(details ? { resolution: details } : {}),
   };
 }
 

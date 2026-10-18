@@ -43,3 +43,27 @@ export function parseU64(input: string): bigint | null {
   const value = BigInt(input);
   return value <= 0xffff_ffff_ffff_ffffn ? value : null;
 }
+
+/**
+ * Prisma `Decimal` (NUMERIC(39,0)) or its string form → bigint, without ever
+ * going through a JS number. Rejects non-integers and exponent forms.
+ */
+export function decimalToBigint(value: { toFixed(): string } | string | bigint): bigint {
+  if (typeof value === 'bigint') return value;
+  const text = typeof value === 'string' ? value.trim() : value.toFixed();
+  if (!/^-?\d+(?:\.0+)?$/.test(text)) throw new Error(`Not an integer decimal: "${text}"`);
+  return BigInt(text.replace(/\.0+$/, ''));
+}
+
+/** bigint → the decimal string Prisma accepts for a Decimal column. */
+export function bigintToDecimalString(value: bigint): string {
+  return value.toString();
+}
+
+/** ceil(a × b / c) for non-negative bigints; mirrors market-core's fee rounding. */
+export function mulDivCeil(a: bigint, b: bigint, c: bigint): bigint {
+  if (a < 0n || b < 0n || c <= 0n) throw new Error('mulDivCeil: invalid input');
+  const product = a * b;
+  const quotient = product / c;
+  return product % c !== 0n ? quotient + 1n : quotient;
+}

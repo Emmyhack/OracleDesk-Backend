@@ -2,17 +2,16 @@ import { prisma } from '../lib/prisma';
 import { writeAgentLog } from '../lib/agent-log';
 import { logger } from '../lib/logger';
 import { AppError } from '../middlewares/error.middleware';
-import type { TradePayload } from '../types';
-import { agentBuy, Outcomes, quoteBuy } from './chain.service';
+import type { KellyResult, TradePayload, KellyInput } from '../types';
+import { agentBuy, getOnChainMarket, Outcomes, quoteBuy } from './chain.service';
 import { enqueueTracePublication } from './trace-publish.service';
 import { tradeTraceAction } from '../lib/trace-actions';
-import { usdcFromNumber } from '../lib/amounts';
+import { bigintToDecimalString, mulDivCeil, usdcFromNumber } from '../lib/amounts';
 
 // ─── Risk constants ───
 const MAX_CORRELATED_EXPOSURE  = 0.05;   // 5% total correlated exposure
 const MIN_EDGE_THRESHOLD       = 0.08;   // 8 percentage points minimum edge
 const MIN_LIQUIDITY_USD        = 500;    // $500 minimum market liquidity
-const HARD_STOP_LOSS_PCT       = 0.15;   // Close if market moves 15% against
 const AGENT_SLIPPAGE_BPS       = 100n;   // min_shares_out = quote − 1%
 
 export { calculateKellySize } from './kelly';
@@ -73,10 +72,12 @@ export async function executeTrade(payload: TradePayload): Promise<{
   // ── Step 3: Attempt on-chain execution ──
   let txHash: string | null = null;
   let dryRun = false;
+  let fill: Pick<SubmittedTrade, 'sharesOut' | 'collateralIn' | 'feeRaw'> | null = null;
   try {
     const submitted = await submitTradeTransaction(payload, market);
     txHash = submitted.txHash;
     dryRun = submitted.dryRun;
+    fill = submitted;
   } catch (err) {
     // Mark as FAILED — no position created
     await prisma.trade.update({
@@ -105,6 +106,11 @@ export async function executeTrade(payload: TradePayload): Promise<{
   }
 
   // ── Step 4: Atomic success update ──
+  // The position is denominated in the shares agent_buy returned (#78); the
+  // float columns are display values derived from them. entryPrice is the
+  // effective price paid per share, not the pre-trade mid price.
+  const { sharesOut, collateralIn, feeRaw } = fill!;
+  const effectivePrice = Math.min(1, Number(collateralIn) / Number(sharesOut));
   const [updatedTrade, position] = await prisma.$transaction([
     prisma.trade.update({
       where: { id: trade.id },
@@ -120,10 +126,13 @@ export async function executeTrade(payload: TradePayload): Promise<{
         tradeId:     trade.id,
         direction:   payload.direction,
         status:      'OPEN',
-        entryPrice:  payload.price,
-        currentPrice: payload.price,
+        entryPrice:  effectivePrice,
+        currentPrice: effectivePrice,
         size:        payload.amount,
         pnl:         0,
+        sharesRaw:    bigintToDecimalString(sharesOut),
+        costBasisRaw: bigintToDecimalString(collateralIn),
+        feesPaidRaw:  bigintToDecimalString(feeRaw),
       },
     }),
   ]);
@@ -155,45 +164,10 @@ export async function executeTrade(payload: TradePayload): Promise<{
 }
 
 /**
- * Updates the P&L of an open position based on current market price.
- * Called by the monitor cron every 15 minutes.
- */
-export async function trackPosition(
-  positionId: string,
-  currentPrice: number,
-): Promise<any> {
-  const position = await prisma.position.findUnique({
-    where: { id: positionId },
-    include: { trade: true },
-  });
-
-  if (!position || position.status !== 'OPEN') return null;
-
-  const direction = position.direction;
-  const entryPrice = position.entryPrice;
-  const size = position.size;
-
-  // P&L: if YES position, gain when price goes up; loss when price goes down
-  const pnl =
-    direction === 'YES'
-      ? (currentPrice - entryPrice) * size
-      : (entryPrice - currentPrice) * size;
-
-  const priceChange = Math.abs(currentPrice - entryPrice) / entryPrice;
-
-  // Check hard stop-loss
-  if (pnl < 0 && priceChange >= HARD_STOP_LOSS_PCT) {
-    return closePosition(positionId, currentPrice, 'STOP_LOSS');
-  }
-
-  return prisma.position.update({
-    where: { id: positionId },
-    data:  { currentPrice, pnl },
-  });
-}
-
-/**
- * Closes an open position.
+ * Closes an open position in the database only. It does NOT touch the chain:
+ * the treasury keeps its shares. Use it for closes that need no sale (market
+ * resolution, manual bookkeeping); exits that must sell go through
+ * `exitPosition()` in exit.service.ts (treasury.agent_sell).
  *
  * closeReason values:
  * - 'STOP_LOSS': Hard 15% adverse move triggered
@@ -243,6 +217,16 @@ export async function closePosition(
   return closed;
 }
 
+export interface SubmittedTrade {
+  txHash: string | null;
+  dryRun: boolean;
+  /** Shares agent_buy returned (i128 base units). */
+  sharesOut: bigint;
+  collateralIn: bigint;
+  /** Fee paid on the buy, rounded up like market-core. */
+  feeRaw: bigint;
+}
+
 /**
  * Quotes the market right before building the transaction, then buys through
  * the treasury with min_shares_out a little below that quote.
@@ -250,7 +234,7 @@ export async function closePosition(
 async function submitTradeTransaction(
   payload: TradePayload,
   market: { id: string; onChainMarketId: bigint | null },
-): Promise<{ txHash: string | null; dryRun: boolean }> {
+): Promise<SubmittedTrade> {
   if (market.onChainMarketId === null) {
     throw new AppError(409, 'MARKET_NOT_ON_CHAIN', 'Market has no on-chain id yet');
   }
@@ -258,6 +242,9 @@ async function submitTradeTransaction(
   const collateralIn = usdcFromNumber(payload.amount);
   const quoted = await quoteBuy(market.onChainMarketId, outcome, collateralIn);
   const minSharesOut = (quoted * (10_000n - AGENT_SLIPPAGE_BPS)) / 10_000n;
+  // fee_bps is fixed at market creation; the fee is charged on collateral in.
+  const onChain = await getOnChainMarket(market.onChainMarketId);
+  const feeRaw = mulDivCeil(collateralIn, BigInt(onChain.fee_bps), 10_000n);
 
   logger.info(
     { marketId: market.id, onChainMarketId: market.onChainMarketId.toString(), collateralIn: collateralIn.toString() },
@@ -269,7 +256,13 @@ async function submitTradeTransaction(
     collateral_in: collateralIn,
     min_shares_out: minSharesOut,
   });
-  return { txHash: result.txHash, dryRun: result.mode === 'dry-run' };
+  return {
+    txHash: result.txHash,
+    dryRun: result.mode === 'dry-run',
+    sharesOut: result.value,
+    collateralIn,
+    feeRaw,
+  };
 }
 
 async function logAgentAction(

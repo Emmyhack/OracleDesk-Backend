@@ -454,6 +454,9 @@ test('a spent budget skips the cycle and logs LLM_BUDGET_EXCEEDED once per day',
   const llm = await import('../src/lib/llm');
   const budget = await import('../src/lib/llm-budget');
   const { runMarketMakerCycle } = await import('../src/agents/market-maker.agent');
+  const controls = await import('../src/services/agent-controls.service');
+  const origGate = controls.gateCycle;
+  (controls as any).gateCycle = async () => 1; // agent controls have their own tests
   const base = corpus.find((c) => c.name === 'fed-hold')!;
 
   const logs: any[] = [];
@@ -480,6 +483,7 @@ test('a spent budget skips the cycle and logs LLM_BUDGET_EXCEEDED once per day',
     assert.equal(logs.filter((l) => l.action === 'LLM_BUDGET_EXCEEDED').length, 1, 'one log per day, not per cycle');
     void priorities;
   } finally {
+    (controls as any).gateCycle = origGate;
     (prisma.signalCache.findFirst as any) = orig.findFirst;
     (prisma.market.findMany as any) = orig.findMany;
     (prisma.agentLog.create as any) = orig.create;

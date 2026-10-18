@@ -54,12 +54,21 @@ export async function getPositions(req: Request, res: Response): Promise<void> {
         trade: {
           select: { direction: true, amount: true, edgeDetected: true, kellyFraction: true, txHash: true },
         },
+        exits: {
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          select: { id: true, status: true, reason: true, mode: true, sharesSoldRaw: true, collateralOutRaw: true, effectivePrice: true, txHash: true, error: true, createdAt: true },
+        },
       },
     }),
     prisma.position.count({ where }),
   ]);
 
-  sendSuccess(res, positions, 200, buildPaginationMeta(page, limit, total) as any);
+  // Raw columns are NUMERIC(39,0) and serialise as decimal strings. markValueRaw
+  // is the mid-price value, liquidationValueRaw what selling now returns; risk
+  // controls use the latter.
+  const rows = positions.map(({ exits, ...position }) => ({ ...position, lastExit: exits[0] ?? null }));
+  sendSuccess(res, rows, 200, buildPaginationMeta(page, limit, total) as any);
 }
 
 /**

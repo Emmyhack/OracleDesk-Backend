@@ -3,7 +3,7 @@ import {
   generateMarketQuestion,
   checkDuplicate,
   createMarketFromProposal,
-  normalizeCategory,
+  prepareResolvableProposal,
 } from '../services/market.service';
 import { seedPolicyRecord } from '../services/seed-policy.service';
 import { toDisplayUsdc } from '../lib/amounts';
@@ -16,6 +16,7 @@ import { writeAgentLog } from '../lib/agent-log';
 import { LlmBudgetExceeded, claimDailyOnce, getLlmUsage, type CallContext, type Priority } from '../lib/llm-budget';
 import { logger } from '../lib/logger';
 import { config } from '../config';
+import { AgentPausedError, gateCycle } from '../services/agent-controls.service';
 import { deadline } from '../lib/resilience';
 import { shutdownController } from '../lib/shutdown';
 
@@ -41,6 +42,17 @@ export async function runMarketMakerCycle(
   opts?: { signal?: AbortSignal; priority?: Priority },
 ): Promise<MarketCycleResult | null> {
   logger.info('Market Maker Agent: starting cycle');
+
+  // Persistent kill switch / pause (#79): a paused agent is an expected state.
+  try {
+    await gateCycle('MARKET_MAKER');
+  } catch (err) {
+    if (err instanceof AgentPausedError) {
+      logger.info({ ...err.details }, 'Market Maker Agent: paused — skipping cycle');
+      return null;
+    }
+    throw err;
+  }
 
   // Cron work stops at the budget minus the admin reserve; admin triggers run
   // up to the full budget (#71).
@@ -94,6 +106,18 @@ export async function runMarketMakerCycle(
 
     signal.throwIfAborted();
 
+    // Step 2b: Reject proposals the committed source can't resolve in time, or
+    // repair the close time (#74). Nothing is persisted or pinned before this.
+    const prepared = await prepareResolvableProposal(proposal);
+    if (!prepared) {
+      logger.info({ question: proposal.market_question }, 'Market Maker Agent: proposal not resolvable — skipping');
+      return null;
+    }
+    proposal = prepared.proposal;
+    const resolutionDetails = prepared.resolution;
+
+    signal.throwIfAborted();
+
     // Step 3: Deduplicate
     const dedup = await checkDuplicate(proposal);
     await writeAgentLog({
@@ -111,38 +135,8 @@ export async function runMarketMakerCycle(
 
     signal.throwIfAborted();
 
-    // Step 4: Seed policy. Decided before anything is written, pinned or sent:
-    // when the budget does not allow a minimum seed there is no DB row, no
-    // IPFS pin and no chain call.
-    const decision = await planMarketCreation({
-      category:             normalizeCategory(proposal.category),
-      closeTime:            new Date(proposal.expiry_timestamp * 1000),
-      p:                    proposal.initial_yes_probability,
-      ci:                   proposal.confidence_interval,
-      llmSuggestedSeedUsdc: proposal.minimum_liquidity_usdc,
-    });
-    if (decision.action === 'skip') {
-      logger.warn({ reason: decision.reason, question: proposal.market_question }, 'Market Maker Agent: seed policy skipped creation');
-      await writeAgentLog({
-        agentType: 'MARKET_MAKER',
-        level:     'WARN',
-        action:    'SEED_SKIPPED',
-        data:      { reason: decision.reason, question: proposal.market_question, inputs: decision.inputs },
-      }).catch(() => {});
-      return null;
-    }
-    const seedPolicy = seedPolicyRecord(decision);
-
-    signal.throwIfAborted();
-
-    // Step 5: Persist market to DB (PENDING until it exists on-chain). It opens
-    // at the adjusted price, and minimumLiquidity records the decided seed.
-    const created = await createMarketFromProposal({
-      ...proposal,
-      initial_yes_probability: decision.pAdj,
-      minimum_liquidity_usdc:  toDisplayUsdc(decision.seedRaw),
-    });
-    const market = await prisma.market.update({ where: { id: created.id }, data: { seedPolicy: seedPolicy as object } });
+    // Step 4: Persist market to DB (PENDING until it exists on-chain)
+    const market = await createMarketFromProposal(proposal, resolutionDetails);
     logger.info({ marketId: market.id, category: market.category }, 'Market Maker Agent: market created in DB');
 
     // Step 6: Commit the resolution spec and create the market through the

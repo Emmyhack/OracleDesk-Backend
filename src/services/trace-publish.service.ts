@@ -16,6 +16,7 @@ import { processPublication } from '../jobs/trace-publication.worker';
 import type { TraceAction } from '../lib/trace-actions';
 import { fetchVerifiedBytes, pinJson } from './ipfs.service';
 import { publishTrace } from './chain.service';
+import type { AgentScope } from './agent-controls.service';
 import { agentSigner } from './stellar/clients';
 import type { TraceVerification } from '../types';
 
@@ -101,6 +102,8 @@ export async function pinAndPublishDocument(params: {
   name: string;
   action: string;
   marketId: bigint;
+  /** Agent whose control state gates the write; defaults from `action`. */
+  scope?: AgentScope;
 }, options: { dryRun?: boolean } = {}): Promise<{ cid: string; hash: string; onChainTraceId: bigint | null; publishTxHash: string | null; mode: 'dry-run' | 'live' }> {
   const pinned = await pinJson(params.document, params.name);
   if (options.dryRun) {
@@ -111,6 +114,7 @@ export async function pinAndPublishDocument(params: {
     hash: pinned.hash,
     action: params.action,
     marketId: params.marketId,
+    scope: params.scope,
   });
   return { cid: pinned.cid, hash: pinned.hash, ...published };
 }
@@ -124,6 +128,7 @@ export async function publishPinnedDocument(params: {
   hash: string;
   action: string;
   marketId: bigint;
+  scope?: AgentScope;
 }, options: { dryRun?: boolean } = {}): Promise<{ onChainTraceId: bigint | null; publishTxHash: string | null; mode: 'dry-run' | 'live' }> {
   if (options.dryRun) {
     return { onChainTraceId: null, publishTxHash: null, mode: 'dry-run' };
@@ -134,7 +139,7 @@ export async function publishPinnedDocument(params: {
     action: params.action,
     trace_hash: Buffer.from(params.hash, 'hex'),
     ipfs_cid: params.cid,
-  });
+  }, undefined, params.scope);
   if (result.mode === 'dry-run') {
     return { onChainTraceId: null, publishTxHash: null, mode: 'dry-run' };
   }

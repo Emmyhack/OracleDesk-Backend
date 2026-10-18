@@ -31,3 +31,14 @@ export const reconcileRunSchema = z.object({
 });
 
 export type AdminOpInput = z.infer<typeof adminOpSchema>;
+
+export const controlScopeSchema = z.enum(['ALL', 'MARKET_MAKER', 'TRADER']);
+
+export const pauseAgentSchema = z.object({
+  reason: z.string().trim().min(5).max(500),
+  until: z.iso.datetime().optional(),
+});
+
+export const resumeAgentSchema = z.object({
+  reason: z.string().trim().min(1).max(500).optional(),
+});

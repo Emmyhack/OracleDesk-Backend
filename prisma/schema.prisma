@@ -183,11 +183,8 @@ model Market {
   resolutionHash     String?
   /// Revealed preimage of resolutionHash, kept so it can be registered with the resolver.
   resolutionSpec     Json?
-  /// Seed policy inputs, bounds, binding constraint and expected LP loss (#82).
-  seedPolicy         Json?
-  /// Highest ledger whose chain state this row reflects; guards writes from the indexer and the reconciler (#83).
-  chainSyncedLedger  Int?
-  lastReconciledAt   DateTime?          @db.Timestamptz(3)
+  /// Resolvability block pinned in question document v2 (source id, URL, measurable, comparator, threshold, deadline, instructions). Null for markets created before #74.
+  resolutionDetails  Json?
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
 
@@ -266,6 +263,24 @@ model Position {
   currentPrice Float?
   size         Float
   pnl          Float          @default(0)
+  /// Outcome shares held, from agent_buy's result (i128 base units, #77/#78). Null: legacy row.
+  sharesRaw    Decimal?       @db.Decimal(39, 0)
+  /// Collateral paid for the shares still held (base units). Reduced pro rata by partial exits.
+  costBasisRaw Decimal?       @db.Decimal(39, 0)
+  feesPaidRaw  Decimal?       @db.Decimal(39, 0)
+  /// Collateral received from confirmed exits, and the PnL they realised.
+  realisedCollateralRaw Decimal @default(0) @db.Decimal(39, 0)
+  realisedPnlRaw        Decimal @default(0) @db.Decimal(39, 0)
+  /// Mark to market (#78): mid price of the held outcome, mid value, value if sold now, and the latter minus cost.
+  markPriceBps       Int?
+  markValueRaw       Decimal?  @db.Decimal(39, 0)
+  liquidationValueRaw Decimal? @db.Decimal(39, 0)
+  unrealisedPnlRaw   Decimal?  @db.Decimal(39, 0)
+  markedAt           DateTime? @db.Timestamptz(3)
+  /// indexed | rpc | estimated
+  valuationSource    String?
+  /// The pool could not absorb a sale of all shares, so liquidation value is 0.
+  illiquid           Boolean   @default(false)
   hedgeMarketId String?
   closedAt     DateTime?
   closeReason  String?
@@ -275,10 +290,72 @@ model Position {
   market      Market  @relation(fields: [marketId], references: [id], onDelete: Cascade)
   hedgeMarket Market? @relation("MarketHedgePositions", fields: [hedgeMarketId], references: [id], onDelete: SetNull)
   trade       Trade   @relation(fields: [tradeId], references: [id], onDelete: Cascade)
+  exits       PositionExit[]
 
   @@index([marketId])
   @@index([status])
   @@map("positions")
+}
+
+/// One attempt to sell shares of a position through treasury.agent_sell (#77).
+model PositionExit {
+  id               String   @id @default(uuid())
+  positionId       String
+  /// live | dry-run
+  mode             String
+  sharesSoldRaw    Decimal  @default(0) @db.Decimal(39, 0)
+  collateralOutRaw Decimal  @db.Decimal(39, 0)
+  maxSharesInRaw   Decimal  @db.Decimal(39, 0)
+  /// collateralOut / sharesSold, for display.
+  effectivePrice   Float?
+  txHash           String?
+  reason           String
+  /// SUBMITTED | CONFIRMED | FAILED | SIMULATED
+  status           String
+  error            String?
+  createdAt        DateTime @default(now())
+
+  position Position @relation(fields: [positionId], references: [id], onDelete: Cascade)
+
+  @@index([positionId])
+  @@map("position_exits")
+}
+
+enum AgentControlScope {
+  ALL
+  MARKET_MAKER
+  TRADER
+}
+
+/// Persistent pause / kill switch shared by every backend instance (#79).
+model AgentControl {
+  scope       AgentControlScope @id
+  paused      Boolean           @default(false)
+  reason      String?
+  /// operator | drawdown | chain_paused | failure_breaker
+  source      String?
+  pausedUntil DateTime?
+  /// Wallet address or 'system'.
+  pausedBy    String?
+  version     Int               @default(0)
+  updatedAt   DateTime          @updatedAt
+
+  @@map("agent_controls")
+}
+
+model AgentControlEvent {
+  id        String            @id @default(uuid())
+  scope     AgentControlScope
+  action    String
+  reason    String?
+  source    String
+  actor     String
+  before    Json
+  after     Json
+  createdAt DateTime          @default(now())
+
+  @@index([scope, createdAt])
+  @@map("agent_control_events")
 }
 
 /// Structured AI reasoning trace for every decision

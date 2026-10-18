@@ -16,10 +16,8 @@ import { isAdminToken } from './middlewares/auth.middleware';
 import { startTraceAuditCron } from './cron/trace-audit.cron';
 import { startTracePublicationCron } from './cron/trace-publication.cron';
 import { startEventListener } from './services/indexer.service';
-import { closeRedis, getRedis } from './lib/redis';
-import { memoryEventBus, redisEventBus } from './lib/event-bus';
-import { startFanout, startLocalFanout } from './lib/fanout';
-import { attachSessionLifecycle, setRealtime, socketAuthMiddleware } from './lib/socket-auth';
+import { closeRedis } from './lib/redis';
+import { setControlEmitter } from './services/agent-controls.service';
 import { health } from './services/health.service';
 
 let stopEventListener: (() => void) | null = null;
@@ -70,26 +68,10 @@ async function bootstrap(): Promise<void> {
     },
   });
 
-  // Authenticated sockets (#94) and cluster-wide broadcast (#93). The Redis
-  // adapter makes one io.emit / io.to(room).emit reach every instance. Redis
-  // being down at boot is not fatal: the adapter and the bus reconnect, and the
-  // indexer keeps events unpublished until the bus accepts them.
-  io.use(socketAuthMiddleware());
-  attachSessionLifecycle(io);
-  setRealtime(io);
-  if (config.EVENT_BUS_ENABLED) {
-    io.adapter(createAdapter(getRedis(), { streamName: 'oracledesk:socket.io', blockTimeInMs: 1000 }));
-  } else {
-    logger.warn('EVENT_BUS_ENABLED=false: in-process event bus; socket events reach this instance only');
-  }
+  setControlEmitter((event, payload) => io.emit(event, payload));
 
-  // 3. Index Stellar events (resumes from the stored ledger cursor). The
-  // indexer publishes to the bus; one elected instance fans out to sockets.
-  const bus = config.EVENT_BUS_ENABLED ? redisEventBus() : memoryEventBus();
-  stopFanout = config.EVENT_BUS_ENABLED ? startFanout(bus, io) : startLocalFanout(bus, io);
-  stopEventListener = startEventListener(async (type, payload, meta) => {
-    await bus.publish({ ...meta, type, payload });
-  });
+  // 3. Index Stellar events (resumes from the stored ledger cursor)
+  stopEventListener = startEventListener((event, payload) => io.emit(event, payload));
 
   // 4. Start cron jobs
   startIngestionCron();
