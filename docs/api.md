@@ -576,6 +576,190 @@ decides an outcome.**
 `409 MARKET_NOT_ON_CHAIN`, `502 CHAIN_READ_FAILED`.
 
 
+### Resolution signers (auth, per-market signer)
+
+A market created with the default `signers` spec (ADR 0001) commits to an
+m-of-n set of resolution signers. External signers use this API to find the
+markets waiting for them, read the evidence, build the `resolver.attest`
+transaction for their own wallet, and watch progress. The API only
+coordinates: the resolver contract still enforces membership, the close time
+and one attestation per signer and outcome. The backend never holds a
+signer's key.
+
+Signers log in with the normal SEP-10 flow (`POST /auth/challenge`,
+`POST /auth/verify`). Whether a wallet may act on a market is decided
+**per market from the spec committed at creation**, not from
+`RESOLUTION_SIGNERS` (which may have changed since). The stored spec is trusted
+only if it re-hashes to `Market.resolutionHash` and to the market's on-chain
+`resolution_hash`. `:marketId` is the backend market UUID.
+
+Every route needs a Bearer token and is rate limited to 30 requests a minute
+per IP.
+
+Flow:
+
+1. `GET /signer/markets`: markets that closed and await you.
+2. `GET /signer/markets/:marketId/evidence`: the pinned question and sources.
+3. `POST /signer/markets/:marketId/attest/prepare` with `{ "outcome": "YES" }`.
+4. Sign the returned `xdr` in your wallet. You are the transaction source, so
+   no Soroban authorization entries are needed.
+5. `POST /signer/markets/:marketId/attest/submit` with `{ "xdr": "<signed>" }`.
+6. `GET /signer/markets/:marketId/progress`.
+
+#### `GET /signer/markets?page&limit`
+Markets whose committed signer set contains your wallet, that have closed, are
+not finalized on the resolver, and that you have not attested to yet. Oldest
+close first.
+
+```json
+{ "marketId": "uuid", "onChainMarketId": "5", "question": "…", "closedAt": "…",
+  "resolutionSource": "FRED:DGS10", "resolverState": "SignersPending",
+  "blockedReason": null, "preparedOutcomes": ["YES"] }
+```
+
+`blockedReason` is `"SPEC_NOT_REVEALED"` while the spec has not been
+registered on the resolver (`resolverState: "Unconfigured"`): every attestation
+would fail until it is, so it is listed rather than hidden.
+
+#### `GET /signer/markets/:marketId/evidence`
+The question document pinned at `metaUri`, returned only if its sha256 equals
+`Market.questionHash`; otherwise `502 IPFS_RETRIEVAL_FAILED`.
+
+```json
+{ "marketId": "uuid", "onChainMarketId": "5",
+  "question": { "version": 1, "question": "…", "closeTime": 1767225600, "resolutionSource": "…" },
+  "questionHash": "64-hex", "questionUri": "ipfs://…",
+  "resolutionSource": "FRED:DGS10", "closeTime": 1767225600,
+  "spec": { "kind": "signers", "signers": ["G…"], "threshold": 2, "disputeWindow": 86400 },
+  "resolutionHash": "64-hex",
+  "evidenceTraces": [{ "id": "uuid", "ipfsCid": "bafy…", "traceHash": "64-hex", "url": "/api/v1/traces/uuid" }] }
+```
+
+`evidenceTraces` are existing `RESOLUTION_ATTESTATION` reasoning traces for the
+market, if any. This API serves evidence that exists; it does not produce it.
+
+#### `POST /signer/markets/:marketId/attest/prepare?allowConflict=true|false`
+Body `{ "outcome": "YES" | "NO" }`. Returns an unsigned, simulated transaction:
+
+```json
+{ "xdr": "AAAA…", "networkPassphrase": "Test SDF Network ; September 2015",
+  "validUntil": "2026-10-18T12:05:00.000Z", "outcome": "YES" }
+```
+
+The transaction has time bounds (about 5 minutes). Preparing the same outcome
+again while it is still valid returns the same transaction. If you already have
+a **confirmed** attestation for the other outcome the API refuses with
+`409 CONFLICTING_ATTESTATION` (the contract would accept it; the API will not
+help a signer equivocate) unless you pass `allowConflict=true`.
+
+#### `POST /signer/markets/:marketId/attest/submit`
+Body `{ "xdr": "<signed envelope, max 20000 chars>" }`. The envelope must hash
+to exactly the prepared transaction, be unexpired and carry your signature.
+The API broadcasts it and waits up to 30 seconds for the ledger.
+
+* `200 { "status": "CONFIRMED", "outcome", "txHash", "ledger" }`
+* `202 { "status": "SUBMITTED", … }`: broadcast, not yet seen in a ledger. Poll
+  `/progress`; preparing again settles it against the network.
+
+#### `GET /signer/markets/:marketId/progress`
+```json
+{ "threshold": 2, "signers": ["G…"], "counts": { "YES": 1, "NO": 0 },
+  "countsSource": "api-observed",
+  "attestedBy": [{ "signer": "G…", "outcome": "YES", "txHash": "64-hex", "ledger": 123 }],
+  "thresholdReached": false, "split": false, "equivocators": [],
+  "proposal": null, "attestationsOutsideApi": false,
+  "resolverState": "SignersPending" }
+```
+
+`counts` come from attestations confirmed through this API only
+(`countsSource: "api-observed"`); the resolver has no per-attestation event or
+count view. `proposal` (`{ "outcome", "proposedAt" }`) comes from the indexed
+`ResolutionProposed` event. Disagreement is surfaced, not hidden: `split` is
+true when both outcomes have votes, `equivocators` lists wallets that attested
+both, and `attestationsOutsideApi` is true when a proposal exists that the
+observed counts cannot explain.
+
+Error codes:
+
+| Status | Code | Meaning |
+|---|---|---|
+| 400 | `VALIDATION_ERROR` | Bad id, outcome, flag or body. |
+| 400 | `INVALID_SIGNED_XDR` | Not a transaction envelope for this network (fee-bump envelopes are refused). |
+| 400 | `SIGNATURE_INVALID` | The envelope is not signed by your wallet over the prepared hash. |
+| 401 | `UNAUTHORIZED` / `INVALID_TOKEN` / `TOKEN_EXPIRED` | See Auth. |
+| 403 | `NOT_A_SIGNER` | Your wallet is not in the market's committed signer set (also when the resolver itself reports `NotSigner`). |
+| 404 | `MARKET_NOT_FOUND` | |
+| 409 | `MARKET_NOT_ON_CHAIN`, `SPEC_NOT_COMMITTED`, `NOT_A_SIGNER_MARKET` | The market has no committed signer spec. |
+| 409 | `SPEC_MISMATCH` | The stored spec does not match `resolutionHash` or the on-chain hash. Nothing is served. |
+| 409 | `SPEC_NOT_REVEALED` | The spec is not registered on the resolver (`MarketNotConfigured`). |
+| 409 | `MARKET_NOT_CLOSED`, `ALREADY_FINALIZED`, `ALREADY_ATTESTED` | The resolver's own checks. |
+| 409 | `CONFLICTING_ATTESTATION` | See `prepare`. |
+| 409 | `ATTESTATION_IN_FLIGHT` | An earlier submission for this outcome has not resolved yet. |
+| 409 | `SIGNER_ACCOUNT_NOT_FOUND` | Your account does not exist on this network. |
+| 409 | `PREPARED_TX_MISMATCH` | The envelope is not one prepared for this market and wallet. |
+| 409 | `PREPARED_TX_FAILED` | That prepared transaction already failed; prepare a new one. |
+| 409 | `STALE_SEQUENCE` | Your account sequence changed after `prepare`; prepare again. |
+| 410 | `PREPARED_TX_EXPIRED` | Past `validUntil`; prepare again. |
+| 422 | `SIMULATION_FAILED` | The resolver rejected the call; `details.contractError` names it. |
+| 422 | `EXTRA_SIGNERS_REQUIRED` | The transaction needs authorization from someone other than you. |
+| 422 | `BROADCAST_REJECTED`, `ATTESTATION_FAILED` | The network rejected or failed the transaction (`details.resultCode`). |
+| 429 | `RATE_LIMITED` | |
+| 502 | `IPFS_RETRIEVAL_FAILED`, `PREPARE_FAILED`, `BROADCAST_FAILED` | Upstream problem. |
+| 503 | `NETWORK_BUSY` | The network asked to retry later. |
+
+### Dispute monitor (auth, admin)
+
+When signers reach a market's threshold the resolver stores a proposal and the
+outcome only becomes final after the dispute window; until then the guardian
+(the resolver admin) can cancel it. The dispute monitor reviews every
+`ResolutionProposed` event independently and alerts guardians. The runbook is in
+[architecture.md](architecture.md#disputes-and-guardian-actions).
+
+`windowRemainingSecs` is measured against the **latest ledger close time**
+(from RPC, else the indexer's newest event), not server time; `meta.ledgerTime`
+shows both and where the ledger time came from (`rpc`, `indexer`, or `server`
+as a last resort).
+
+#### `GET /admin/disputes?status=open|all&page&limit`
+Reviews, newest first (`open` is the default: not finalized or cancelled).
+
+```json
+{ "id": "uuid", "onChainMarketId": "5", "proposedOutcome": "YES",
+  "proposedAt": "1767225600", "windowEndsAt": "1767312000",
+  "windowRemainingSecs": 85800, "windowRemainingServerSecs": 85791,
+  "verdict": "DISAGREE", "independentOutcome": "NO", "confidence": 0.93,
+  "evidence": { "items": [{ "id": "e1", "source": "FRED", "kind": "primary", "cited": true }] },
+  "evidenceHash": "64-hex", "acknowledgedBy": null, "resolvedAs": null }
+```
+
+`verdict` is `PENDING`, `AGREE`, `DISAGREE`, `INSUFFICIENT` or `ERROR`. A
+proposal found only by polling has `proposedAt`/`windowEndsAt` `null` and
+`proposedOutcome: "UNKNOWN"`.
+
+#### `POST /admin/disputes/:id/ack`
+Marks the review acknowledged by the calling admin. Acknowledged reviews stop
+escalating.
+
+#### `POST /admin/disputes/:id/cancel-tx`, `POST /admin/disputes/:id/void-tx`
+Returns an unsigned, simulated `cancel_proposal` / `guardian_void_market`
+transaction whose source is `RESOLVER_GUARDIAN_ADDRESS`, for the guardian's own
+wallet. The backend never signs or sends it.
+
+```json
+{ "xdr": "AAAA…", "networkPassphrase": "…", "validUntil": "…",
+  "guardian": "G…", "kind": "cancel_proposal", "onChainMarketId": "5" }
+```
+
+| Status | Code | Meaning |
+|---|---|---|
+| 400 | `VALIDATION_ERROR` | Bad id or `status`. |
+| 403 | `FORBIDDEN` | Not an admin. |
+| 404 | `DISPUTE_NOT_FOUND` | |
+| 409 | `GUARDIAN_MISMATCH` | Simulation was not authorized: `RESOLVER_GUARDIAN_ADDRESS` is not the resolver admin. |
+| 409 | `NO_PROPOSAL`, `ALREADY_FINALIZED` | Nothing to cancel. |
+| 422 | `SIMULATION_FAILED` | `details.contractError` names the resolver error. |
+| 503 | `GUARDIAN_NOT_CONFIGURED` | `RESOLVER_GUARDIAN_ADDRESS` is not set. |
+
 ### Treasury admin console (auth, admin)
 
 The backend never holds the treasury admin key. It prepares unsigned,
@@ -656,6 +840,86 @@ events; event names are unchanged.
 **Finding:** before this port the backend never emitted either event (there
 is no `io.emit` anywhere in `src/`), so these listeners received nothing. The
 indexer now emits them.
+
+Public events are published by the indexer to an internal event bus and
+delivered by one elected instance, so every client gets each event once
+regardless of which API instance it is connected to. Payloads below are
+unchanged. See [architecture.md](architecture.md#event-bus-and-socket-fan-out-93).
+
+### Connecting and authenticating
+
+Anonymous connections work and receive the public events below. To receive
+private events, send the same JWT the REST API uses in the handshake `auth`
+payload. **Never put it in the query string**: URLs end up in proxy and access
+logs, and a handshake with `query.token` is refused.
+
+```js
+const socket = io(API_ORIGIN, { auth: { token } });
+socket.on('connect_error', (err) => {
+  // err.message and err.data.code: INVALID_TOKEN | TOKEN_EXPIRED | TOKEN_IN_QUERY
+});
+```
+
+The token is verified exactly like `Authorization: Bearer` (HS256 only). An
+invalid or expired token fails the handshake, so a reconnect with a stale
+token does not silently become anonymous; fetch a new token first.
+
+An authenticated socket joins the room `user:<userId>`. Every tab of one user
+receives that user's private events.
+
+**Session lifetime.** A session ends when its token's `exp` passes. The server
+emits `SESSION_EXPIRED` (`{ "reason": "TOKEN_EXPIRED" }`) and removes the
+socket from its user room. The socket stays connected, so public events
+continue. To continue receiving private events without reconnecting, send a
+fresh token for the **same user**:
+
+```js
+socket.emit('reauth', { token: newToken }, (ack) => {
+  // { ok: true, exp } | { ok: false, code: 'INVALID_TOKEN' | 'TOKEN_EXPIRED' | 'USER_MISMATCH' }
+});
+```
+
+`USER_MISMATCH` means the token belongs to a different user than the socket's
+session; open a new connection instead.
+
+**Multiple API instances.** Private events are emitted to the room and reach the
+user's sockets on every instance through the socket.io Redis Streams adapter
+(enabled when `EVENT_BUS_ENABLED=true`, the default). With
+`EVENT_BUS_ENABLED=false` there is no adapter and an event reaches only sockets
+connected to the instance that emitted it.
+
+### Private events
+
+Sent only to the owner's room, never broadcast, and never contain another
+user's data.
+
+#### `PAYMENT_CONFIRMED`
+After a daily-pass payment was verified on-chain and committed. Not sent again
+when the same transaction hash is re-submitted.
+
+```json
+{ "subscriptionId": "uuid", "type": "DAILY_PASS", "txHash": "64-hex",
+  "amountRaw": "5000000", "expiresAt": "2026-10-19T12:00:00.000Z" }
+```
+
+#### `PASS_EXPIRING`
+Once per daily pass, when it has less than an hour left.
+
+```json
+{ "subscriptionId": "uuid", "expiresAt": "2026-10-19T12:00:00.000Z" }
+```
+
+#### `COPY_TRADE_CONFIRMED`
+When a copy trade becomes `EXECUTED`, whether the user confirmed it or the
+indexer or sweep matched the on-chain `Trade` event first. `verified` is true
+when the buy was matched to that event (every path that sets `EXECUTED` does
+this today).
+
+```json
+{ "copyTradeId": "uuid", "txHash": "64-hex", "status": "EXECUTED", "verified": true }
+```
+
+### Public events
 
 ### `TRADE_EXECUTED`
 

@@ -13,8 +13,28 @@ import {
   TransactionReader,
 } from './stellar/tx-inspect';
 import type { DecodedEvent } from './indexer.service';
+import { notifyUser } from '../lib/socket-auth';
 
 export { CopyTradeStatus };
+
+/**
+ * COPY_TRADE_CONFIRMED to the owner's sockets (#94). `verified` is true when
+ * the buy was matched to an on-chain Trade event, which is how every path that
+ * sets EXECUTED works today. Call this after the status update, never inside
+ * a transaction.
+ */
+export function notifyCopyTradeConfirmed(
+  copyTrade: { id: string; userId?: string | null; txHash?: string | null; status: string },
+  verified: boolean,
+): void {
+  if (!copyTrade.userId) return;
+  notifyUser(copyTrade.userId, 'COPY_TRADE_CONFIRMED', {
+    copyTradeId: copyTrade.id,
+    txHash: copyTrade.txHash ?? null,
+    status: copyTrade.status,
+    verified,
+  });
+}
 
 export class CopyTradePendingError extends AppError {
   constructor(message = 'Transaction not confirmed on-chain yet') {
@@ -315,6 +335,7 @@ export async function confirmCopyTrade(
       },
     });
 
+    notifyCopyTradeConfirmed({ ...updated, userId: updated.userId ?? copyTrade.userId }, true);
     return updated;
   } catch (err: any) {
     if (err instanceof CopyTradePendingError) {
@@ -398,7 +419,7 @@ export async function reconcileFromTradeEvent(
     return 'ignored';
   }
 
-  await prisma.copyTrade.update({
+  const confirmed = await prisma.copyTrade.update({
     where: { id: copyTrade.id },
     data: {
       status: CopyTradeStatus.EXECUTED,
@@ -412,6 +433,7 @@ export async function reconcileFromTradeEvent(
       failureCode: null,
     },
   });
+  notifyCopyTradeConfirmed({ ...confirmed, userId: confirmed?.userId ?? copyTrade.userId }, true);
 
   logger.info({ copyTradeId: copyTrade.id, txHash }, 'Reconciled copy trade from on-chain event');
   return 'confirmed';

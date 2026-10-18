@@ -14,6 +14,7 @@ import { verifyUsdcTransfer } from './payment-verification.service';
 import { AppError } from '../middlewares/error.middleware';
 import type { SubscriptionAccess } from '../types';
 import dayjs from 'dayjs';
+import { notifyUser } from '../lib/socket-auth';
 
 /** Daily pass price in 7-decimal USDC base units (DAILY_PASS_PRICE_RAW). */
 export const DAILY_PASS_PRICE_RAW = BigInt(config.DAILY_PASS_PRICE_RAW);
@@ -170,6 +171,15 @@ export async function recordPayment(params: {
   }
 
   logger.info({ subscriptionId: subscription.id, type, userId, amountRaw: transfer.amount.toString() }, 'Subscription created');
+  // Only after the transaction committed: a rolled-back payment must not be announced.
+  // The idempotent re-submit paths above return earlier and never reach this.
+  notifyUser(userId, 'PAYMENT_CONFIRMED', {
+    subscriptionId: subscription.id,
+    type,
+    txHash,
+    amountRaw: transfer.amount.toString(),
+    expiresAt: subscription.expiresAt,
+  });
   return subscription;
 }
 
@@ -246,6 +256,38 @@ export async function expireStaleSubscriptions(): Promise<number> {
 
   if (count > 0) logger.info({ count }, 'Expired stale subscriptions');
   return count;
+}
+
+/**
+ * Emits PASS_EXPIRING once per daily pass that expires within `windowMins`.
+ * The pass is claimed with a conditional update before emitting, so concurrent
+ * instances and repeated runs notify at most once (#94).
+ */
+export async function notifyExpiringPasses(windowMins = 60, now = new Date()): Promise<number> {
+  const horizon = new Date(now.getTime() + windowMins * 60_000);
+  const passes = await prisma.subscription.findMany({
+    where: {
+      status: SubscriptionStatus.ACTIVE,
+      type: SubscriptionType.DAILY_PASS,
+      expiresAt: { gt: now, lte: horizon },
+      expiryNotifiedAt: null,
+    },
+    select: { id: true, userId: true, expiresAt: true },
+    take: 500,
+  });
+
+  let notified = 0;
+  for (const pass of passes) {
+    const claim = await prisma.subscription.updateMany({
+      where: { id: pass.id, expiryNotifiedAt: null },
+      data: { expiryNotifiedAt: now },
+    });
+    if (claim.count !== 1) continue;
+    notifyUser(pass.userId, 'PASS_EXPIRING', { subscriptionId: pass.id, expiresAt: pass.expiresAt });
+    notified++;
+  }
+  if (notified > 0) logger.info({ notified }, 'Notified users of expiring passes');
+  return notified;
 }
 
 export async function upsertSpendingAllowance(params: {
