@@ -25,4 +25,9 @@ export const recordSchema = z.object({
   txHash: z.string().regex(/^[0-9a-fA-F]{64}$/, 'must be a 64-character hex transaction hash'),
 });
 
+export const reconcileRunSchema = z.object({
+  dryRun: z.boolean().optional(),
+  maxMarkets: z.number().int().min(1).max(5000).optional(),
+});
+
 export type AdminOpInput = z.infer<typeof adminOpSchema>;

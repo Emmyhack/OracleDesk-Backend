@@ -11,14 +11,24 @@ import { config } from '../config';
 import { prisma } from '../lib/prisma';
 import { logger } from '../lib/logger';
 import { toContractCategory, toContractCategoryValue } from '../lib/categories';
-import { USDC_UNIT, usdcFromNumber } from '../lib/amounts';
+import { usdcFromNumber } from '../lib/amounts';
 import { resolutionHash, type ResolutionSpecJson } from '../lib/resolution-spec';
-import { agentCreateMarket, type WriteResult } from './chain.service';
+import { writeAgentLog } from '../lib/agent-log';
+import {
+  agentCreateMarket,
+  marketCoreConfig,
+  treasuryAvailableCapital,
+  treasuryConfig,
+  treasuryDailyUsage,
+  type WriteResult,
+} from './chain.service';
+import { ChainError } from './stellar/errors';
+import { MIN_SEED_RAW, initialYesBps, decideSeed, type SeedDecision, type SeedPolicyConfig } from './seed-policy.service';
 import { agentSigner } from './stellar/clients';
 import { pinJson } from './ipfs.service';
 
-/** market-core MIN_SEED is 100 USDC. */
-export const MIN_SEED_RAW = 100n * USDC_UNIT;
+// The seed policy owns both (it must stay free of config and database imports).
+export { MIN_SEED_RAW, initialYesBps };
 
 export function defaultResolutionSpec(): ResolutionSpecJson {
   const signers = config.RESOLUTION_SIGNERS.length > 0
@@ -46,20 +56,132 @@ export function questionDocument(market: Market, resolutionHashHex: string) {
   };
 }
 
-export function initialYesBps(probability: number): number {
-  return Math.min(9900, Math.max(100, Math.round(probability * 10_000)));
+/** What the seed policy decided for a market, passed to createMarketOnChain. */
+export interface SeedPlan {
+  seedRaw: bigint;
+  initialYesBps: number;
 }
 
+export interface SeedPlanInput {
+  category: Market['category'];
+  closeTime: Date;
+  /** The model's initial YES probability and its confidence interval. */
+  p: number;
+  ci: { lower: number; upper: number };
+  llmSuggestedSeedUsdc: number;
+}
+
+export function seedPolicyConfig(feeBps: number): SeedPolicyConfig {
+  return {
+    lpLossBudgetRaw: config.LP_LOSS_BUDGET_RAW,
+    mmDailyShareBps: config.MM_DAILY_SHARE_BPS,
+    maxSeedFractionBps: config.MAX_SEED_FRACTION_BPS,
+    maxUnresolvedSeededRaw: config.MAX_UNRESOLVED_SEEDED_RAW,
+    categoryBaseUsdc: config.SEED_CATEGORY_BASE_USDC,
+    feeBps,
+  };
+}
+
+// market-core's default_fee_bps is read once and cached: it is fixed at deployment.
+let cachedFeeBps: number | null = null;
+async function defaultFeeBps(): Promise<number> {
+  if (cachedFeeBps === null) cachedFeeBps = Number((await marketCoreConfig()).default_fee_bps);
+  return cachedFeeBps;
+}
+
+const DAY_SECS = 24n * 60n * 60n;
+
+/**
+ * Reads the treasury's risk config, its rolling daily usage and available
+ * capital, plus what the backend already has locked in unresolved seeds. The
+ * treasury's daily window starts at the first spend after the previous one
+ * expired, so an expired window counts as zero usage.
+ */
+export async function readSeedBudget(now: Date) {
+  const [risk, usage, availableRaw, feeBps] = await Promise.all([
+    treasuryConfig(),
+    treasuryDailyUsage(),
+    treasuryAvailableCapital(),
+    defaultFeeBps(),
+  ]);
+  const nowSecs = BigInt(Math.floor(now.getTime() / 1000));
+  const windowLive = usage.day_start > 0n && nowSecs < usage.day_start + DAY_SECS;
+  const windowStart = windowLive ? new Date(Number(usage.day_start) * 1000) : now;
+
+  const [unresolved, seededInWindow] = await Promise.all([
+    prisma.market.findMany({
+      where: { status: { in: ['ACTIVE', 'PENDING', 'RESOLVING'] }, seedAmountRaw: { not: null } },
+      select: { seedAmountRaw: true },
+    }),
+    windowLive
+      ? prisma.market.findMany({
+          where: { onChainMarketId: { not: null }, seedAmountRaw: { not: null }, createdAt: { gte: windowStart } },
+          select: { seedAmountRaw: true },
+        })
+      : Promise.resolve([]),
+  ]);
+  const sum = (rows: Array<{ seedAmountRaw: string | null }>) => rows.reduce((acc, r) => acc + BigInt(r.seedAmountRaw ?? '0'), 0n);
+
+  return {
+    feeBps,
+    unresolvedSeededRaw: sum(unresolved),
+    budget: {
+      availableRaw,
+      maxTradeRaw: risk.max_trade,
+      maxMarketRaw: risk.max_market,
+      maxDailyRaw: risk.max_daily,
+      dailyUsedRaw: windowLive ? usage.amount : 0n,
+      mmSeededTodayRaw: sum(seededInWindow),
+    },
+  };
+}
+
+/**
+ * Decides the seed and opening price for a proposal before anything is
+ * pinned or written. A budget read failure fails closed: no seed, no market.
+ */
+export async function planMarketCreation(input: SeedPlanInput, now: Date = new Date()): Promise<SeedDecision> {
+  let read;
+  try {
+    read = await readSeedBudget(now);
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : err }, 'Seed policy: treasury budget read failed; skipping creation');
+    return { action: 'skip', reason: 'INSUFFICIENT_CAPITAL', inputs: { error: err instanceof Error ? err.message : String(err) } };
+  }
+  return decideSeed(
+    {
+      category: input.category,
+      closeTime: input.closeTime,
+      now,
+      p: input.p,
+      ci: input.ci,
+      llmSuggestedSeedUsdc: input.llmSuggestedSeedUsdc,
+      budget: read.budget,
+      unresolvedSeededRaw: read.unresolvedSeededRaw,
+    },
+    seedPolicyConfig(read.feeBps),
+  );
+}
+
+const CAP_RACE_ERRORS = new Set(['TradeCapExceeded', 'MarketCapExceeded', 'DailyCapExceeded']);
+
+/**
+ * Creates the market on-chain. With a `plan` (the normal path) the seed and
+ * opening price come from the seed policy. Without one (admin tooling) the old
+ * computation applies: the market's minimumLiquidity, floored at MIN_SEED.
+ */
 export async function createMarketOnChain(
   market: Market,
   spec: ResolutionSpecJson = defaultResolutionSpec(),
+  plan?: SeedPlan,
 ): Promise<WriteResult<bigint>> {
   const resolutionHashBytes = resolutionHash(spec);
   const resolutionHashHex = resolutionHashBytes.toString('hex');
   const pinned = await pinJson(questionDocument(market, resolutionHashHex), `oracledesk-market-${market.id}`);
 
   const requested = usdcFromNumber(market.minimumLiquidity);
-  const seed = requested < MIN_SEED_RAW ? MIN_SEED_RAW : requested;
+  const seed = plan ? plan.seedRaw : requested < MIN_SEED_RAW ? MIN_SEED_RAW : requested;
+  const openBps = plan ? plan.initialYesBps : initialYesBps(market.initialYesProb);
 
   await prisma.market.update({
     where: { id: market.id },
@@ -72,15 +194,28 @@ export async function createMarketOnChain(
     },
   });
 
-  const result = await agentCreateMarket({
-    question_hash: Buffer.from(pinned.hash, 'hex'),
-    resolution_hash: resolutionHashBytes,
-    meta_uri: `ipfs://${pinned.cid}`,
-    category: toContractCategoryValue(market.category),
-    close_time: BigInt(Math.floor(market.expiryTimestamp.getTime() / 1000)),
-    seed_amount: seed,
-    initial_yes_bps: initialYesBps(market.initialYesProb),
-  });
+  let result: WriteResult<bigint>;
+  try {
+    result = await agentCreateMarket({
+      question_hash: Buffer.from(pinned.hash, 'hex'),
+      resolution_hash: resolutionHashBytes,
+      meta_uri: `ipfs://${pinned.cid}`,
+      category: toContractCategoryValue(market.category),
+      close_time: BigInt(Math.floor(market.expiryTimestamp.getTime() / 1000)),
+      seed_amount: seed,
+      initial_yes_bps: openBps,
+    });
+  } catch (err) {
+    // The trader may have spent the headroom between the budget read and now.
+    // The market stays PENDING and is visible to the reconciler.
+    if (err instanceof ChainError && err.contractError && CAP_RACE_ERRORS.has(err.contractError)) {
+      await writeAgentLog({
+        agentType: 'MARKET_MAKER', level: 'WARN', action: 'SEED_CAP_RACE', marketId: market.id,
+        data: { contractError: err.contractError, seedRaw: seed.toString() },
+      }).catch(() => undefined);
+    }
+    throw err;
+  }
 
   if (result.mode === 'live') {
     await prisma.market.update({

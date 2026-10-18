@@ -311,13 +311,16 @@ export function generateExpiryDate(category: string): Date {
 /**
  * Persists a validated MarketProposal to the database.
  */
+/** The proposal's category as a MarketCategory (MACRO when the model invents one). */
+export function normalizeCategory(raw: unknown): MarketCategory {
+  const upper = String(raw).toUpperCase();
+  return Object.values(MarketCategory).includes(upper as MarketCategory) ? (upper as MarketCategory) : MarketCategory.MACRO;
+}
+
 export async function createMarketFromProposal(
   proposal: MarketProposal,
 ): Promise<Market> {
-  const upperCategory = String(proposal.category).toUpperCase();
-  const finalCategory = Object.values(MarketCategory).includes(upperCategory as MarketCategory)
-    ? (upperCategory as MarketCategory)
-    : MarketCategory.MACRO;
+  const finalCategory = normalizeCategory(proposal.category);
 
   const market = await prisma.market.create({
     data: {

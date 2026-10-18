@@ -45,6 +45,8 @@ export async function generateReasoningTrace(
     confidenceInterval:  ci,
     betFraction:         input.betFraction,
     betSizeUsdc:         input.betSizeUsdc,
+    correlation:         input.correlation,
+    seedPolicy:          input.seedPolicy,
     hedgeConditions:     hedgeConditions.conditions,
     // Optional, explicitly null-able provenance so payload hashing is stable.
     llm:                 hedgeConditions.provenance,

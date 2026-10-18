@@ -23,6 +23,7 @@ import { readClients, rpcServer } from './stellar/clients';
 import { printable } from './chain.service';
 import { priceYesBps } from '../generated/fpmm';
 import { withTimeout, deadline } from '../lib/resilience';
+import { applyMarketFinality } from './market-finality';
 
 export type EventSource = Pick<rpc.Server, 'getEvents' | 'getHealth'>;
 
@@ -110,7 +111,12 @@ async function applySideEffects(event: DecodedEvent, emit: IndexerDeps['emit']):
     const yesBps = Number(priceYesBps(BigInt(p.reserve_yes), BigInt(p.reserve_no)));
     const market = await prisma.market.findUnique({ where: { onChainMarketId }, select: { id: true, question: true } });
     if (market) {
-      await prisma.market.update({ where: { id: market.id }, data: { currentYesProb: yesBps / 10_000 } });
+      // Only a newer (or same-ledger) observation may move the price: the
+      // reconciler may already have written a later one.
+      await prisma.market.updateMany({
+        where: { id: market.id, OR: [{ chainSyncedLedger: null }, { chainSyncedLedger: { lte: event.ledger } }] },
+        data: { currentYesProb: yesBps / 10_000, chainSyncedLedger: event.ledger },
+      });
     }
     if (Boolean(p.is_buy)) {
       try {
@@ -144,20 +150,7 @@ async function applySideEffects(event: DecodedEvent, emit: IndexerDeps['emit']):
     const outcome = outcomeTag(p.outcome); // null: the market was voided
     const market = await prisma.market.findUnique({ where: { onChainMarketId }, select: { id: true } });
     if (!market) return;
-    await prisma.$transaction([
-      prisma.market.update({
-        where: { id: market.id },
-        data: {
-          status: outcome ? 'RESOLVED' : 'CANCELLED',
-          resolvedOutcome: outcome ? outcome === 'Yes' : null,
-          resolvedAt: new Date(event.ledgerClosedAt),
-        },
-      }),
-      prisma.position.updateMany({
-        where: { marketId: market.id, status: 'OPEN' },
-        data: { status: 'CLOSED', closedAt: new Date(event.ledgerClosedAt), closeReason: outcome ? `${outcome.toUpperCase()}_RESOLVED` : 'VOIDED' },
-      }),
-    ]);
+    await applyMarketFinality(market.id, outcome, new Date(event.ledgerClosedAt), event.ledger);
     return;
   }
 

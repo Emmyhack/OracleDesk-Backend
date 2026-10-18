@@ -46,8 +46,20 @@ async function setup(events = FIXTURES.map(toEventResponse)) {
   const byChainId = (id: bigint) => [...db.markets.values()].find((m) => m.onChainMarketId === id) ?? null;
   (prisma.market.findUnique as any) = async ({ where }: any) => byChainId(where.onChainMarketId);
   (prisma.market.update as any) = async ({ where, data }: any) => Object.assign(db.markets.get(where.id), data);
+  // Guarded writes (#83): where.id, status.notIn and the chainSyncedLedger OR-clause.
+  (prisma.market.updateMany as any) = async ({ where, data }: any) => {
+    const m = db.markets.get(where.id);
+    if (!m) return { count: 0 };
+    if (where.status?.notIn?.includes(m.status)) return { count: 0 };
+    const ok = (where.OR ?? []).some((c: any) =>
+      c.chainSyncedLedger === null ? (m.chainSyncedLedger ?? null) === null
+        : (m.chainSyncedLedger ?? -1) <= c.chainSyncedLedger.lte);
+    if (where.OR && !ok) return { count: 0 };
+    Object.assign(m, data);
+    return { count: 1 };
+  };
   (prisma.position.updateMany as any) = async () => { db.closedPositions++; return { count: 1 }; };
-  (prisma.$transaction as any) = async (ops: Promise<unknown>[]) => Promise.all(ops);
+  (prisma.$transaction as any) = async (arg: any) => (typeof arg === 'function' ? arg(prisma) : Promise.all(arg));
   (prisma.reasoningTrace.findFirst as any) = async ({ where }: any) => {
     return db.traces.find((t) => {
       if (t.traceHash !== where.traceHash) return false;
@@ -113,6 +125,8 @@ test('indexes trades, resolutions and traces from recorded events', async () => 
   assert.equal(m0.status, 'RESOLVED');
   assert.equal(m0.resolvedOutcome, true);
   assert.equal(db.closedPositions, 1, 'only the known market closes positions');
+  // #83: both side effects record the ledger they reflect.
+  assert.ok(m0.chainSyncedLedger > 0, 'MarketResolved sets chainSyncedLedger');
 
   const published = emitted.find(([e]) => e === 'REASONING_PUBLISHED')![1];
   assert.equal(published.onChainTraceId, '0');
@@ -185,4 +199,15 @@ test('Trade event confirms a CONFIRMING copy trade with matching txHash', async 
   await backfillEvents(undefined, { source, emit });
   assert.equal(db.copyTrades[0].status, 'EXECUTED');
   assert.equal(db.copyTrades[0].collateralRaw, '100000000');
+});
+
+test('an older Trade event does not overwrite a newer observation, and a resolved market stays resolved (#83)', async () => {
+  const { db, source, emit, backfillEvents } = await setup();
+  const m0 = db.markets.get('m0');
+  m0.chainSyncedLedger = 9_999_999; // the reconciler already observed a much newer ledger
+  m0.currentYesProb = 0.123;
+  await backfillEvents(undefined, { source, emit });
+  assert.equal(m0.currentYesProb, 0.123, 'stale trade price is skipped');
+  assert.equal(m0.status, 'ACTIVE', 'the resolution is also older than the observation and is a no-op');
+  assert.equal(db.closedPositions, 0);
 });

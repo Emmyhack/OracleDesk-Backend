@@ -4,13 +4,16 @@ import {
   addOperationSignature,
   cancelTreasuryOperation,
   createOperation,
+  getReconciliationRun,
   getSystemStatus,
   getTraceAuditSummary,
   getTreasury,
   getTreasuryOperation,
+  listReconciliationRuns,
   listTreasuryOperations,
   recordTreasuryOperation,
   submitTreasuryOperation,
+  triggerReconciliationRun,
   triggerTraceAuditRun,
 } from '../controllers/admin.controller';
 
@@ -29,5 +32,8 @@ router.post('/treasury/operations/:id/cancel', cancelTreasuryOperation);
 router.get('/status', getSystemStatus);
 router.get('/trace-audit', getTraceAuditSummary);
 router.post('/trace-audit/run', triggerTraceAuditRun);
+router.get('/reconciliation/runs', listReconciliationRuns);
+router.get('/reconciliation/runs/:id', getReconciliationRun);
+router.post('/reconciliation/run', triggerReconciliationRun);
 
 export default router;

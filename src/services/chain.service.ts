@@ -73,12 +73,12 @@ export function simulatedValue<T>(contract: ContractKey, method: string, tx: Ass
   return raw as T;
 }
 
-async function read<T>(
+async function readTx<T>(
   contract: ContractKey,
   method: string,
   call: () => Promise<AssembledTransaction<unknown>>,
   signal?: AbortSignal,
-): Promise<T> {
+): Promise<{ value: T; tx: AssembledTransaction<unknown> }> {
   return withTimeout(
     'rpc-read',
     async () => {
@@ -95,10 +95,19 @@ async function read<T>(
           cause: msg,
         });
       }
-      return simulatedValue<T>(contract, method, tx);
+      return { value: simulatedValue<T>(contract, method, tx), tx };
     },
     { signal },
   );
+}
+
+async function read<T>(
+  contract: ContractKey,
+  method: string,
+  call: () => Promise<AssembledTransaction<unknown>>,
+  signal?: AbortSignal,
+): Promise<T> {
+  return (await readTx<T>(contract, method, call, signal)).value;
 }
 
 async function write<T>(
@@ -181,6 +190,25 @@ export const marketCount = (signal?: AbortSignal) =>
 
 export const getOnChainMarket = (marketId: bigint, signal?: AbortSignal) =>
   read<OnChainMarket>('marketCore', 'get_market', async () => readClients.marketCore().get_market({ market_id: marketId }), signal);
+
+/**
+ * get_market plus the ledger the simulation ran against (`latestLedger`), so a
+ * caller can tell how fresh the observation is (#83).
+ */
+export async function getOnChainMarketWithLedger(
+  marketId: bigint,
+  signal?: AbortSignal,
+): Promise<{ market: OnChainMarket; ledger: number }> {
+  const { value, tx } = await readTx<OnChainMarket>(
+    'marketCore',
+    'get_market',
+    async () => readClients.marketCore().get_market({ market_id: marketId }),
+    signal,
+  );
+  const ledger = Number((tx.simulation as { latestLedger?: number | string } | undefined)?.latestLedger);
+  if (!Number.isFinite(ledger)) throw new ChainError('get_market simulation returned no ledger', null, { method: 'get_market' });
+  return { market: value, ledger };
+}
 
 export const getPrice = (marketId: bigint, outcome: Outcome, signal?: AbortSignal) =>
   read<number>('marketCore', 'get_price', async () => readClients.marketCore().get_price({ market_id: marketId, outcome }), signal);

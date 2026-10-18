@@ -24,7 +24,10 @@ declare global {
 function decode(req: Request): { user?: JwtPayload; error?: 'missing' | 'expired' | 'invalid' } {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith('Bearer ')) return { error: 'missing' };
-  const token = authHeader.slice(7);
+  return verifyBearer(authHeader.slice(7));
+}
+
+function verifyBearer(token: string): { user?: JwtPayload; error?: 'missing' | 'expired' | 'invalid' } {
   try {
     return { user: jwt.verify(token, secret('JWT_SECRET')) as JwtPayload };
   } catch (err) {
@@ -84,6 +87,13 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction): v
     return;
   }
   next();
+}
+
+/** True when `token` is a valid JWT for an admin address (used for the socket admin room). */
+export function isAdminToken(token: unknown): boolean {
+  if (typeof token !== 'string') return false;
+  const { user } = verifyBearer(token);
+  return Boolean(user && config.ADMIN_ADDRESSES.includes(user.walletAddress));
 }
 
 /**

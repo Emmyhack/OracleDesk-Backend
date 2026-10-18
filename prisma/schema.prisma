@@ -183,6 +183,11 @@ model Market {
   resolutionHash     String?
   /// Revealed preimage of resolutionHash, kept so it can be registered with the resolver.
   resolutionSpec     Json?
+  /// Seed policy inputs, bounds, binding constraint and expected LP loss (#82).
+  seedPolicy         Json?
+  /// Highest ledger whose chain state this row reflects; guards writes from the indexer and the reconciler (#83).
+  chainSyncedLedger  Int?
+  lastReconciledAt   DateTime?          @db.Timestamptz(3)
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
 
@@ -200,6 +205,7 @@ model Market {
   @@index([expiryTimestamp])
   @@index([settlementCurrency])
   @@index([resolvedAt])
+  @@index([lastReconciledAt])
   @@map("markets")
 }
 
@@ -692,4 +698,51 @@ model IdempotencyKey {
   @@unique([scope, method, route, key])
   @@index([expiresAt])
   @@map("idempotency_keys")
+}
+
+
+/// Empirical pairwise market correlations, recomputed on a schedule (#80).
+model CorrelationSnapshot {
+  id           String   @id @default(uuid())
+  computedAt   DateTime @default(now()) @db.Timestamptz(3)
+  gridStepSecs Int
+  windowDays   Int
+  /// [{ a, b, rho, n, method: 'empirical'|'prior', sample, prior, delta }], backend market ids with a < b.
+  pairs        Json
+
+  @@index([computedAt])
+  @@map("correlation_snapshots")
+}
+
+/// One drift finding from the market lifecycle reconciler (#83).
+model MarketDriftReport {
+  id              String   @id @default(uuid())
+  runId           String
+  marketId        String
+  onChainMarketId BigInt
+  driftClass      String
+  dbValue         Json
+  chainValue      Json
+  /// REPAIRED | REPORTED | DEFERRED | SKIPPED_NEWER
+  action          String
+  observedLedger  Int
+  createdAt       DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([runId])
+  @@index([driftClass, createdAt])
+  @@map("market_drift_reports")
+}
+
+model ReconcileRun {
+  id         String    @id @default(uuid())
+  startedAt  DateTime  @default(now()) @db.Timestamptz(3)
+  finishedAt DateTime?           @db.Timestamptz(3)
+  scanned    Int       @default(0)
+  repaired   Int       @default(0)
+  reported   Int       @default(0)
+  deferred   Int       @default(0)
+  rpcCalls   Int       @default(0)
+  error      String?
+
+  @@map("reconcile_runs")
 }

@@ -25,6 +25,31 @@ const optionalAddress = z
     'must be a G… account or C… contract address',
   );
 
+/** Base units (7-decimal USDC) as a decimal string, parsed to a bigint. */
+const rawUsdc = (fallback: string) =>
+  z.string().default(fallback).refine((v) => /^\d+$/.test(v), 'must be an integer in 7-decimal base units').transform((v) => BigInt(v));
+
+const SEED_CATEGORIES = ['FED', 'ECB', 'MACRO', 'ELECTION', 'GEOPOLITICAL', 'CRYPTO', 'POLITICS', 'SPORTS', 'ENTERTAINMENT'] as const;
+
+/** JSON map of market category → base seed in USDC. */
+const seedCategoryBase = z
+  .string()
+  .default(JSON.stringify({ FED: 300, ECB: 250, MACRO: 200, CRYPTO: 200, ELECTION: 200, GEOPOLITICAL: 150, POLITICS: 150, SPORTS: 120, ENTERTAINMENT: 100 }))
+  .transform((v, ctx) => {
+    try {
+      return JSON.parse(v) as unknown;
+    } catch {
+      ctx.addIssue({ code: 'custom', message: 'must be a JSON object of category → USDC' });
+      return z.NEVER;
+    }
+  })
+  .pipe(
+    z.record(z.string(), z.number().positive()).refine(
+      (m) => Object.keys(m).every((k) => (SEED_CATEGORIES as readonly string[]).includes(k)),
+      `keys must be market categories: ${SEED_CATEGORIES.join(', ')}`,
+    ),
+  );
+
 export const PROBE_NAMES = ['database', 'redis', 'rpc', 'indexer'] as const;
 
 const probeName = z
@@ -230,6 +255,40 @@ const envSchema = z
       .default('600000')
       .transform(Number)
       .refine((n) => Number.isInteger(n) && n >= 10_000, 'must be an integer >= 10000'),
+
+    // ── Market seed policy (Issue #82) ────────────────────────────────────
+    // Per-market cap on the expected LP loss to an informed trader (7-decimal base units).
+    LP_LOSS_BUDGET_RAW: rawUsdc('250000000'),
+    // Share of the treasury's max_daily the market maker may use for seeds.
+    MM_DAILY_SHARE_BPS: z.string().default('4000').transform(Number).pipe(z.number().int().min(0).max(10000)),
+    // Largest seed as a share of the treasury's available capital.
+    MAX_SEED_FRACTION_BPS: z.string().default('500').transform(Number).pipe(z.number().int().min(1).max(10000)),
+    // Cap on the seed capital sitting in unresolved markets.
+    MAX_UNRESOLVED_SEEDED_RAW: rawUsdc('10000000000'),
+    SEED_CATEGORY_BASE_USDC: seedCategoryBase,
+
+    // ── Market correlations (Issue #80) ───────────────────────────────────
+    CORRELATION_GRID_SECS: z.string().default('3600').transform(Number)
+      .pipe(z.number().int().min(60)),
+    CORRELATION_WINDOW_DAYS: z.string().default('14').transform(Number)
+      .pipe(z.number().int().min(1).max(90)),
+    CORRELATION_MIN_OVERLAP: z.string().default('12').transform(Number)
+      .pipe(z.number().int().min(2)),
+    CORRELATION_PRIOR_KAPPA: z.string().default('20').transform(Number)
+      .pipe(z.number().positive()),
+
+    // ── Market lifecycle reconciler (Issue #83) ───────────────────────────
+    RECONCILE_ENABLED: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
+    RECONCILE_MAX_MARKETS: z.string().default('200').transform(Number)
+      .pipe(z.number().int().min(1).max(5000)),
+    RECONCILE_CONCURRENCY: z.string().default('4').transform(Number)
+      .pipe(z.number().int().min(1).max(32)),
+    RECONCILE_MAX_RPC_CALLS: z.string().default('400').transform(Number)
+      .pipe(z.number().int().min(1)),
+    // How far (in ledgers) the indexer may trail an observation before
+    // resolution findings are deferred to it.
+    RECONCILE_INDEXER_LAG_LEDGERS: z.string().default('20').transform(Number)
+      .pipe(z.number().int().min(0)),
 
     // ── Copy Trading (Issue #151) ─────────────────────────────────────────
     COPY_TRADE_TTL_MINUTES: z.string().default('30').transform(Number),

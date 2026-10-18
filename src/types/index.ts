@@ -121,6 +121,10 @@ export interface TraceInput {
   betSizeUsdc?: number;
   hedgeConditions?: string[];
   agentWallet?: string;
+  /** Correlation inputs that sized the trade, so subscribers can see why a size was cut (#80). */
+  correlation?: { pairs: CorrelationPair[]; method: 'snapshot' | 'matrix'; snapshotId: string | null };
+  /** Seed policy record for market-creation traces (#82). */
+  seedPolicy?: Record<string, unknown>;
 }
 
 export interface TraceVerification {
@@ -153,6 +157,8 @@ export interface CorrelationPair {
   marketIdB: string;
   correlationScore: number;   // -1 to +1
   relationship: 'POSITIVE' | 'NEGATIVE' | 'NONE';
+  /** Where the score came from: an empirical snapshot estimate, the snapshot's prior fallback, or the category matrix. */
+  method?: 'empirical' | 'prior' | 'matrix';
 }
 
 export interface CorrelationCheckResult {
@@ -160,6 +166,9 @@ export interface CorrelationCheckResult {
   correlatedPairs: CorrelationPair[];
   adjustedPositionSize: number;
   totalCorrelatedExposure: number;
+  /** 'snapshot' when at least one pair used a stored snapshot, otherwise 'matrix'. */
+  method?: 'snapshot' | 'matrix';
+  snapshotId?: string | null;
 }
 
 // ─── Hedge types ───

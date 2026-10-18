@@ -108,6 +108,65 @@ Outcomes are decided on-chain by the resolver contract. The backend only reads `
 - The ledger cursor lives in `indexer_cursors`. If it is older than RPC retention (about 7 days on testnet), the indexer warns and resumes from the oldest retained ledger; anything in between is lost to it.
 - New `Trade` and `TracePublished` events are pushed to clients over socket.io as `TRADE_EXECUTED` and `REASONING_PUBLISHED`.
 
+The indexer and the reconciler (below) both write `markets.chainSyncedLedger`, the ledger a row's chain-derived state reflects. A price or status write applies only when it is not older than that, so the two can never overwrite each other with stale information, and `applyMarketFinality` (`market-finality.ts`) is the one place a market becomes `RESOLVED`/`CANCELLED` and its positions close.
+
+## Market lifecycle reconciler (#83)
+
+`market-reconciler.service.ts` runs every ten minutes (`3,13,…,53`, `RECONCILE_ENABLED`) on one instance (a Postgres advisory lock held by a transaction, so a pooled connection cannot leak it). It reads `market_core.get_market` with the ledger the simulation ran against, for linked markets in bounded batches (`RECONCILE_MAX_MARKETS`, `RECONCILE_CONCURRENCY`, `RECONCILE_MAX_RPC_CALLS`; open markets first, then never/least-recently reconciled), and classifies each difference with the pure `classifyDrift`:
+
+| Class | Action |
+| --- | --- |
+| `MISSED_RESOLUTION` / `MISSED_VOID` | repaired through `applyMarketFinality`, `resolvedAt` = observation time |
+| `CLOSED_BUT_ACTIVE` | `ACTIVE → RESOLVING` (close_time is ledger time: compared with the observation ledger's close time plus 60 s grace) |
+| `PRICE_STALE` (> 0.5 pp) | `currentYesProb` from the reserves |
+| `CLOSE_TIME_MISMATCH` | `expiryTimestamp` from chain, unless the row also has a hash mismatch |
+| `HASH_MISMATCH`, `STATUS_REGRESSION`, `NOT_FOUND_ON_CHAIN` | reported only: `MARKET_INTEGRITY_DRIFT` agent log at `ERROR` and a `MARKET_DRIFT` socket event to admins |
+
+Resolution-class findings are deferred while the indexer cursor trails the observation by more than `RECONCILE_INDEXER_LAG_LEDGERS` (the indexer may be about to process the event); after three deferrals in a row they are repaired and flagged `forced`. RPC errors other than `MarketNotFound` are not drift: they are counted and the market is retried first next run. The reference ledger's close time comes from `getLedgers`; if that fails the newest indexed event's time (or the wall clock) stands in. Runs and findings persist in `reconcile_runs` / `market_drift_reports` and are readable through the admin endpoints in [api.md](api.md).
+
+## Market correlations (#80)
+
+The trader caps correlated exposure before opening a position (5% of the bankroll, pairs with |ρ| ≥ 0.60). The correlation behind that comes from `CorrelationSnapshot`, recomputed by the monitor cron at `2,17,32,47` (just before the trader) by `computeCorrelationSnapshot`; the trading path only reads the latest snapshot (cached five minutes) and never computes inline.
+
+- **Series.** `price-history.service.ts` rebuilds each market's YES price from stored `MarketCreated`/`Trade`/`MarketResolved` events (`priceYesBps` on the reserves after each trade, BigInt throughout), collapses same-ledger trades to the last one and resamples onto a `CORRELATION_GRID_SECS` grid with last-observation-carried-forward; the series is `null` before the first point and from the resolution on. An index on `((params->>'market_id')::numeric, ledger)` serves the per-market query.
+- **Estimate.** Logit-price changes (prices clamped to the contract's 1%–99%) over intervals where **both** markets had an external trade (carried-forward values would give zero returns and bias ρ toward 0; trades by the treasury count for price levels but not as activity, since the agent's own trades would make markets it bought together look correlated). Fewer than `CORRELATION_MIN_OVERLAP` such intervals, or zero variance, uses the category prior (`method: "prior"`). Otherwise `ρ̂ = (1 − δ)·ρ_sample + δ·ρ_prior`, `δ = clamp(κ/(κ+n), 0.1, 1)`, κ = `CORRELATION_PRIOR_KAPPA`. This is Ledoit–Wolf-inspired fixed-target shrinkage, not the full optimal-intensity estimator: pairwise-complete data breaks its assumptions.
+- **Scope.** Markets with open positions plus ACTIVE markets expiring within 14 days (≤ 100); pairs use backend ids with `a < b`. The newest 48 snapshots are kept.
+- **Sizing.** A snapshot older than two hours is ignored (`CORRELATION_SNAPSHOT_STALE` is logged) and any pair it lacks falls back to the matrix; each pair records which one was used. A pair counts when |ρ| ≥ 0.60 and contributes `ρ_eff × size`, with `ρ_eff = ρ` for holdings on the same side and `−ρ` on opposite sides: positive ρ on the same side adds risk, positive ρ on opposite sides hedges, negative ρ on the same side (YES+YES on complements) hedges, negative ρ on opposite sides adds risk. Net exposure never goes below zero.
+- **Reporting.** `GET /portfolio` also returns the full matrix projected onto the nearest PSD matrix (eigenvalue clipping with a small Jacobi solver, ≤ 50 positions); sizing keeps the raw pairwise values.
+
+## Seed policy (#82)
+
+`seed-policy.service.ts` (pure `decideSeed`) sizes the treasury capital a new market is seeded with and the price it opens at. `planMarketCreation` reads the budget (`treasury.get_config`, `daily_usage`, `available_capital`, market-core's default fee) and runs it **before** the market maker pins or writes anything; a read failure fails closed (`SEED_SKIPPED`, `INSUFFICIENT_CAPITAL`).
+
+- **Price:** shrunk toward 0.5 by confidence-interval width (see [api.md](api.md)).
+- **Base seed:** `SEED_CATEGORY_BASE_USDC[category] × clamp(√(days to close / 30), 0.5, 1.5)`, at most 2× the LLM's `minimum_liquidity_usdc` (the LLM can lower it, not inflate it), at least the on-chain `MIN_SEED` (100 USDC).
+- **Bounds** (the smallest wins, and is recorded as `binding`): treasury `max_trade` and `max_market` (each with a 5% safety margin, since the trader can spend between the read and the write), the market maker's `MM_DAILY_SHARE_BPS` of `max_daily` minus its seeds in the current window, the remaining `max_daily` headroom, `MAX_SEED_FRACTION_BPS` of available capital, `MAX_UNRESOLVED_SEEDED_RAW` minus the seed already locked in unresolved markets, and the LP-loss budget.
+- **Expected LP loss** (`LP_LOSS_BUDGET_RAW` per market): an informed trader buys the underpriced side until the price reaches the confidence-interval bound farthest from the opening price; the loss is the seed minus the value of the LP's reserves and creator shares at that price. It is computed with `seedReserves`/`calcBuy`/`priceYesBps` from `src/generated/fpmm.ts` (integer math, the contract's rounding) and a bigint bisection (≤ 40 steps) finds the largest seed within budget. Trading fees accrue outside the pool and are ignored.
+- A seed below `MIN_SEED` is a skip whose reason names the binding bound (`BELOW_MIN_SEED`, `DAILY_BUDGET`, `AGGREGATE_CAP`, `LP_LOSS_BUDGET`, `INSUFFICIENT_CAPITAL`). If the treasury rejects the seed anyway (`DailyCapExceeded`, `MarketCapExceeded`, `TradeCapExceeded`), `SEED_CAP_RACE` is logged and the market stays `PENDING` for the reconciler.
+
+## Backtesting (#81)
+
+`scripts/backtest.ts` replays stored market-core history through the trader's real decision code. The decisions live in `src/agents/trader-policy.ts` (`runTraderPolicy(env, params)`), which touches only a `TraderEnv` (`trader-env.ts`: a clock, reads of markets, positions and signals, execution, and a decision sink). `prodTraderEnv()` wraps Prisma and the chain service and `runTraderCycle()` is `runTraderPolicy(prodTraderEnv(), DEFAULT_PARAMS)`; `tests/backtest.test.ts` records every Prisma and chain call a cycle makes and asserts the sequence is unchanged.
+
+```bash
+npm run backtest -- --from 2026-10-01 --to 2026-10-15 --out ./bt \
+  --forecaster oracle-noise:0.15 --seed 7 --max-trade-raw 5000000000
+# offline, from a JSON file {events, signals, forecasts}:
+npm run backtest -- --events-file tests/fixtures/backtest/events.json --out /tmp/bt
+```
+
+The runner only issues `findMany` (events up to `--to`, because pools are rebuilt from `MarketCreated` and everything after it, plus `signal_cache` and the live agent's stored forecasts) and writes `report.json` and `report.md`. Options: `--from`, `--to` (required against the database; with `--events-file` they default to the file's span), `--bankroll-raw`, `--max-trade-raw`, `--max-market-raw`, `--max-daily-raw` (7-decimal base units; defaults 10 000 / 500 / 1 000 / 2 000 USDC), `--impact reset|propagate|both` (default both), `--forecaster prior|oracle-noise:<σ>|recorded`, `--seed`, `--fee-bps` (inferred from the first historical buy), `--events-file`, `--out`.
+
+**How it works.** A simulated UTC clock steps every 15 minutes. Before each step every event with `ledgerClosedAt ≤ now` is applied in order (pools are seeded by `seedReserves`; external trades move them; `MarketResolved` settles positions with `settleValue`, void at half a share's value), then the policy runs against a `BacktestEnv` built only from that state: it never reads a live row, so it cannot see the future. Agent orders fill against the simulated pool with `calcBuy`/`calcSell`, update its reserves, and spend through a `SimTreasury` that enforces `max_trade`, cumulative `max_market` and a rolling 24-hour `max_daily` whose window starts at the first spend after the previous one expired (selling is uncapped). Trading after `close_time` is refused like market-core's `MarketClosed`. Floats exist only in the policy; `usdcFromNumber` converts at the buy boundary and everything else is base-unit bigint.
+
+**Impact models.** Historical trades were made against the historical pool, not one containing the agent's trades, so replaying their reserves would erase the agent's impact while replaying their collateral changes their share amounts. `reset` snaps to the historical reserves after every external trade: an optimistic upper bound, since impact decays instantly. `propagate` re-executes each external trade's collateral on the simulated pool, so the agent's impact persists (trades the pool cannot fill are counted as skipped). Both are reported by default; the gap between them is how much of the result depends on the agent not moving prices.
+
+**Forecasters.** The LLM estimate is replaced by a deterministic one: `prior` (the market's opening price), `oracle-noise:σ` (the resolved outcome plus seeded Gaussian noise: an upper bound on skill, since it reads the future by design) or `recorded` (the forecast stored in `reasoning_traces.probabilityEstimate` at that time, no forecast if none). Noise is seeded from `(seed, market, time)`.
+
+**Reading the report.** Per impact model: PnL (cash plus liquidation value via `collateralOutForShares` at the end), max drawdown, a Sharpe-like ratio (daily equity returns, annualised), turnover, win rate, stop-loss count, cycles paused by the daily-drawdown rule, cap hits per cap (`TradeCapExceeded`, `MarketCapExceeded`, `DailyCapExceeded`, …), average edge at entry against the forecast and realised edge of resolved positions, impact cost (fill versus mid, fees included) and per-market attribution. `configHash` and `inputsHash` are sha256 over the canonical config and the time-sorted inputs; the same inputs, config and seed give a byte-identical `report.json`. Differences from production: the clock is UTC (production's drawdown check uses local midnight); pool liquidity is the reserve sum; correlations use the category matrix (there are no snapshots in a replay); and hedges execute against the pool (one per pair), whereas production's `autoHedge` only records a PENDING trade.
+
+**Caveats.** The numbers evaluate the policy as written. Two properties of it show up quickly in a replay: the 15% stop-loss compares `|price − entry| / entry`, so it also fires on favourable moves and on the agent's own impact (in a thin pool a 250 USDC entry can stop itself out on the next step), and the NO-side Kelly sizing compares the NO probability with the YES price. Neither was changed here: the harness exists to evaluate the rules, not to change them. Avoid tuning constants on the same window you evaluate them on (see Bailey et al., "The Probability of Backtest Overfitting").
+
 ## Health and degraded mode (#111)
 
 `/livez` checks only the process; `/readyz` probes Postgres, Redis, RPC and the indexer lag. `HEALTH_CRITICAL` decides which failures return 503. By default Redis and Postgres are critical (login and every data endpoint need them) and RPC is not: an instance without RPC stays ready and keeps serving database reads, while on-chain state, resolution, trace and payment endpoints return 502. The indexer fails when it is more than `INDEXER_MAX_LAG_LEDGERS` behind or its cursor is older than `INDEXER_MAX_STALENESS_MS`; with no cursor yet it reports `initialising`. On SIGTERM `/readyz` returns 503 `draining` for `SHUTDOWN_DRAIN_MS` before the server stops accepting connections.
