@@ -6,7 +6,7 @@ import { config } from '../config';
 import { secret } from '../config/secrets';
 import { logger } from '../lib/logger';
 import { AppError } from '../middlewares/error.middleware';
-import { canonicalBytes, sha256Hex } from '../utils/hash.util';
+import { assertPlainJson, canonicalBytes, NonPlainJsonError, sha256Hex } from '../utils/hash.util';
 import { getContentStore } from './content-store.service';
 import { bulkheads, deadline, sleep, TimeoutError } from '../lib/resilience';
 
@@ -154,6 +154,14 @@ export async function pinJson(
   name: string,
   opts?: { signal?: AbortSignal },
 ): Promise<PinnedDocument> {
+  try {
+    assertPlainJson(document);
+  } catch (err) {
+    if (err instanceof NonPlainJsonError) {
+      throw new AppError(422, 'IPFS_NON_PLAIN_DOCUMENT', err.message, { name, path: err.path });
+    }
+    throw err;
+  }
   const bytes = canonicalBytes(document);
   const hash = sha256Hex(bytes);
   let lastError: unknown;

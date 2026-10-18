@@ -53,6 +53,37 @@ Publication is durable (#131). Each trace that should be on-chain gets a `trace_
 
 Transient errors retry with backoff `min(2^attempts × 30 s, 1 h)`. Rows are claimed with `FOR UPDATE SKIP LOCKED` and leased, and chain calls run after the claim commits, so several processes can run the worker. `verified` is set only by indexer confirmation (or the duplicate checks, which read the same on-chain record) and by `POST /traces/verify`; dry-run never confirms a row or sets `verified`. The creation trace is pinned with `onChainMarketId: null` when its market is still pending and is **not** re-pinned later: that would change `trace_hash`; the `market_id` argument of `publish_trace` provides the link. Action strings live in `src/lib/trace-actions.ts`.
 
+### End-to-end x402 test (#64)
+
+The paid product relies on one invariant: the bytes `pinJson` pins are the
+bytes whose sha256 is recorded on-chain, and they are exactly what the
+contracts repo's x402 service re-hashes before serving. `tests/x402-e2e.test.ts`
+proves it by running the submodule's real `createTraceApi` (loaded in place from
+`contracts/oracledesk-stellar/x402/` through `tsx`, nothing copied into `src/`)
+against traces produced by `generateReasoningTrace` and `pinAndPublishDocument`.
+IPFS is an in-memory map, the facilitator is an in-process stub (it accepts any
+well-formed payload: the test covers the server path and content parity, not
+payment cryptography) and global `fetch` is guarded so any non-loopback request
+fails the test. It checks the 402 challenge, a paid 200 whose content equals the
+canonical payload, a tampered-bytes 502, an unknown-trace 404 and that a failed
+settlement serves nothing. `tests/canonical-parity.test.ts` compares
+`canonicalJson` with the contracts `canonicalize` over an edge-case corpus; the
+one known divergence is `Date` (ISO string vs `{}`), so `pinJson` rejects
+non-plain objects (`IPFS_NON_PLAIN_DOCUMENT`) and a test walks `tracePayload`
+for class instances.
+
+```
+git submodule update --init
+npm run test:x402:prepare   # npm ci in contracts/oracledesk-stellar/x402
+npm run test:e2e:x402       # builds the tests and runs the e2e file
+```
+
+Locally the tests skip with guidance when the submodule or its dependencies are
+missing; with `CI=true` they fail instead. The bindings package the x402
+`package.json` links to is only dynamically imported by
+`registry-trace-repository.ts`, so it does not need building. CI caches the
+package's `node_modules` keyed on its lockfile.
+
 ## Payments
 
 A daily pass is granted only after `payment-verification.service.ts` reads the transaction with Stellar RPC `getTransaction` and confirms all of the following:

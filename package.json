@@ -7,6 +7,8 @@
     "build:test": "tsc -p tsconfig.test.json",
     "test": "npm run build:test && node --test --test-concurrency=1 dist-tests/tests/*.test.js",
     "test:integration": "npm run build:test && node --test --test-concurrency=4 --test-global-setup=dist-tests/tests/integration/global-setup.js dist-tests/tests/integration/*.int.test.js",
+    "test:x402:prepare": "npm ci --prefix contracts/oracledesk-stellar/x402 --omit=optional --no-audit --no-fund",
+    "test:e2e:x402": "npm run test:x402:prepare && npm run build:test && node --test --test-concurrency=1 dist-tests/tests/x402-e2e.test.js",
     "test:all": "npm test && npm run test:integration",
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "build": "tsc",
