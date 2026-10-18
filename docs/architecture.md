@@ -53,6 +53,34 @@ Publication is durable (#131). Each trace that should be on-chain gets a `trace_
 
 Transient errors retry with backoff `min(2^attempts × 30 s, 1 h)`. Rows are claimed with `FOR UPDATE SKIP LOCKED` and leased, and chain calls run after the claim commits, so several processes can run the worker. `verified` is set only by indexer confirmation (or the duplicate checks, which read the same on-chain record) and by `POST /traces/verify`; dry-run never confirms a row or sets `verified`. The creation trace is pinned with `onChainMarketId: null` when its market is still pending and is **not** re-pinned later: that would change `trace_hash`; the `market_id` argument of `publish_trace` provides the link. Action strings live in `src/lib/trace-actions.ts`.
 
+### LLM provenance (#66)
+
+A pinned trace used to prove only that *these bytes were committed*. It now
+also says what produced the decision. `tracePayload.provenance`
+(`oracledesk.trace.provenance/1`, documented in `docs/api.md`) is added before
+canonicalisation, so it is inside the pinned bytes and the on-chain hash. It is
+built by `callLLMStructured` (provider, model, prompt id/version/hash, params,
+usage, latency, attempts, `fallbackFrom`, `outputSha256`) and assembled in
+`generateReasoningTrace`, which merges the market proposal's entry (passed as
+`upstreamProvenance` by the market maker) with its own hedge-conditions entry.
+Hedge conditions that came from the hard-coded defaults are recorded as
+`source: "default"`, with no model fields.
+
+Prompts live in `src/lib/prompts/`, one file per version. `contentHash` covers
+the template text, so editing a template changes the hash;
+`tests/prompts.test.ts` compares every `{ id, version, contentHash }` with
+`tests/fixtures/prompts.snapshot.json` and fails with "template changed; bump
+version". A change ships as a new version file and a new registry entry; old
+versions stay importable for replay and evaluation.
+
+What provenance proves: that the backend *claimed*, at pin time and under the
+agent's commitment, that this provider, model and prompt version produced the
+output whose hash is `outputSha256`. What it does not prove: that the model
+really produced it. Nothing is signed by the provider, and the raw prompt and
+output are not published (they contain third-party text), so a reader can check
+a copy of the output against `outputSha256` but cannot reproduce the call.
+Provider error messages are never recorded, only a bounded `errorClass`.
+
 ### End-to-end x402 test (#64)
 
 The paid product relies on one invariant: the bytes `pinJson` pins are the

@@ -183,6 +183,8 @@ model Market {
   resolutionHash     String?
   /// Revealed preimage of resolutionHash, kept so it can be registered with the resolver.
   resolutionSpec     Json?
+  /// LlmProvenance of the call that proposed this market (#66). Null for older rows.
+  generationProvenance Json?
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
 
@@ -292,6 +294,8 @@ model ReasoningTrace {
   betFraction         Float?
   betSizeUsdc         Float?
   hedgeConditions     Json?             // string[]
+  /// TraceProvenance embedded in the pinned payload (#66). Null for older traces.
+  provenance          Json?
   agentWallet         String?
   signature           String?
   ipfsCid             String?

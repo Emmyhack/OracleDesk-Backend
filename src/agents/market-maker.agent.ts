@@ -67,8 +67,9 @@ export async function runMarketMakerCycle(
 
     // Step 2: Generate market proposal via the LLM
     let proposal;
+    let proposalProvenance;
     try {
-      proposal = await generateMarketQuestion(signals, genCtx);
+      ({ proposal, provenance: proposalProvenance } = await generateMarketQuestion(signals, genCtx));
     } catch (err) {
       if (err instanceof LlmBudgetExceeded) {
         // One agent log per day, not one per 15-minute cycle.
@@ -100,7 +101,7 @@ export async function runMarketMakerCycle(
     signal.throwIfAborted();
 
     // Step 4: Persist market to DB (PENDING until it exists on-chain)
-    const market = await createMarketFromProposal(proposal);
+    const market = await createMarketFromProposal(proposal, proposalProvenance);
     logger.info({ marketId: market.id, category: market.category }, 'Market Maker Agent: market created in DB');
 
     // Step 5: Commit the resolution spec and create the market through the
@@ -131,7 +132,10 @@ export async function runMarketMakerCycle(
       marketProbability:   0.5,
       edge:                proposal.initial_yes_probability - 0.5,
       confidenceInterval:  proposal.confidence_interval,
-    }, { purpose: priority === 'admin' ? 'admin_trace_hedge' : 'trace_hedge', priority });
+    }, { purpose: priority === 'admin' ? 'admin_trace_hedge' : 'trace_hedge', priority }, {
+      // The creation trace also records who wrote the proposal (#66).
+      upstreamProvenance: [proposalProvenance],
+    });
 
     signal.throwIfAborted();
 

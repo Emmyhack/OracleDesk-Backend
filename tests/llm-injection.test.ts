@@ -332,7 +332,7 @@ for (const c of corpus) {
     const { generateMarketQuestion } = await import('../src/services/market.service');
     await withPipeline(c, async ({ prompts, logs }) => {
       const outcome = await generateMarketQuestion(aggregated(c)).then(
-        (proposal) => ({ proposal }),
+        ({ proposal }) => ({ proposal }),
         (error) => ({ error }),
       );
 

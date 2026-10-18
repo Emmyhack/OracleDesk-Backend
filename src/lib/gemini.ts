@@ -65,6 +65,8 @@ export function isGeminiAvailable(): boolean {
 }
 
 export const GEMINI_MODEL = 'gemini-2.0-flash';
+/** Sampling temperature of schema-constrained calls; recorded in provenance (#66). */
+export const GEMINI_STRUCTURED_TEMPERATURE = 0.1;
 export { isDailyQuotaError, parseRetryDelayMs };
 
 // Returns true when the error is a daily quota exhaustion (not just RPM).
@@ -107,9 +109,11 @@ function is429(errMsg: string): boolean {
 async function withGeminiRetries<T>(
   handle: { signal: AbortSignal; ms: number; remaining(): number },
   fn: () => Promise<T>,
+  tally: { attempts: number } = { attempts: 0 },
 ): Promise<T> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt++) {
+    tally.attempts = attempt;
     try {
       return await fn();
     } catch (err: any) {
@@ -152,10 +156,15 @@ interface GeminiCall {
 export interface GeminiResult {
   text: string;
   usage: Usage;
+  /** Token counts exactly as reported, or null when the response had no usageMetadata (#66). */
+  reportedUsage: { inputTokens: number; outputTokens: number } | null;
+  /** HTTP attempts made, 429 retries included (#66). */
+  attempts: number;
 }
 
 async function runGemini(call: GeminiCall): Promise<GeminiResult> {
   const handle = deadline('llm', call.signal);
+  const tally = { attempts: 0 };
   try {
     const result = await withGeminiRetries(handle, () =>
       withLease(
@@ -171,8 +180,12 @@ async function runGemini(call: GeminiCall): Promise<GeminiResult> {
           const result = await model.generateContent(call.contents, { signal: handle.signal });
           const text: string = result.response.text();
           const usage = usageOf(result.response, GEMINI_MODEL);
+          const meta = result.response?.usageMetadata;
+          const reportedUsage = meta
+            ? { inputTokens: Number(meta.promptTokenCount ?? 0), outputTokens: Number(meta.candidatesTokenCount ?? 0) }
+            : null;
           // Billed even when empty: the tokens were consumed.
-          return { value: { text, usage }, usage };
+          return { value: { text, usage, reportedUsage }, usage };
         },
         {
           signal: handle.signal,
@@ -182,11 +195,12 @@ async function runGemini(call: GeminiCall): Promise<GeminiResult> {
               : { outcome: 'error' },
         },
       ),
+      tally,
     );
     if (!result.text || result.text.trim() === '') {
       throw new Error('Gemini returned an empty response');
     }
-    return result;
+    return { ...result, attempts: tally.attempts };
   } finally {
     handle.cleanup?.();
   }
@@ -245,7 +259,7 @@ export async function callGeminiStructured(
     system: systemPrompt,
     contents,
     maxTokens,
-    generationConfig: { responseMimeType: 'application/json', responseSchema, temperature: 0.1, topP: 0.9 },
+    generationConfig: { responseMimeType: 'application/json', responseSchema, temperature: GEMINI_STRUCTURED_TEMPERATURE, topP: 0.9 },
     promptChars: systemPrompt.length + JSON.stringify(contents).length,
     ctx: opts?.ctx,
     signal: opts?.signal,

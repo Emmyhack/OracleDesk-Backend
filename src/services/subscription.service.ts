@@ -13,6 +13,7 @@ import { formatUsdc, toDisplayUsdc } from '../lib/amounts';
 import { verifyUsdcTransfer } from './payment-verification.service';
 import { AppError } from '../middlewares/error.middleware';
 import type { SubscriptionAccess } from '../types';
+import { summarizeProvenance } from '../lib/llm/provenance';
 import dayjs from 'dayjs';
 
 /** Daily pass price in 7-decimal USDC base units (DAILY_PASS_PRICE_RAW). */
@@ -217,6 +218,8 @@ export async function getTracWithAccessControl(
     edge:                trace.edge,
     confidenceInterval:  trace.confidenceInterval,
     sourcesUsed:         trace.previewSources,  // Preview: only first 2 sources
+    // Reduced provenance (#66): enough to see how it was produced, not the hashes.
+    provenance:          { summary: summarizeProvenance(trace.provenance) },
     verified:            trace.verified,
     audit,
     ipfsCid:             trace.ipfsCid,
@@ -224,7 +227,7 @@ export async function getTracWithAccessControl(
     onChainTraceId:      trace.onChainTraceId,
     createdAt:           trace.createdAt,
     accessLevel:         'FREE_PREVIEW',
-    lockedFields:        ['fullSources', 'hedgeConditions', 'betFraction', 'betSizeUsdc'],
+    lockedFields:        ['fullSources', 'hedgeConditions', 'betFraction', 'betSizeUsdc', 'provenance.llm', 'provenance.generator'],
     unlockPriceRaw:      PER_TRACE_PRICE_RAW.toString(),
     dailyPassPriceRaw:   DAILY_PASS_PRICE_RAW.toString(),
     dailyPassPrice:      formatUsdc(DAILY_PASS_PRICE_RAW),

@@ -120,6 +120,9 @@ const envSchema = z
     // Time /readyz reports "draining" before the HTTP server stops accepting.
     SHUTDOWN_DRAIN_MS: z.string().default('5000').transform(Number),
 
+    // Build commit, recorded in trace provenance (#66). Set by CI/deploy.
+    GIT_SHA: optionalString,
+
     // ── LLM providers (optional; generation fails at runtime without one) ─
     ANTHROPIC_API_KEY: optionalString,
     GEMINI_API_KEY: optionalString,

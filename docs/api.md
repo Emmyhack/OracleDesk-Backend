@@ -351,6 +351,61 @@ backend's last check against reasoning-registry. The frontend must still run
 its own check before rendering content (see `docs/frontend-integration.md` in
 the contracts repo).
 
+#### Provenance (`oracledesk.trace.provenance/1`)
+
+Every trace pinned after #66 carries a `provenance` block, both in the pinned
+document (so it is part of the bytes `traceHash` commits to) and in the
+`ReasoningTrace.provenance` column. `Market.generationProvenance` holds the
+entry for the call that proposed the market.
+
+```json
+{
+  "schema": "oracledesk.trace.provenance/1",
+  "llm": [
+    {
+      "source": "llm",
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-6",
+      "promptId": "market-proposal",
+      "promptVersion": 1,
+      "promptHash": "64-hex",
+      "params": { "temperature": 0.2, "maxTokens": 4096 },
+      "usage": { "inputTokens": 1412, "outputTokens": 231 },
+      "latencyMs": 2310,
+      "attempts": 1,
+      "outputSha256": "64-hex"
+    },
+    { "source": "default", "promptId": "hedge-conditions", "promptVersion": 1, "reason": "LLM_FAILED" }
+  ],
+  "generator": { "service": "oracledesk-backend", "version": "1.0.0", "commit": "abc1234" }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `schema` | Version string of this block. Check it before reading the rest. |
+| `llm[]` | One entry per generation step, in order: the market proposal (creation traces only), then the hedge conditions. |
+| `source` | `llm`: a model produced the output. `default`: a hard-coded safe default was used (`reason` is `LLM_FAILED` or `LLM_BUDGET_EXCEEDED`); such an entry has no model fields. |
+| `provider`, `model` | Who answered. When Gemini served the call, `fallbackFrom` names the provider that failed first. |
+| `promptId`, `promptVersion`, `promptHash` | The registered prompt (`src/lib/prompts`). `promptHash = sha256(canonicalJson({ id, version, system, user }))` over the *template*, not the rendered text. `adhoc`/`0` marks a call that did not use the registry. |
+| `params` | Sampling temperature and the `max_tokens` the serving provider was finally given. |
+| `usage` | Tokens summed over the serving provider's requests; `null` when the SDK reported none. |
+| `latencyMs` | Wall time of the whole call, fallback and repair rounds included. Differs on every run. |
+| `attempts` | Provider requests made, repair rounds and Gemini 429 retries included. |
+| `fallbackFrom` | `{ provider, model, errorClass }`; `errorClass` is one of `validation`, `rate_limited`, `timeout`, `auth`, `circuit_open`, `budget`, `unavailable`, `server_error`, `error`. Provider messages are never recorded. |
+| `outputSha256` | sha256 of the raw model output (canonical JSON of the tool input for Anthropic, the response text for Gemini). Raw prompts and outputs are never stored. |
+| `generator` | The service and its `package.json` version; `commit` appears when `GIT_SHA` is set. |
+
+The block is optional: traces created before #66 have none, and consumers must
+treat it as absent. Readers must also ignore unknown keys.
+
+`GET /traces/:id` returns the full block with access. Without access, and in
+`GET /traces`, `provenance` is reduced to
+`{ "summary": { "providers": ["anthropic"], "promptVersions": ["hedge-conditions@1", "market-proposal@1"], "source": "llm" | "default" | "mixed" } }`
+(`summary` is `null` for traces without provenance).
+
+The payload's former `llm: { provider, model }` field is replaced by this block.
+
 #### `GET /traces`
 
 Query: `agentType`, `marketId`, `page`, `limit`. Response: preview traces,
