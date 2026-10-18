@@ -3,6 +3,7 @@ import { calculateProbability } from '../services/market.service';
 import { calculateKellySize, executeTrade, trackPosition, closePosition } from '../services/trade.service';
 import { checkCorrelation } from '../services/correlation.service';
 import { generateReasoningTrace } from '../services/reasoning.service';
+import { applyShrinkage, calibrationShrinkage } from '../services/calibration.service';
 import { detectHedgeOpportunities, autoHedge, checkDailyDrawdown, enforceStopLoss } from '../services/hedging.service';
 import { prisma } from '../lib/prisma';
 import { writeAgentLog } from '../lib/agent-log';
@@ -123,10 +124,25 @@ async function analyzeAndTradeMarket(market: any, signals: any, signal?: AbortSi
       rawValue: marketProb,
     }));
 
-    const { probability: agentProb, confidenceInterval } = calculateProbability(
-      sourceSignals,
-      marketProb,
-    );
+    const estimate = calculateProbability(sourceSignals, marketProb);
+
+    // Optional calibration (#68): shrink toward 0.5 by the factor fitted on the
+    // resolved history. k is 1 (no change) unless the flag is on and enough
+    // markets back the fit. Recorded in the trace so the adjustment is visible.
+    const calibration = await calibrationShrinkage('TRADER', String(market.category));
+    const agentProb = calibration.k === 1 ? estimate.probability : applyShrinkage(estimate.probability, calibration.k);
+    // The interval moves with the estimate, so Kelly's conservative end stays coherent.
+    const confidenceInterval = calibration.k === 1
+      ? estimate.confidenceInterval
+      : {
+          lower: applyShrinkage(estimate.confidenceInterval.lower, calibration.k),
+          upper: applyShrinkage(estimate.confidenceInterval.upper, calibration.k),
+        };
+    if (calibration.k !== 1) {
+      sourceSignals.push({
+        source: 'CALIBRATION', weight: 0, signal: `shrinkage k=${calibration.k.toFixed(3)} (${calibration.source}, ${calibration.nMarkets} markets)`, rawValue: calibration.k,
+      });
+    }
 
     // Compute edge
     const edge = agentProb - marketProb;

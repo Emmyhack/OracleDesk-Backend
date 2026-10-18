@@ -120,6 +120,15 @@ const envSchema = z
     // Time /readyz reports "draining" before the HTTP server stops accepting.
     SHUTDOWN_DRAIN_MS: z.string().default('5000').transform(Number),
 
+    // ── Calibration (#68) ─────────────────────────────────────────────────
+    // Slices with fewer resolved markets report insufficientData instead of noise.
+    MIN_CALIBRATION_MARKETS: z.string().default('20').transform(Number)
+      .pipe(z.number().int().min(1)),
+    // How a market's weight is split between its traces: time | last | first.
+    CALIBRATION_WEIGHTING: z.enum(['time', 'last', 'first']).default('time'),
+    // Shrink the trader's probability toward 0.5 by the fitted calibration factor.
+    CALIBRATION_SHRINKAGE_ENABLED: z.enum(['true', 'false']).default('false').transform((v) => v === 'true'),
+
     // Build commit, recorded in trace provenance (#66). Set by CI/deploy.
     GIT_SHA: optionalString,
 

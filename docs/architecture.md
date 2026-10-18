@@ -211,6 +211,36 @@ providers through `setAnthropicClient()` / `setGeminiModelFactory()` and replay 
 shapes in `tests/fixtures/llm/` (hand-built examples of the API shapes, not
 captures from a live account).
 
+## Calibration (#68)
+
+`src/services/calibration.service.ts` answers whether agent probabilities are
+calibrated. Postgres does the heavy lifting in one query
+(`reasoning_traces JOIN markets` for `RESOLVED` markets with an outcome and an
+`onChainMarketId`, traces strictly before `resolvedAt`); TypeScript weights,
+slices and scores the rows with pure functions (`brier`, `logLoss`,
+`reliability`, `murphy`, `fitShrinkage`). Metric definitions, the weighting
+policy and the exclusions are in `docs/api.md` ("Agent calibration").
+
+- **Snapshots.** `computeAndStoreSnapshots()` stores every
+  window (`30d`, `90d`, `all`) × grouping × key in `calibration_snapshots`
+  (append-only; the API serves the newest `computedAt`). A cron at 03:10 runs it
+  inside a transaction holding `pg_try_advisory_xact_lock`, so only one
+  instance computes.
+- **Index.** `reasoning_traces (marketId, createdAt)` serves the join. Postgres
+  uses it for selective windows (a nested loop of one index range scan per
+  market: 7 ms for 334 markets / 3 340 traces in a test database) and prefers a
+  sequential scan when most markets match (`all`, 55 ms for 200 000 traces).
+- **Trader shrinkage** (`CALIBRATION_SHRINKAGE_ENABLED`, default off). Before
+  sizing, the trader moves its estimate to `0.5 + k (p − 0.5)` with `k` from the
+  latest `all`-window `(TRADER, category)` snapshot, then `(TRADER)`, then 1,
+  only when at least 50 resolved markets back the fit; `k` is bounded to
+  `[0.3, 1]`, so it can only shrink. The factor is recorded in the trace as a
+  `CALIBRATION` entry in `sourcesUsed`.
+- **Limits.** Few resolved markets give noisy numbers: read the Wilson
+  intervals and `nEff`. Calibration says nothing about the trader's *edge* while
+  its probability still equals the market price (`rawValue: marketProb`), and
+  `MARKET_CREATION` has no meaningful market baseline.
+
 ## Evaluating market generation (#67)
 
 `npm run eval:markets` measures whether a prompt, model or schema change makes

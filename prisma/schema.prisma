@@ -327,7 +327,24 @@ model ReasoningTrace {
   @@index([verified])
   @@index([traceHash])
   @@index([createdAt])
+  @@index([marketId, createdAt])
   @@map("reasoning_traces")
+}
+
+/// Daily calibration metrics per slice (#68). Append-only; the API serves the latest computedAt.
+model CalibrationSnapshot {
+  id         String   @id @default(uuid())
+  computedAt DateTime @default(now())
+  /// '30d' | '90d' | 'all'
+  window     String
+  /// 'agentType' | 'category' | 'decisionType' | 'promptVersion' | 'model' | 'agentType_category'
+  groupBy    String
+  groupKey   String
+  /// brier, logLoss, baseline, buckets, murphy, nMarkets, nTraces, nEff, shrinkageK
+  metrics    Json
+
+  @@index([window, groupBy, computedAt])
+  @@map("calibration_snapshots")
 }
 
 /// A subscriber copying an agent's trade
