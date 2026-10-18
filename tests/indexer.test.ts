@@ -52,8 +52,20 @@ async function setup(events = FIXTURES.map(toEventResponse)) {
   const byChainId = (id: bigint) => [...db.markets.values()].find((m) => m.onChainMarketId === id) ?? null;
   (prisma.market.findUnique as any) = async ({ where }: any) => byChainId(where.onChainMarketId);
   (prisma.market.update as any) = async ({ where, data }: any) => Object.assign(db.markets.get(where.id), data);
+  // Guarded writes (#83): where.id, status.notIn and the chainSyncedLedger OR-clause.
+  (prisma.market.updateMany as any) = async ({ where, data }: any) => {
+    const m = db.markets.get(where.id);
+    if (!m) return { count: 0 };
+    if (where.status?.notIn?.includes(m.status)) return { count: 0 };
+    const ok = (where.OR ?? []).some((c: any) =>
+      c.chainSyncedLedger === null ? (m.chainSyncedLedger ?? null) === null
+        : (m.chainSyncedLedger ?? -1) <= c.chainSyncedLedger.lte);
+    if (where.OR && !ok) return { count: 0 };
+    Object.assign(m, data);
+    return { count: 1 };
+  };
   (prisma.position.updateMany as any) = async () => { db.closedPositions++; return { count: 1 }; };
-  (prisma.$transaction as any) = async (ops: Promise<unknown>[]) => Promise.all(ops);
+  (prisma.$transaction as any) = async (arg: any) => (typeof arg === 'function' ? arg(prisma) : Promise.all(arg));
   (prisma.reasoningTrace.findFirst as any) = async ({ where }: any) => {
     return db.traces.find((t) => {
       if (t.traceHash !== where.traceHash) return false;
@@ -119,6 +131,8 @@ test('indexes trades, resolutions and traces from recorded events', async () => 
   assert.equal(m0.status, 'RESOLVED');
   assert.equal(m0.resolvedOutcome, true);
   assert.equal(db.closedPositions, 1, 'only the known market closes positions');
+  // #83: both side effects record the ledger they reflect.
+  assert.ok(m0.chainSyncedLedger > 0, 'MarketResolved sets chainSyncedLedger');
 
   const published = emitted.find(([e]) => e === 'REASONING_PUBLISHED')![1];
   assert.equal(published.onChainTraceId, '0');
@@ -193,56 +207,13 @@ test('Trade event confirms a CONFIRMING copy trade with matching txHash', async 
   assert.equal(db.copyTrades[0].collateralRaw, '100000000');
 });
 
-test('events are stored unpublished, flagged after the bus accepts them, and non-public ones need no publish', async () => {
-  const { db, source, emitted, emit, backfillEvents } = await setup();
+test('an older Trade event does not overwrite a newer observation, and a resolved market stays resolved (#83)', async () => {
+  const { db, source, emit, backfillEvents } = await setup();
+  const m0 = db.markets.get('m0');
+  m0.chainSyncedLedger = 9_999_999; // the reconciler already observed a much newer ledger
+  m0.currentYesProb = 0.123;
   await backfillEvents(undefined, { source, emit });
-  const rows = [...db.events.values()];
-  assert.ok(rows.every((r) => r.published === true), 'everything is published after a clean run');
-  assert.equal(emitted.length, 2, 'only Trade and TracePublished have socket messages');
-  const resolved = rows.find((r) => r.eventName === 'MarketResolved');
-  assert.equal(resolved.published, true);
-});
-
-test('a rejected publish leaves the event unpublished and publishPending retries it in ledger order', async () => {
-  const { db, source, emitted, backfillEvents } = await setup();
-  const { publishPending } = await import('../src/services/indexer.service');
-  let down = true;
-  const published: Array<[string, any, any]> = [];
-  const flaky = async (e: string, p: any, meta: any) => {
-    if (down) throw new Error('redis down');
-    published.push([e, p, meta]);
-  };
-
-  await backfillEvents(undefined, { source, emit: flaky });
-  assert.equal(published.length, 0);
-  const pending = [...db.events.values()].filter((r) => !r.published);
-  assert.equal(pending.length, 2, 'both public events wait for the bus');
-
-  down = false;
-  const result = await publishPending(flaky);
-  assert.deepEqual({ published: result.published, failed: result.failed }, { published: 2, failed: false });
-  const ledgers = published.map(([, , meta]) => meta.ledger);
-  assert.deepEqual(ledgers, [...ledgers].sort((a, b) => a - b), 'ledger order');
-  assert.ok(published.every(([, , meta]) => typeof meta.id === 'string' && meta.id.length > 0), 'meta carries chain_events.id');
-  assert.equal(published.find(([e]) => e === 'TRADE_EXECUTED')![2].marketKey, '0');
-  assert.equal(emitted.length, 0);
-  assert.ok([...db.events.values()].every((r) => r.published));
-});
-
-test('publishPending stops at the first failure so a later event never overtakes an earlier one', async () => {
-  const { db, source, backfillEvents } = await setup();
-  const { publishPending } = await import('../src/services/indexer.service');
-  await backfillEvents(undefined, { source, emit: async () => { throw new Error('down'); } });
-  const seen: string[] = [];
-  let calls = 0;
-  const failSecond = async (_e: string, _p: any, meta: any) => {
-    calls++;
-    if (calls === 2) throw new Error('down again');
-    seen.push(meta.id);
-  };
-  const first = await publishPending(failSecond);
-  assert.deepEqual({ published: first.published, failed: first.failed }, { published: 1, failed: true });
-  const left = [...db.events.values()].filter((r) => !r.published);
-  assert.equal(left.length, 1);
-  assert.ok(left[0].ledger >= db.events.get(seen[0]).ledger, 'the remaining event is the later one');
+  assert.equal(m0.currentYesProb, 0.123, 'stale trade price is skipped');
+  assert.equal(m0.status, 'ACTIVE', 'the resolution is also older than the observation and is a no-op');
+  assert.equal(db.closedPositions, 0);
 });

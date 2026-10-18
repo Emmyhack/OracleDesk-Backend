@@ -11,6 +11,8 @@ import { startDisputeCron } from './cron/dispute.cron';
 import { startIngestionCron } from './cron/ingestion.cron';
 import { startMonitorCron } from './cron/monitor.cron';
 import { startReportCron } from './cron/report.cron';
+import { startReconcileCron } from './cron/reconcile.cron';
+import { isAdminToken } from './middlewares/auth.middleware';
 import { startTraceAuditCron } from './cron/trace-audit.cron';
 import { startTracePublicationCron } from './cron/trace-publication.cron';
 import { startEventListener } from './services/indexer.service';
@@ -95,10 +97,12 @@ async function bootstrap(): Promise<void> {
   startReportCron();
   startTraceAuditCron();
   startTracePublicationCron();
-  startDisputeCron();
+  // Drift reports reach admins only: sockets join the room with an admin JWT.
+  startReconcileCron((event, payload) => io.to('admins').emit(event, payload));
 
   io.on('connection', (socket) => {
     logger.info({ socketId: socket.id }, 'New client connected to socket.io');
+    if (isAdminToken(socket.handshake.auth?.token)) void socket.join('admins');
     
     socket.on('disconnect', () => {
       logger.info({ socketId: socket.id }, 'Client disconnected from socket.io');

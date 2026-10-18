@@ -1,0 +1,480 @@
+{
+  "events": [
+    {
+      "id": "0001000060-0000000001",
+      "eventName": "MarketCreated",
+      "ledger": 1000060,
+      "ledgerClosedAt": "2026-10-01T00:05:00.000Z",
+      "params": {
+        "market_id": "1",
+        "creator": "GCREATOR",
+        "category": {
+          "tag": "Crypto"
+        },
+        "close_time": "1791504000",
+        "seed_amount": "500000000000",
+        "initial_yes_bps": "5500"
+      }
+    },
+    {
+      "id": "0001000072-0000000002",
+      "eventName": "MarketCreated",
+      "ledger": 1000072,
+      "ledgerClosedAt": "2026-10-01T00:06:00.000Z",
+      "params": {
+        "market_id": "2",
+        "creator": "GCREATOR",
+        "category": {
+          "tag": "Macro"
+        },
+        "close_time": "1791504000",
+        "seed_amount": "500000000000",
+        "initial_yes_bps": "2000"
+      }
+    },
+    {
+      "id": "0001017520-0000000003",
+      "eventName": "Trade",
+      "ledger": 1017520,
+      "ledgerClosedAt": "2026-10-02T00:20:00.000Z",
+      "params": {
+        "market_id": "1",
+        "trader": "GEXTERNAL",
+        "outcome": {
+          "tag": "No"
+        },
+        "is_buy": true,
+        "collateral": "40000000000",
+        "shares": "83728373450",
+        "fee": "400000000",
+        "reserve_yes": "448690909090",
+        "reserve_no": "455871626550"
+      }
+    },
+    {
+      "id": "0001017521-0000000004",
+      "eventName": "Trade",
+      "ledger": 1017521,
+      "ledgerClosedAt": "2026-10-02T00:20:05.000Z",
+      "params": {
+        "market_id": "1",
+        "trader": "GEXTERNAL",
+        "outcome": {
+          "tag": "No"
+        },
+        "is_buy": true,
+        "collateral": "40000000000",
+        "shares": "76570822260",
+        "fee": "400000000",
+        "reserve_yes": "488290909090",
+        "reserve_no": "418900804290"
+      }
+    },
+    {
+      "id": "0001017522-0000000005",
+      "eventName": "Trade",
+      "ledger": 1017522,
+      "ledgerClosedAt": "2026-10-02T00:20:10.000Z",
+      "params": {
+        "market_id": "1",
+        "trader": "GEXTERNAL",
+        "outcome": {
+          "tag": "No"
+        },
+        "is_buy": true,
+        "collateral": "40000000000",
+        "shares": "71024052894",
+        "fee": "400000000",
+        "reserve_yes": "527890909090",
+        "reserve_no": "387476751396"
+      }
+    },
+    {
+      "id": "0001017523-0000000006",
+      "eventName": "Trade",
+      "ledger": 1017523,
+      "ledgerClosedAt": "2026-10-02T00:20:15.000Z",
+      "params": {
+        "market_id": "1",
+        "trader": "GEXTERNAL",
+        "outcome": {
+          "tag": "No"
+        },
+        "is_buy": true,
+        "collateral": "40000000000",
+        "shares": "66638458430",
+        "fee": "400000000",
+        "reserve_yes": "567490909090",
+        "reserve_no": "360438292966"
+      }
+    },
+    {
+      "id": "0001017524-0000000007",
+      "eventName": "Trade",
+      "ledger": 1017524,
+      "ledgerClosedAt": "2026-10-02T00:20:20.000Z",
+      "params": {
+        "market_id": "1",
+        "trader": "GEXTERNAL",
+        "outcome": {
+          "tag": "No"
+        },
+        "is_buy": true,
+        "collateral": "40000000000",
+        "shares": "63111069244",
+        "fee": "400000000",
+        "reserve_yes": "607090909090",
+        "reserve_no": "336927223722"
+      }
+    },
+    {
+      "id": "0001017525-0000000008",
+      "eventName": "Trade",
+      "ledger": 1017525,
+      "ledgerClosedAt": "2026-10-02T00:20:25.000Z",
+      "params": {
+        "market_id": "1",
+        "trader": "GEXTERNAL",
+        "outcome": {
+          "tag": "No"
+        },
+        "is_buy": true,
+        "collateral": "40000000000",
+        "shares": "60231677161",
+        "fee": "400000000",
+        "reserve_yes": "646690909090",
+        "reserve_no": "316295546561"
+      }
+    },
+    {
+      "id": "0001017526-0000000009",
+      "eventName": "Trade",
+      "ledger": 1017526,
+      "ledgerClosedAt": "2026-10-02T00:20:30.000Z",
+      "params": {
+        "market_id": "1",
+        "trader": "GEXTERNAL",
+        "outcome": {
+          "tag": "No"
+        },
+        "is_buy": true,
+        "collateral": "40000000000",
+        "shares": "57850720617",
+        "fee": "400000000",
+        "reserve_yes": "686290909090",
+        "reserve_no": "298044825944"
+      }
+    },
+    {
+      "id": "0001017527-0000000010",
+      "eventName": "Trade",
+      "ledger": 1017527,
+      "ledgerClosedAt": "2026-10-02T00:20:35.000Z",
+      "params": {
+        "market_id": "1",
+        "trader": "GEXTERNAL",
+        "outcome": {
+          "tag": "No"
+        },
+        "is_buy": true,
+        "collateral": "40000000000",
+        "shares": "55859433696",
+        "fee": "400000000",
+        "reserve_yes": "725890909090",
+        "reserve_no": "281785392248"
+      }
+    },
+    {
+      "id": "0001017528-0000000011",
+      "eventName": "Trade",
+      "ledger": 1017528,
+      "ledgerClosedAt": "2026-10-02T00:20:40.000Z",
+      "params": {
+        "market_id": "1",
+        "trader": "GEXTERNAL",
+        "outcome": {
+          "tag": "No"
+        },
+        "is_buy": true,
+        "collateral": "40000000000",
+        "shares": "54177183609",
+        "fee": "400000000",
+        "reserve_yes": "765490909090",
+        "reserve_no": "267208208639"
+      }
+    },
+    {
+      "id": "0001017529-0000000012",
+      "eventName": "Trade",
+      "ledger": 1017529,
+      "ledgerClosedAt": "2026-10-02T00:20:45.000Z",
+      "params": {
+        "market_id": "1",
+        "trader": "GEXTERNAL",
+        "outcome": {
+          "tag": "No"
+        },
+        "is_buy": true,
+        "collateral": "40000000000",
+        "shares": "52743167985",
+        "fee": "400000000",
+        "reserve_yes": "805090909090",
+        "reserve_no": "254065040654"
+      }
+    },
+    {
+      "id": "0001017580-0000000013",
+      "eventName": "Trade",
+      "ledger": 1017580,
+      "ledgerClosedAt": "2026-10-02T00:25:00.000Z",
+      "params": {
+        "market_id": "2",
+        "trader": "GEXTERNAL",
+        "outcome": {
+          "tag": "Yes"
+        },
+        "is_buy": true,
+        "collateral": "40000000000",
+        "shares": "159891616038",
+        "fee": "400000000",
+        "reserve_yes": "379708383962",
+        "reserve_no": "164600000000"
+      }
+    },
+    {
+      "id": "0001017581-0000000014",
+      "eventName": "Trade",
+      "ledger": 1017581,
+      "ledgerClosedAt": "2026-10-02T00:25:05.000Z",
+      "params": {
+        "market_id": "2",
+        "trader": "GEXTERNAL",
+        "outcome": {
+          "tag": "Yes"
+        },
+        "is_buy": true,
+        "collateral": "40000000000",
+        "shares": "113235905998",
+        "fee": "400000000",
+        "reserve_yes": "306072477964",
+        "reserve_no": "204200000000"
+      }
+    },
+    {
+      "id": "0001017582-0000000015",
+      "eventName": "Trade",
+      "ledger": 1017582,
+      "ledgerClosedAt": "2026-10-02T00:25:10.000Z",
+      "params": {
+        "market_id": "2",
+        "trader": "GEXTERNAL",
+        "outcome": {
+          "tag": "Yes"
+        },
+        "is_buy": true,
+        "collateral": "40000000000",
+        "shares": "89314807741",
+        "fee": "400000000",
+        "reserve_yes": "256357670223",
+        "reserve_no": "243800000000"
+      }
+    },
+    {
+      "id": "0001017583-0000000016",
+      "eventName": "Trade",
+      "ledger": 1017583,
+      "ledgerClosedAt": "2026-10-02T00:25:15.000Z",
+      "params": {
+        "market_id": "2",
+        "trader": "GEXTERNAL",
+        "outcome": {
+          "tag": "Yes"
+        },
+        "is_buy": true,
+        "collateral": "40000000000",
+        "shares": "75421325832",
+        "fee": "400000000",
+        "reserve_yes": "220536344391",
+        "reserve_no": "283400000000"
+      }
+    },
+    {
+      "id": "0001036720-0000000017",
+      "eventName": "Trade",
+      "ledger": 1036720,
+      "ledgerClosedAt": "2026-10-03T03:00:00.000Z",
+      "params": {
+        "market_id": "1",
+        "trader": "GEXTERNAL",
+        "outcome": {
+          "tag": "Yes"
+        },
+        "is_buy": true,
+        "collateral": "5000000000",
+        "shares": "20335979091",
+        "fee": "50000000",
+        "reserve_yes": "789704929999",
+        "reserve_no": "259015040654"
+      }
+    },
+    {
+      "id": "0001038160-0000000018",
+      "eventName": "Trade",
+      "ledger": 1038160,
+      "ledgerClosedAt": "2026-10-03T05:00:00.000Z",
+      "params": {
+        "market_id": "2",
+        "trader": "GEXTERNAL",
+        "outcome": {
+          "tag": "No"
+        },
+        "is_buy": true,
+        "collateral": "5000000000",
+        "shares": "11171352356",
+        "fee": "50000000",
+        "reserve_yes": "225486344391",
+        "reserve_no": "277178647644"
+      }
+    },
+    {
+      "id": "0001054000-0000000019",
+      "eventName": "Trade",
+      "ledger": 1054000,
+      "ledgerClosedAt": "2026-10-04T03:00:00.000Z",
+      "params": {
+        "market_id": "1",
+        "trader": "GEXTERNAL",
+        "outcome": {
+          "tag": "No"
+        },
+        "is_buy": true,
+        "collateral": "5000000000",
+        "shares": "6563435470",
+        "fee": "50000000",
+        "reserve_yes": "794654929999",
+        "reserve_no": "257401605184"
+      }
+    },
+    {
+      "id": "0001055440-0000000020",
+      "eventName": "Trade",
+      "ledger": 1055440,
+      "ledgerClosedAt": "2026-10-04T05:00:00.000Z",
+      "params": {
+        "market_id": "2",
+        "trader": "GEXTERNAL",
+        "outcome": {
+          "tag": "Yes"
+        },
+        "is_buy": true,
+        "collateral": "5000000000",
+        "shares": "8906200173",
+        "fee": "50000000",
+        "reserve_yes": "221530144218",
+        "reserve_no": "282128647644"
+      }
+    },
+    {
+      "id": "0001071280-0000000021",
+      "eventName": "Trade",
+      "ledger": 1071280,
+      "ledgerClosedAt": "2026-10-05T03:00:00.000Z",
+      "params": {
+        "market_id": "1",
+        "trader": "GEXTERNAL",
+        "outcome": {
+          "tag": "Yes"
+        },
+        "is_buy": true,
+        "collateral": "5000000000",
+        "shares": "19943397508",
+        "fee": "50000000",
+        "reserve_yes": "779661532491",
+        "reserve_no": "262351605184"
+      }
+    },
+    {
+      "id": "0001072720-0000000022",
+      "eventName": "Trade",
+      "ledger": 1072720,
+      "ledgerClosedAt": "2026-10-05T05:00:00.000Z",
+      "params": {
+        "market_id": "2",
+        "trader": "GEXTERNAL",
+        "outcome": {
+          "tag": "No"
+        },
+        "is_buy": true,
+        "collateral": "5000000000",
+        "shares": "11116265968",
+        "fee": "50000000",
+        "reserve_yes": "226480144218",
+        "reserve_no": "275962381676"
+      }
+    },
+    {
+      "id": "0001088560-0000000023",
+      "eventName": "Trade",
+      "ledger": 1088560,
+      "ledgerClosedAt": "2026-10-06T03:00:00.000Z",
+      "params": {
+        "market_id": "1",
+        "trader": "GEXTERNAL",
+        "outcome": {
+          "tag": "No"
+        },
+        "is_buy": true,
+        "collateral": "5000000000",
+        "shares": "6605138105",
+        "fee": "50000000",
+        "reserve_yes": "784611532491",
+        "reserve_no": "260696467079"
+      }
+    },
+    {
+      "id": "0001090000-0000000024",
+      "eventName": "Trade",
+      "ledger": 1090000,
+      "ledgerClosedAt": "2026-10-06T05:00:00.000Z",
+      "params": {
+        "market_id": "2",
+        "trader": "GEXTERNAL",
+        "outcome": {
+          "tag": "Yes"
+        },
+        "is_buy": true,
+        "collateral": "5000000000",
+        "shares": "8940841226",
+        "fee": "50000000",
+        "reserve_yes": "222489302992",
+        "reserve_no": "280912381676"
+      }
+    },
+    {
+      "id": "0001103680-0000000025",
+      "eventName": "MarketResolved",
+      "ledger": 1103680,
+      "ledgerClosedAt": "2026-10-07T00:00:00.000Z",
+      "params": {
+        "market_id": "1",
+        "outcome": {
+          "tag": "Yes"
+        }
+      }
+    },
+    {
+      "id": "0001112320-0000000026",
+      "eventName": "MarketResolved",
+      "ledger": 1112320,
+      "ledgerClosedAt": "2026-10-07T12:00:00.000Z",
+      "params": {
+        "market_id": "2",
+        "outcome": {
+          "tag": "No"
+        }
+      }
+    }
+  ],
+  "signals": [],
+  "forecasts": []
+}

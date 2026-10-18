@@ -55,6 +55,8 @@ export async function generateReasoningTrace(
     confidenceInterval:  ci,
     betFraction:         input.betFraction,
     betSizeUsdc:         input.betSizeUsdc,
+    correlation:         input.correlation,
+    seedPolicy:          input.seedPolicy,
     hedgeConditions:     hedgeConditions.conditions,
     provenance,
     agentWallet:         input.agentWallet,

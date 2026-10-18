@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import { sendSuccess, parsePagination, buildPaginationMeta } from '../utils/response.util';
-import { createOperationSchema, recordSchema, signatureSchema } from '../validators/admin.validator';
-import { z } from 'zod';
+import { createOperationSchema, recordSchema, reconcileRunSchema, signatureSchema } from '../validators/admin.validator';
+import { defaultDeps, runReconciliation } from '../services/market-reconciler.service';
 import { v4 as uuidv4 } from 'uuid';
 import { prisma } from '../lib/prisma';
 import { TraceAuditStatus } from '@prisma/client';
@@ -202,37 +202,40 @@ export async function getSystemStatus(_req: Request, res: Response): Promise<voi
   });
 }
 
-// ─── Dispute monitor (#92) ───────────────────────────────────────────────
-
-const disputeIdSchema = z.object({ id: z.string().uuid('id must be a dispute review UUID') });
-const disputeListSchema = z.object({ status: z.enum(['open', 'all']).default('open') });
-
-function disputeId(req: Request): string {
-  const parsed = disputeIdSchema.safeParse(req.params);
-  if (!parsed.success) throw new AppError(400, 'VALIDATION_ERROR', 'Invalid dispute id', parsed.error.flatten().fieldErrors as any);
-  return parsed.data.id;
+/** GET /admin/reconciliation/runs?limit= — newest first. */
+export async function listReconciliationRuns(req: Request, res: Response): Promise<void> {
+  const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit ?? '20'), 10) || 20));
+  sendSuccess(res, await prisma.reconcileRun.findMany({ orderBy: { startedAt: 'desc' }, take: limit }));
 }
 
-/** GET /admin/disputes?status=open|all — reviews with the window left on the ledger clock. */
-export async function getDisputes(req: Request, res: Response): Promise<void> {
-  const parsed = disputeListSchema.safeParse(req.query);
-  if (!parsed.success) throw new AppError(400, 'VALIDATION_ERROR', 'status must be open or all', parsed.error.flatten().fieldErrors as any);
-  const { page, limit } = parsePagination(req.query as any);
-  const { items, total, ledgerTime } = await listDisputes({ status: parsed.data.status, page, limit });
-  sendSuccess(res, items, 200, { ...(buildPaginationMeta(page, limit, total) as any), ledgerTime });
+/** GET /admin/reconciliation/runs/:id — the run and its findings, paginated. */
+export async function getReconciliationRun(req: Request, res: Response): Promise<void> {
+  const id = String(req.params.id);
+  const run = await prisma.reconcileRun.findUnique({ where: { id } });
+  if (!run) throw new AppError(404, 'RUN_NOT_FOUND', 'Reconciliation run not found');
+  const { page, limit, skip } = parsePagination(req.query as any);
+  const [findings, total] = await Promise.all([
+    prisma.marketDriftReport.findMany({ where: { runId: id }, orderBy: { createdAt: 'asc' }, skip, take: limit }),
+    prisma.marketDriftReport.count({ where: { runId: id } }),
+  ]);
+  sendSuccess(res, { run, findings }, 200, buildPaginationMeta(page, limit, total) as any);
 }
 
-/** POST /admin/disputes/:id/ack */
-export async function ackDispute(req: Request, res: Response): Promise<void> {
-  sendSuccess(res, await acknowledge(disputeId(req), actor(req)));
-}
-
-/** POST /admin/disputes/:id/cancel-tx — unsigned cancel_proposal for the guardian's wallet. */
-export async function cancelDisputeTx(req: Request, res: Response): Promise<void> {
-  sendSuccess(res, await buildGuardianTx(disputeId(req), 'cancel_proposal'));
-}
-
-/** POST /admin/disputes/:id/void-tx — unsigned guardian_void_market. */
-export async function voidDisputeTx(req: Request, res: Response): Promise<void> {
-  sendSuccess(res, await buildGuardianTx(disputeId(req), 'guardian_void_market'));
+/**
+ * POST /admin/reconciliation/run
+ * Starts a run in the background (same advisory lock as the cron) and returns
+ * 202 with its id.
+ */
+export async function triggerReconciliationRun(req: Request, res: Response): Promise<void> {
+  const parsed = reconcileRunSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    throw new AppError(400, 'VALIDATION_ERROR', 'Invalid reconciliation request', parsed.error.flatten().fieldErrors as any);
+  }
+  const runId = uuidv4();
+  const io = req.app.get('io') as { to(room: string): { emit(e: string, p: unknown): void } } | undefined;
+  runReconciliation(
+    { runId, dryRun: parsed.data.dryRun ?? false, ...(parsed.data.maxMarkets ? { maxMarkets: parsed.data.maxMarkets } : {}) },
+    { ...defaultDeps, emit: io ? (e, p) => io.to('admins').emit(e, p) : undefined },
+  ).catch((err) => logger.error({ err, runId }, 'Background reconciliation run failed'));
+  sendSuccess(res, { runId, message: 'Reconciliation run scheduled' }, 202);
 }

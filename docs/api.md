@@ -224,6 +224,7 @@ Threshold-based SEP-10 verification is a backlog item.
   "confidenceInterval": { "lower": 0.55, "upper": 0.7 },
   "totalLiquidity": 150,
   "seedAmountRaw": "1500000000",
+  "seedPolicy": { "seedRaw": "1500000000", "initialYesBps": 6200, "pAdj": 0.62, "expectedLpLossRaw": "180000000", "binding": "LP_LOSS_BUDGET", "inputs": { "…": "…" } },
   "expiryTimestamp": "2026-11-01T00:00:00.000Z",
   "onChainMarketId": "0",
   "creationTxHash": "a1b2…",
@@ -241,6 +242,30 @@ Threshold-based SEP-10 verification is a backlog item.
 from market-core; the frontend reads them directly with
 `get_market(onChainMarketId)`. `currentYesProb` and `totalLiquidity` are the
 backend's cached display values and can lag the chain.
+
+**Seed and opening price (#82).** `seedAmountRaw` is the treasury capital
+(7-decimal base units, decimal string) that `treasury.agent_create_market` put
+into the pool; the treasury is the market's LP. It is not the LLM's
+`minimum_liquidity_usdc` any more: that number is advisory, and the seed policy
+(`seed-policy.service.ts`) derives the seed from the category, time to close,
+the confidence interval and the treasury's headroom, then records how in
+`seedPolicy` (`null` for markets created before the policy or by admin tooling):
+`seedRaw`, `initialYesBps`, `pAdj`, the `expectedLpLossRaw` (what an informed
+trader who pushes the price to the farthest edge of the confidence interval
+would cost the LP), the `binding` bound (`BASE`, `MAX_TRADE`, `MAX_MARKET`,
+`MM_DAILY_SHARE`, `DAILY_HEADROOM`, `AVAILABLE_FRACTION`, `AGGREGATE_CAP` or
+`LP_LOSS_BUDGET`) and every input and bound.
+
+`initialYesProb` is the price the market **opened at**, not the model's raw
+estimate: the estimate is shrunk toward 0.5 in proportion to the width of its
+confidence interval, `pAdj = 0.5 + (p − 0.5)(1 − w·0.5)` with
+`w = clamp(width / 0.6, 0, 1)`, so uncertain proposals do not open at confident
+prices. It equals `initial_yes_bps / 10000` on chain, and it is what the
+pinned question document and the creation trace's `marketProbability` carry. The
+model's own estimate stays in the creation trace as `probabilityEstimate`.
+When the treasury budget does not allow at least the on-chain minimum seed
+(100 USDC), no market is created at all: nothing is written to the database or
+pinned to IPFS, and the market maker logs `SEED_SKIPPED` with the reason.
 
 `resolutionSpec` is the revealed preimage of `resolutionHash` (ADR 0001).
 Publishing it doesn't weaken the commitment: the hash was fixed on-chain
@@ -599,6 +624,20 @@ The agent's (treasury's) portfolio. Response:
 `availableCapitalRaw` is `treasury.available_capital()` read live (`null` if
 the RPC read fails). The float fields are the DB's view.
 
+`correlationRisk` (#80): `{ pairs, totalExposure, isOverExposed, matrix, method, snapshotId }`.
+Each pair is `{ marketIdA, marketIdB, correlationScore, relationship, method }`
+for open positions with `|correlationScore| ≥ 0.60`. `correlationScore` is the
+estimate used for sizing: the latest correlation snapshot's value for the pair
+(`method: "empirical"`, or `"prior"` when the pair had too little overlap), or
+the hand-written category matrix (`method: "matrix"`) when there is no snapshot,
+it is older than two hours or it lacks the pair. `relationship` follows the sign
+(`POSITIVE`, `NEGATIVE`, or `NONE` when |ρ| < 0.05). `matrix` is
+`{ marketIds, values }`, the full correlation matrix of the (up to 50 largest)
+open positions projected onto the nearest positive-semidefinite matrix; the pair
+scores are the raw pairwise values. `method` is `"snapshot"` when any pair used
+the snapshot. The trader's reasoning traces carry the same
+`correlation: { pairs, method, snapshotId }` for the size they were cut to.
+
 #### `GET /portfolio/positions`
 
 Query `status`, `page`, `limit`. Response: `Position[]` with
@@ -677,6 +716,32 @@ Query parameters: `page`, `limit`, `status`.
 
 Schedules a trace audit run asynchronously in the background.
 Response `202 Accepted`: `{ "runId": "uuid", "message": "Trace audit run scheduled" }`.
+
+#### `GET /admin/reconciliation/runs?limit=` (admin)
+
+Latest market-lifecycle reconciliation runs (#83), newest first (`limit` ≤ 100,
+default 20): `{ id, startedAt, finishedAt, scanned, repaired, reported, deferred, rpcCalls, error }`.
+
+#### `GET /admin/reconciliation/runs/:id` (admin)
+
+`{ run, findings }`, with `findings` paginated (`page`, `limit`). Each finding is
+`{ id, runId, marketId, onChainMarketId, driftClass, dbValue, chainValue, action, observedLedger, createdAt }`.
+
+`driftClass`: `MISSED_RESOLUTION`, `MISSED_VOID`, `CLOSED_BUT_ACTIVE`,
+`PRICE_STALE`, `CLOSE_TIME_MISMATCH`, `HASH_MISMATCH`, `NOT_FOUND_ON_CHAIN`,
+`STATUS_REGRESSION`. `action`: `REPAIRED`, `REPORTED` (report-only classes and
+dry runs), `DEFERRED` (the indexer is behind the observation and may still
+process the event itself; a finding deferred in three runs in a row is repaired
+anyway, with `chainValue.forced = true`) or `SKIPPED_NEWER` (a newer writer
+moved the row first). Repaired resolutions carry `chainValue.resolvedAtApproximate`:
+`resolvedAt` is the observation time, not the on-chain one.
+
+#### `POST /admin/reconciliation/run` (admin)
+
+Body `{ "dryRun"?: boolean, "maxMarkets"?: number }`. Starts a run in the
+background, under the same advisory lock as the cron (a run that cannot take
+the lock records itself as skipped). Response `202 Accepted`:
+`{ "runId": "uuid", "message": "Reconciliation run scheduled" }`.
 
 ### Oracle / resolution
 
@@ -1083,6 +1148,13 @@ The old payload had `amount` (float USDC), `price` (0–1) and `probChange`
 > A trace's `verified` flag means its `trace_hash` was confirmed on-chain: set
 > by the indexer when it sees the matching `TracePublished` event (or by
 > `POST /traces/verify`), never from a write result alone and never in dry-run.
+
+### `MARKET_DRIFT`
+
+Admins only (#83): sockets that connect with `auth: { token: <admin JWT> }` join
+the `admins` room. Emitted by the reconciler for integrity findings that are
+never auto-repaired (`HASH_MISMATCH`, `STATUS_REGRESSION`, `NOT_FOUND_ON_CHAIN`):
+`{ runId, marketId, onChainMarketId, driftClass, dbValue, chainValue }`.
 
 ### `REASONING_PUBLISHED`
 

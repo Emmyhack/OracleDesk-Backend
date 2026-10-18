@@ -183,13 +183,11 @@ model Market {
   resolutionHash     String?
   /// Revealed preimage of resolutionHash, kept so it can be registered with the resolver.
   resolutionSpec     Json?
-  /// LlmProvenance of the call that proposed this market (#66). Null for older rows.
-  generationProvenance Json?
-  /// Embedding of the normalised question (#69), vector(768). Read and written with raw SQL only.
-  /// The HNSW index markets_question_embedding_hnsw lives in the migration, not here.
-  questionEmbedding  Unsupported("vector(768)")?
-  /// Model that produced questionEmbedding; vectors are compared only within one model.
-  embeddingModel     String?
+  /// Seed policy inputs, bounds, binding constraint and expected LP loss (#82).
+  seedPolicy         Json?
+  /// Highest ledger whose chain state this row reflects; guards writes from the indexer and the reconciler (#83).
+  chainSyncedLedger  Int?
+  lastReconciledAt   DateTime?          @db.Timestamptz(3)
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
 
@@ -207,7 +205,7 @@ model Market {
   @@index([expiryTimestamp])
   @@index([settlementCurrency])
   @@index([resolvedAt])
-  @@index([resolutionSpec], type: Gin)
+  @@index([lastReconciledAt])
   @@map("markets")
 }
 
@@ -727,74 +725,49 @@ model IdempotencyKey {
   @@map("idempotency_keys")
 }
 
-/// External resolution signer attestations coordinated through the signer API (#91).
-/// `status`: PREPARED | SUBMITTED | CONFIRMED | FAILED.
-model SignerAttestation {
+
+/// Empirical pairwise market correlations, recomputed on a schedule (#80).
+model CorrelationSnapshot {
+  id           String   @id @default(uuid())
+  computedAt   DateTime @default(now()) @db.Timestamptz(3)
+  gridStepSecs Int
+  windowDays   Int
+  /// [{ a, b, rho, n, method: 'empirical'|'prior', sample, prior, delta }], backend market ids with a < b.
+  pairs        Json
+
+  @@index([computedAt])
+  @@map("correlation_snapshots")
+}
+
+/// One drift finding from the market lifecycle reconciler (#83).
+model MarketDriftReport {
   id              String   @id @default(uuid())
+  runId           String
   marketId        String
   onChainMarketId BigInt
-  signer          String
-  /// YES | NO
-  outcome         String
-  status          String
-  preparedXdr     String
-  /// Hash of the prepared envelope (network-bound); signatures do not change it.
-  preparedHash    String
-  validUntil      DateTime
-  txHash          String?
-  ledger          Int?
-  error           String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  driftClass      String
+  dbValue         Json
+  chainValue      Json
+  /// REPAIRED | REPORTED | DEFERRED | SKIPPED_NEWER
+  action          String
+  observedLedger  Int
+  createdAt       DateTime @default(now()) @db.Timestamptz(3)
 
-  @@unique([onChainMarketId, signer, outcome])
-  @@index([marketId])
-  @@map("signer_attestations")
+  @@index([runId])
+  @@index([driftClass, createdAt])
+  @@map("market_drift_reports")
 }
 
-/// Independent review of one ResolutionProposed event (#92).
-/// `verdict`: PENDING | AGREE | DISAGREE | INSUFFICIENT | ERROR.
-model DisputeReview {
-  id                 String    @id @default(uuid())
-  onChainMarketId    BigInt
-  /// chain_events.id of the ResolutionProposed event (or `missed:<market>` for the polling fallback).
-  proposalEventId    String    @unique
-  proposedOutcome    String
-  /// Ledger seconds. Null when the proposal was found by polling and its time is unknown.
-  proposedAt         BigInt?
-  windowEndsAt       BigInt?
-  verdict            String
-  independentOutcome String?
-  confidence         Float?
-  evidence           Json?
-  evidenceHash       String?
-  acknowledgedBy     String?
-  acknowledgedAt     DateTime?
-  /// FINALIZED | CANCELLED | null
-  resolvedAs         String?
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
+model ReconcileRun {
+  id         String    @id @default(uuid())
+  startedAt  DateTime  @default(now()) @db.Timestamptz(3)
+  finishedAt DateTime?           @db.Timestamptz(3)
+  scanned    Int       @default(0)
+  repaired   Int       @default(0)
+  reported   Int       @default(0)
+  deferred   Int       @default(0)
+  rpcCalls   Int       @default(0)
+  error      String?
 
-  @@index([verdict])
-  @@index([onChainMarketId])
-  @@map("dispute_reviews")
-}
-
-/// One alert sent (or attempted) for a review, deduplicated by `dedupeKey`.
-model AlertDelivery {
-  id        String    @id @default(uuid())
-  reviewId  String
-  /// INFO | WARN | CRITICAL
-  level     String
-  sink      String
-  /// reviewId:level:sink
-  dedupeKey String    @unique
-  /// SENT | FAILED
-  status    String
-  attempts  Int       @default(0)
-  sentAt    DateTime?
-  error     String?
-
-  @@index([reviewId])
-  @@map("alert_deliveries")
+  @@map("reconcile_runs")
 }

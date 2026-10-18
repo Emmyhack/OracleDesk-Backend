@@ -1,6 +1,7 @@
 import cron from 'node-cron';
 import { runTraderCycle } from '../agents/trader.agent';
-import { expireStaleSubscriptions, notifyExpiringPasses } from '../services/subscription.service';
+import { computeCorrelationSnapshot } from '../services/correlation.service';
+import { expireStaleSubscriptions } from '../services/subscription.service';
 import { logger } from '../lib/logger';
 import { config } from '../config';
 import { postgresContentStore } from '../services/content-store.service';
@@ -10,6 +11,7 @@ import { computeAndStoreSnapshots } from '../services/calibration.service';
 import { recordCronRun } from './registry';
 
 let runningTraderCycleId: string | null = null;
+let correlationSnapshotRunning = false;
 
 /** One correlated context per cron tick. */
 function tick(job: string, fn: () => Promise<void>): Promise<void> {
@@ -27,6 +29,25 @@ function tick(job: string, fn: () => Promise<void>): Promise<void> {
  * Separate guard flags prevent the Trader Agent from overlapping with itself.
  */
 export function startMonitorCron(): void {
+  // Correlation snapshot (#80) — every 15 minutes, just before the trader reads it.
+  cron.schedule('2,17,32,47 * * * *', () => tick('correlation-snapshot', async () => {
+    if (correlationSnapshotRunning) {
+      logger.warn({ skippedJob: 'correlation-snapshot' }, 'Monitor cron: correlation snapshot still running — skipping');
+      return;
+    }
+    correlationSnapshotRunning = true;
+    const startedAt = new Date();
+    try {
+      await computeCorrelationSnapshot();
+      recordCronRun('correlation-snapshot', 'success', startedAt, new Date());
+    } catch (err) {
+      recordCronRun('correlation-snapshot', 'failure', startedAt, new Date(), err);
+      logger.error({ err }, 'Monitor cron: correlation snapshot failed');
+    } finally {
+      correlationSnapshotRunning = false;
+    }
+  }));
+
   // Trader Agent — every 15 minutes
   cron.schedule('5,20,35,50 * * * *', () => tick('trader', async () => {
     if (runningTraderCycleId) {

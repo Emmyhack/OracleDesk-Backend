@@ -21,13 +21,13 @@ declare global {
   }
 }
 
-const VERIFY_OPTIONS: jwt.VerifyOptions = { algorithms: ['HS256'] };
+function decode(req: Request): { user?: JwtPayload; error?: 'missing' | 'expired' | 'invalid' } {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return { error: 'missing' };
+  return verifyBearer(authHeader.slice(7));
+}
 
-/**
- * Verifies an access token. Shared by the HTTP middleware and the socket
- * handshake so both accept exactly the same tokens (HS256 only).
- */
-export function verifyAccessToken(token: string): { user?: JwtPayload; error?: 'expired' | 'invalid' } {
+function verifyBearer(token: string): { user?: JwtPayload; error?: 'missing' | 'expired' | 'invalid' } {
   try {
     return { user: jwt.verify(token, secret('JWT_SECRET'), VERIFY_OPTIONS) as JwtPayload };
   } catch (err) {
@@ -93,6 +93,13 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction): v
     return;
   }
   next();
+}
+
+/** True when `token` is a valid JWT for an admin address (used for the socket admin room). */
+export function isAdminToken(token: unknown): boolean {
+  if (typeof token !== 'string') return false;
+  const { user } = verifyBearer(token);
+  return Boolean(user && config.ADMIN_ADDRESSES.includes(user.walletAddress));
 }
 
 /**

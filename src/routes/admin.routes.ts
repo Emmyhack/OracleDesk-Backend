@@ -6,14 +6,16 @@ import {
   cancelDisputeTx,
   cancelTreasuryOperation,
   createOperation,
-  getDisputes,
+  getReconciliationRun,
   getSystemStatus,
   getTraceAuditSummary,
   getTreasury,
   getTreasuryOperation,
+  listReconciliationRuns,
   listTreasuryOperations,
   recordTreasuryOperation,
   submitTreasuryOperation,
+  triggerReconciliationRun,
   triggerTraceAuditRun,
   voidDisputeTx,
 } from '../controllers/admin.controller';
@@ -37,5 +39,8 @@ router.post('/disputes/:id/cancel-tx', cancelDisputeTx);
 router.post('/disputes/:id/void-tx', voidDisputeTx);
 router.get('/trace-audit', getTraceAuditSummary);
 router.post('/trace-audit/run', triggerTraceAuditRun);
+router.get('/reconciliation/runs', listReconciliationRuns);
+router.get('/reconciliation/runs/:id', getReconciliationRun);
+router.post('/reconciliation/run', triggerReconciliationRun);
 
 export default router;

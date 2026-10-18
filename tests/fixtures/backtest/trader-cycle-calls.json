@@ -1,0 +1,445 @@
+{
+  "cycle": [
+    {
+      "call": "position.findMany",
+      "args": {
+        "where": {
+          "status": {
+            "in": [
+              "CLOSED",
+              "STOP_LOSS"
+            ]
+          },
+          "closedAt": {
+            "gte": "<iso>"
+          }
+        },
+        "select": {
+          "pnl": true
+        }
+      }
+    },
+    {
+      "call": "position.findMany",
+      "args": {
+        "where": {
+          "status": "OPEN"
+        }
+      }
+    },
+    {
+      "call": "position.findUnique",
+      "args": {
+        "where": {
+          "id": "p-stop"
+        }
+      }
+    },
+    {
+      "call": "position.findUnique",
+      "args": {
+        "where": {
+          "id": "p-stop"
+        },
+        "include": {
+          "trade": true
+        }
+      }
+    },
+    {
+      "call": "position.update",
+      "args": {
+        "where": {
+          "id": "p-stop"
+        },
+        "data": {
+          "status": "STOP_LOSS",
+          "currentPrice": 0.3,
+          "pnl": -20,
+          "closedAt": "<iso>",
+          "closeReason": "STOP_LOSS"
+        }
+      }
+    },
+    {
+      "call": "agentLog.create",
+      "args": {
+        "data": {
+          "agentType": "TRADER",
+          "level": "INFO",
+          "action": "POSITION_CLOSED",
+          "marketId": "m-stop",
+          "data": {
+            "positionId": "p-stop",
+            "closeReason": "STOP_LOSS",
+            "pnl": -20,
+            "closePrice": 0.3,
+            "correlation": {}
+          }
+        }
+      }
+    },
+    {
+      "call": "position.findUnique",
+      "args": {
+        "where": {
+          "id": "p-hold"
+        }
+      }
+    },
+    {
+      "call": "position.findMany",
+      "args": {
+        "where": {
+          "status": "OPEN"
+        },
+        "include": {
+          "market": {
+            "select": {
+              "id": true,
+              "category": true,
+              "currentYesProb": true,
+              "totalLiquidity": true
+            }
+          },
+          "trade": true
+        }
+      }
+    },
+    {
+      "call": "market.findFirst",
+      "args": {
+        "where": {
+          "category": "CRYPTO",
+          "id": {
+            "not": "m-stop"
+          },
+          "status": "ACTIVE",
+          "totalLiquidity": {
+            "gte": 500
+          }
+        },
+        "orderBy": {
+          "totalLiquidity": "desc"
+        }
+      }
+    },
+    {
+      "call": "market.findUnique",
+      "args": {
+        "where": {
+          "id": "m-hedge"
+        }
+      }
+    },
+    {
+      "call": "trade.create",
+      "args": {
+        "data": {
+          "marketId": "m-hedge",
+          "direction": "NO",
+          "status": "PENDING",
+          "amount": 50,
+          "price": 0.5,
+          "edgeDetected": 0,
+          "kellyFraction": 0
+        }
+      }
+    },
+    {
+      "call": "agentLog.create",
+      "args": {
+        "data": {
+          "agentType": "TRADER",
+          "level": "INFO",
+          "action": "AUTO_HEDGE_EXECUTED",
+          "marketId": "m-hedge",
+          "data": {
+            "originalMarketId": "m-stop",
+            "hedgeTradeId": "t-11",
+            "hedgeDirection": "NO",
+            "hedgeSize": 50,
+            "rationale": "Edge decayed from 0.200 to 0.400. Partial hedge of 50 USDC via m-hedge reduces net exposure by ~50%.",
+            "correlation": {}
+          }
+        }
+      }
+    },
+    {
+      "call": "aggregateSignals"
+    },
+    {
+      "call": "market.findMany",
+      "args": {
+        "where": {
+          "status": "ACTIVE",
+          "totalLiquidity": {
+            "gte": 500
+          },
+          "expiryTimestamp": {
+            "gt": "<iso>",
+            "lte": "<iso>"
+          }
+        }
+      }
+    },
+    {
+      "call": "position.findFirst",
+      "args": {
+        "where": {
+          "marketId": "m-new",
+          "status": "OPEN"
+        }
+      }
+    },
+    {
+      "call": "calculateProbability",
+      "marketProb": 0.4
+    },
+    {
+      "call": "market.findUnique",
+      "args": {
+        "where": {
+          "id": "m-new"
+        },
+        "select": {
+          "category": true,
+          "id": true
+        }
+      }
+    },
+    {
+      "call": "position.findMany",
+      "args": {
+        "where": {
+          "status": "OPEN"
+        },
+        "include": {
+          "market": {
+            "select": {
+              "id": true,
+              "category": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "call": "correlationSnapshot.findFirst",
+      "args": {
+        "orderBy": {
+          "computedAt": "desc"
+        }
+      }
+    },
+    {
+      "call": "generateReasoningTrace",
+      "input": {
+        "marketId": "m-new",
+        "agentType": "TRADER",
+        "decisionType": "OPEN_POSITION",
+        "sourcesUsed": [
+          {
+            "source": "NEWSAPI",
+            "weight": 0.7,
+            "signal": "headline 1",
+            "rawValue": 0.4
+          },
+          {
+            "source": "NEWSAPI",
+            "weight": 0.7,
+            "signal": "headline 2",
+            "rawValue": 0.4
+          },
+          {
+            "source": "NEWSAPI",
+            "weight": 0.7,
+            "signal": "headline 3",
+            "rawValue": 0.4
+          }
+        ],
+        "probabilityEstimate": 0.7,
+        "marketProbability": 0.4,
+        "edge": 0.29999999999999993,
+        "confidenceInterval": {
+          "lower": 0.62,
+          "upper": 0.78
+        },
+        "betFraction": 0.025,
+        "betSizeUsdc": 250,
+        "correlation": {
+          "pairs": [
+            {
+              "marketIdA": "m-new",
+              "marketIdB": "m-held",
+              "correlationScore": 0.7,
+              "relationship": "POSITIVE",
+              "method": "matrix"
+            }
+          ],
+          "method": "matrix",
+          "snapshotId": null
+        }
+      }
+    },
+    {
+      "call": "market.findUnique",
+      "args": {
+        "where": {
+          "id": "m-new"
+        }
+      }
+    },
+    {
+      "call": "position.findFirst",
+      "args": {
+        "where": {
+          "marketId": "m-new",
+          "status": "OPEN"
+        }
+      }
+    },
+    {
+      "call": "trade.create",
+      "args": {
+        "data": {
+          "marketId": "m-new",
+          "direction": "YES",
+          "status": "PENDING",
+          "amount": 250,
+          "price": 0.4,
+          "edgeDetected": 0.29999999999999993,
+          "kellyFraction": 0.025
+        }
+      }
+    },
+    {
+      "call": "chain.quoteBuy",
+      "args": [
+        "7n",
+        {
+          "tag": "Yes"
+        },
+        "2500000000n"
+      ]
+    },
+    {
+      "call": "chain.agentBuy",
+      "args": {
+        "market_id": "7n",
+        "outcome": {
+          "tag": "Yes"
+        },
+        "collateral_in": "2500000000n",
+        "min_shares_out": "990000n"
+      }
+    },
+    {
+      "call": "trade.update",
+      "args": {
+        "where": {
+          "id": "t-23"
+        },
+        "data": {
+          "status": "EXECUTED",
+          "txHash": "abababababababababababababababababababababababababababababababab",
+          "executedAt": "<iso>"
+        }
+      }
+    },
+    {
+      "call": "position.create",
+      "args": {
+        "data": {
+          "marketId": "m-new",
+          "tradeId": "t-23",
+          "direction": "YES",
+          "status": "OPEN",
+          "entryPrice": 0.4,
+          "currentPrice": 0.4,
+          "size": 250,
+          "pnl": 0
+        }
+      }
+    },
+    {
+      "call": "$transaction",
+      "ops": 2
+    },
+    {
+      "call": "enqueueTracePublication",
+      "args": {
+        "traceId": "trace-1",
+        "payload": {
+          "traceId": "trace-1"
+        },
+        "action": "buy_yes"
+      }
+    },
+    {
+      "call": "agentLog.create",
+      "args": {
+        "data": {
+          "agentType": "TRADER",
+          "level": "INFO",
+          "action": "TRADE_EXECUTED",
+          "marketId": "m-new",
+          "data": {
+            "tradeId": "t-23",
+            "txHash": "abababababababababababababababababababababababababababababababab",
+            "direction": "YES",
+            "amount": 250,
+            "edge": 0.29999999999999993,
+            "correlation": {}
+          }
+        }
+      }
+    },
+    {
+      "call": "position.findFirst",
+      "args": {
+        "where": {
+          "marketId": "m-held",
+          "status": "OPEN"
+        }
+      }
+    }
+  ],
+  "paused": [
+    {
+      "call": "position.findMany",
+      "args": {
+        "where": {
+          "status": {
+            "in": [
+              "CLOSED",
+              "STOP_LOSS"
+            ]
+          },
+          "closedAt": {
+            "gte": "<iso>"
+          }
+        },
+        "select": {
+          "pnl": true
+        }
+      }
+    },
+    {
+      "call": "agentLog.create",
+      "args": {
+        "data": {
+          "agentType": "TRADER",
+          "level": "WARN",
+          "action": "DRAWDOWN_PAUSE",
+          "data": {
+            "drawdownPct": 0.04,
+            "dailyLoss": 400,
+            "pauseUntil": "<iso>",
+            "correlation": {}
+          }
+        }
+      }
+    }
+  ]
+}

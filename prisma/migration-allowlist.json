@@ -1,18 +1,14 @@
 [
   {
-    "migration": "20261018000001_calibration_snapshots",
-    "rules": [
-      "require-concurrent-index-creation"
-    ],
-    "reason": "CREATE INDEX CONCURRENTLY cannot run inside the transaction Prisma wraps migrations in. reasoning_traces is append-only and small (thousands of rows); the build blocks writes for well under a second and lock_timeout = 5s makes it fail fast if the table is busy.",
-    "approvedBy": "@maintainers (pending review of the PR that adds this entry)"
+    "migration": "20261018000000_correlation_snapshots",
+    "rules": ["require-concurrent-index-creation"],
+    "reason": "chain_events is append-only and written by one indexer. CREATE INDEX CONCURRENTLY cannot run inside Prisma's migration transaction, and lock_timeout = 5s bounds how long the index build may wait for the table.",
+    "approvedBy": "pending maintainer review on the PR that adds this migration"
   },
   {
-    "migration": "20261018000002_market_embeddings",
-    "rules": [
-      "require-concurrent-index-creation"
-    ],
-    "reason": "Same constraint: no CONCURRENTLY inside Prisma's migration transaction. markets is small and the new vector column is entirely NULL at this point, so the partial HNSW index is empty when it is created.",
-    "approvedBy": "@maintainers (pending review of the PR that adds this entry)"
+    "migration": "20261018000002_market_reconciler",
+    "rules": ["require-concurrent-index-creation"],
+    "reason": "markets is a small table, and CREATE INDEX CONCURRENTLY cannot run inside Prisma's migration transaction; lock_timeout = 5s bounds the wait.",
+    "approvedBy": "pending maintainer review on the PR that adds this migration"
   }
 ]
