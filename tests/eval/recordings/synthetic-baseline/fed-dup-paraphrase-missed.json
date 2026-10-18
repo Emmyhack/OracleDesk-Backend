@@ -1,0 +1,8 @@
+{
+  "caseId": "fed-dup-paraphrase-missed",
+  "kind": "proposal",
+  "promptKey": "b0f0dfb233b4c13df471454fe7a46ba4c4fe59321fe31aeeb0154b99e1b73a00",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will the FOMC leave the federal funds target unchanged on Sept 17?\",\"initial_yes_probability\":0.7,\"resolution_oracle\":\"FRED\",\"expiry_timestamp\":1789646400,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"FED\",\"confidence_interval\":{\"lower\":0.6,\"upper\":0.8},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"f1\"]}"
+}

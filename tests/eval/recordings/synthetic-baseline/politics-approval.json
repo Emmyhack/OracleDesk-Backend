@@ -1,0 +1,8 @@
+{
+  "caseId": "politics-approval",
+  "kind": "proposal",
+  "promptKey": "be23e3fcb2690f56bdc444a3716e2c8a0754af9719926560fea7d42ee6e85377",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will the RealClearPolitics average of presidential approval be below 42.0% on October 15, 2026?\",\"initial_yes_probability\":0.35,\"resolution_oracle\":\"REALCLEARPOLITICS\",\"expiry_timestamp\":1792065600,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"POLITICS\",\"confidence_interval\":{\"lower\":0.25,\"upper\":0.45},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"n1\"]}"
+}

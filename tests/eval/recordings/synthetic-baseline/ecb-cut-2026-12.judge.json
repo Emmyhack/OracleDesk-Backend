@@ -1,0 +1,8 @@
+{
+  "caseId": "ecb-cut-2026-12",
+  "kind": "judge",
+  "promptKey": "6e6f1253d121c110f5d472570cd33c4d7e219f37bc9c9c6acf256e815e3363e3",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":1,\"ambiguity_notes\":\"Synthetic judge verdict.\"}"
+}

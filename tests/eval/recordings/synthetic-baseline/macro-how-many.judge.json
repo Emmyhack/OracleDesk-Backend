@@ -1,0 +1,8 @@
+{
+  "caseId": "macro-how-many",
+  "kind": "judge",
+  "promptKey": "d5531be81d6b8489729e7359106d45244244a97c18fa4de43ae8bca178d8e9be",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":0,\"verifiable\":1,\"ambiguity_notes\":\"Asks for a number, not yes or no.\"}"
+}

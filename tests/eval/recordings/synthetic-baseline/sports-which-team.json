@@ -1,0 +1,8 @@
+{
+  "caseId": "sports-which-team",
+  "kind": "proposal",
+  "promptKey": "2638aef46b18684e11cef096128426e57d72c55b86197b9d326df666beeb4b1d",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Which team will win Super Bowl LXI?\",\"initial_yes_probability\":0.25,\"resolution_oracle\":\"ESPN\",\"expiry_timestamp\":1796126400,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"SPORTS\",\"confidence_interval\":{\"lower\":0.15,\"upper\":0.35},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"n1\"]}"
+}

@@ -1,0 +1,34 @@
+{
+  "id": "edge-no-label",
+  "asOf": "2026-10-18T12:00:00Z",
+  "signals": {
+    "news": [
+      {
+        "source": "NEWSAPI",
+        "title": "Port strike threatens holiday shipments",
+        "content": "Talks resume Monday.",
+        "publishedAt": "2026-10-18T11:55:00.000Z",
+        "relevanceScore": 0.7,
+        "category": "MACRO"
+      }
+    ],
+    "fed": [],
+    "macro": [],
+    "signalCount": 1
+  },
+  "existing": [
+    {
+      "question": "Will the Lakers win the 2026 NBA championship?",
+      "category": "SPORTS"
+    },
+    {
+      "question": "Will Bitcoin trade above $100,000 before year end?",
+      "category": "CRYPTO"
+    }
+  ],
+  "labels": {
+    "category": null,
+    "expectDuplicateOf": null,
+    "notes": "Unlabelled: the category grader skips it."
+  }
+}

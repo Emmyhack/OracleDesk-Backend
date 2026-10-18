@@ -18,6 +18,7 @@
     "prisma:studio": "prisma studio",
     "sync:contracts": "node scripts/sync-contracts.mjs",
     "check:contracts": "node scripts/sync-contracts.mjs --check",
+    "eval:markets": "tsx scripts/eval-markets.ts",
     "verify:report": "node -r ts-node/register/transpile-only scripts/verify-report.ts",
     "lint:migrations": "bash scripts/lint-migrations.sh",
     "db:seed": "tsx prisma/seed.ts",

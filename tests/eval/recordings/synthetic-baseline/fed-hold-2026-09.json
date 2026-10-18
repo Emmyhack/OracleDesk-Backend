@@ -1,0 +1,8 @@
+{
+  "caseId": "fed-hold-2026-09",
+  "kind": "proposal",
+  "promptKey": "c8b3ce30798299aaed9b086b242350cf4a73b1386566bd00fcdde59582fc25dd",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will the Federal Reserve keep the federal funds target range unchanged at its September 17, 2026 meeting?\",\"initial_yes_probability\":0.72,\"resolution_oracle\":\"FRED\",\"expiry_timestamp\":1789646400,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"FED\",\"confidence_interval\":{\"lower\":0.62,\"upper\":0.82},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"f1\",\"n1\"]}"
+}

@@ -1,0 +1,34 @@
+{
+  "id": "ecb-hicp-2026-11",
+  "asOf": "2026-10-18T12:00:00Z",
+  "signals": {
+    "news": [],
+    "fed": [],
+    "macro": [
+      {
+        "source": "GDELT",
+        "title": "Euro area inflation edges down",
+        "content": "Flash HICP estimate shows 2.1% year on year.",
+        "publishedAt": "2026-10-18T11:55:00.000Z",
+        "relevanceScore": 0.7,
+        "category": "ECB"
+      }
+    ],
+    "signalCount": 1
+  },
+  "existing": [
+    {
+      "question": "Will the Lakers win the 2026 NBA championship?",
+      "category": "SPORTS"
+    },
+    {
+      "question": "Will Bitcoin trade above $100,000 before year end?",
+      "category": "CRYPTO"
+    }
+  ],
+  "labels": {
+    "category": "ECB",
+    "expectDuplicateOf": null,
+    "notes": "Threshold question; no explicit resolution date in the text."
+  }
+}

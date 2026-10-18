@@ -1,0 +1,8 @@
+{
+  "caseId": "politics-nomination",
+  "kind": "judge",
+  "promptKey": "61e25ae845e1984174d34796c118f61ab8ddc191879658f3a5f6b7354dd62cb4",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":1,\"ambiguity_notes\":\"Synthetic judge verdict.\"}"
+}

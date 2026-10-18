@@ -1,0 +1,8 @@
+{
+  "caseId": "ecb-hicp-2026-11",
+  "kind": "judge",
+  "promptKey": "586ea6029a39038838626bdeb342249b541d6feeb7cbb84eff34e69ee2dd16dd",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":1,\"ambiguity_notes\":\"Synthetic judge verdict.\"}"
+}

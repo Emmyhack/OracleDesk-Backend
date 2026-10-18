@@ -1,0 +1,8 @@
+{
+  "caseId": "ent-billboard",
+  "kind": "proposal",
+  "promptKey": "944b8b40fa07b2e7d97a492337d0f6f7c1d76d3f039abfb5652e17fb04234a48",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will the new single reach number one on the Billboard Hot 100 chart dated November 7, 2026?\",\"initial_yes_probability\":0.4,\"resolution_oracle\":\"BILLBOARD\",\"expiry_timestamp\":1794052800,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"ENTERTAINMENT\",\"confidence_interval\":{\"lower\":0.3,\"upper\":0.5},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"n1\"]}"
+}

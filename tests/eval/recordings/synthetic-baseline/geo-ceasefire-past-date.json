@@ -1,0 +1,8 @@
+{
+  "caseId": "geo-ceasefire-past-date",
+  "kind": "proposal",
+  "promptKey": "998624fa23c3653c5e2306a73266eccb18a0da7c15bb96bd1fadc9c581aa34ae",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will a formal ceasefire agreement be signed by August 31, 2026?\",\"initial_yes_probability\":0.3,\"resolution_oracle\":\"GDELT\",\"expiry_timestamp\":1788177600,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"GEOPOLITICAL\",\"confidence_interval\":{\"lower\":0.2,\"upper\":0.4},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"m1\"]}"
+}

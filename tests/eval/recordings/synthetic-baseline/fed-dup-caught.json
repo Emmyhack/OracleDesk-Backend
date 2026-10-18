@@ -1,0 +1,8 @@
+{
+  "caseId": "fed-dup-caught",
+  "kind": "proposal",
+  "promptKey": "cee16bcff696a27ac1cdd05dc83679284e61cf1d017781105547e7809b5a4932",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will the Federal Reserve keep the federal funds rate unchanged at its September 17, 2026 meeting?\",\"initial_yes_probability\":0.7,\"resolution_oracle\":\"FRED\",\"expiry_timestamp\":1789646400,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"FED\",\"confidence_interval\":{\"lower\":0.6,\"upper\":0.8},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"f1\"]}"
+}

@@ -1,0 +1,8 @@
+{
+  "caseId": "geo-sanctions-vote",
+  "kind": "proposal",
+  "promptKey": "856aca1b0ebb014fa6c82cd48bc61adef37166effe7995579b6258e26ba9b822",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will the US Senate pass the energy export sanctions bill by October 9, 2026?\",\"initial_yes_probability\":0.5,\"resolution_oracle\":\"AP_POLITICS\",\"expiry_timestamp\":1791547200,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"GEOPOLITICAL\",\"confidence_interval\":{\"lower\":0.4,\"upper\":0.6},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"m1\"]}"
+}

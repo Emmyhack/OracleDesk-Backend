@@ -211,6 +211,65 @@ providers through `setAnthropicClient()` / `setGeminiModelFactory()` and replay 
 shapes in `tests/fixtures/llm/` (hand-built examples of the API shapes, not
 captures from a live account).
 
+## Evaluating market generation (#67)
+
+`npm run eval:markets` measures whether a prompt, model or schema change makes
+proposals better or worse. It is offline: the corpus pins the inputs and
+recordings pin the model's answers, so a run is deterministic and needs no
+keys, database or network.
+
+- **Corpus** (`tests/eval/corpus/<id>.json`, 44 cases): an `asOf` date, the
+  signals (titles and short snippets only, as the prompt truncates them), the
+  fixed list of existing questions used for dedup, and the human `labels`
+  (`category`, `expectDuplicateOf`, `notes`). The committed cases are synthetic,
+  including adversarial ones (past-dated signals, ambiguous events, a sports
+  story with no fixture date, a paraphrase of an existing market, an injected
+  headline). Add real ones from `SignalCache` after stripping keys and PII.
+- **Prompts** are built by `buildMarketPrompts(signals, existing, now, { nonceSeed })`,
+  a pure function: no Prisma, no clock. The runner passes `now = asOf` and a
+  nonce seed derived from the case id, so the prompt is a pure function of the
+  case. `isDuplicateOf(question, existing)` is the pure form of the lexical dedup.
+- **Transport**: `setLlmTransport()` (`src/lib/llm.ts`). Replay reads
+  `tests/eval/recordings/<model>/<id>.json` (and `<id>.judge.json`), each
+  keyed by `sha256(system + user)`. A prompt change changes the key, so replay
+  fails with `recording missing … re-run with --live --record` instead of
+  grading stale output. `--live` uses the real providers; `--record` writes the
+  recordings after refusing any key-looking string.
+- **Graders** (`scripts/eval/graders.ts`), each `{ pass, score, detail }`:
+
+  | Grader | Rule | Judge |
+  |---|---|---|
+  | `schemaValid` | `validateMarketQuestion` parses it | – |
+  | `binary` | one yes/no question; no "or", "how many", "which", bucket ranges | `binary` |
+  | `resolutionSource` | `resolution_oracle` is in `ALLOWED_ORACLES` | `verifiable` |
+  | `dateSanity` | `asOf + 1 d ≤ expiry ≤ asOf + 90 d`, and within 2 days of the latest date written in the question | – |
+  | `category` | equals the label (unlabelled cases are skipped) | – |
+  | `duplicateAccuracy` | `isDuplicateOf` agrees with `expectDuplicateOf` | – |
+  | `ciConsistency` | `lower < p < upper`, width ≤ 0.4 | – |
+
+  A parse failure fails every grader for that case, so a bad prompt cannot hide
+  behind a smaller denominator. The judge (`scripts/eval/judge-prompt.v1.ts`,
+  id, version and hash recorded in each report) can fail a case but never
+  rescues a hard rule failure; rule/judge disagreements are listed separately.
+- **Thresholds** (`tests/eval/thresholds.json`) are minimum pass rates per
+  grader. The report shows counts and Wilson 95 % intervals next to each rate:
+  with 44 cases a difference of a few points is noise. Exit codes: 0 ok, 1 a
+  threshold regressed, 2 the run failed (for example a missing recording).
+- **Reports**: `eval-results/<mode>-<model>.json` and `.md` (prompt and corpus
+  hashes, git sha, per-grader and per-category rates, the worst 10 cases).
+
+CI runs `npm run eval:markets -- --replay` after `npm test`.
+
+**Add a case**: write `tests/eval/corpus/<id>.json`, run it live once
+(`ANTHROPIC_API_KEY=… npm run eval:markets -- --live --record --model <name> --case <id>`)
+and commit the corpus file and the two recordings. **After a prompt change**:
+re-record the whole set the same way (without `--case`), review the diff, and
+commit; only then adjust `thresholds.json`.
+
+The `synthetic-baseline` recordings shipped with the harness are hand-written
+(`scripts/eval/seed-synthetic.ts`), not captures of a live model, and their
+thresholds only guard the graders; the first live run should replace them.
+
 ## Prompt-injection defences (#70)
 
 Headlines, descriptions, GDELT URLs and earlier market questions are untrusted,

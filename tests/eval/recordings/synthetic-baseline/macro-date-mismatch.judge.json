@@ -1,0 +1,8 @@
+{
+  "caseId": "macro-date-mismatch",
+  "kind": "judge",
+  "promptKey": "aa8dd1fc9568580ae51eeb3c624d17591271e07b40363cbdb22d135c71dab6bd",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":1,\"ambiguity_notes\":\"Synthetic judge verdict.\"}"
+}

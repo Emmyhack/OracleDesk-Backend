@@ -1,0 +1,34 @@
+{
+  "id": "macro-date-mismatch",
+  "asOf": "2026-10-05T12:00:00Z",
+  "signals": {
+    "news": [],
+    "fed": [
+      {
+        "source": "FRED",
+        "title": "CPIAUCSL: 318.2",
+        "content": "CPIAUCSL = 318.2 (+0.210 vs prior).",
+        "publishedAt": "2026-10-05T11:55:00.000Z",
+        "relevanceScore": 0.7,
+        "category": "MACRO"
+      }
+    ],
+    "macro": [],
+    "signalCount": 1
+  },
+  "existing": [
+    {
+      "question": "Will the Lakers win the 2026 NBA championship?",
+      "category": "SPORTS"
+    },
+    {
+      "question": "Will Bitcoin trade above $100,000 before year end?",
+      "category": "CRYPTO"
+    }
+  ],
+  "labels": {
+    "category": "MACRO",
+    "expectDuplicateOf": null,
+    "notes": "Flaw: the question says October 14 but the market expires a month later."
+  }
+}

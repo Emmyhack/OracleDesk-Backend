@@ -1,0 +1,8 @@
+{
+  "caseId": "ent-rt-score",
+  "kind": "proposal",
+  "promptKey": "aab50b0553de9c40017e45e03ac75ac6a198ef14069699ec89a2eafcd35b48e7",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will the streaming drama hold a Rotten Tomatoes critics score of at least 85% on November 1, 2026?\",\"initial_yes_probability\":0.5,\"resolution_oracle\":\"ROTTEN_TOMATOES\",\"expiry_timestamp\":1793534400,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"ENTERTAINMENT\",\"confidence_interval\":{\"lower\":0.4,\"upper\":0.6},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"n1\"]}"
+}

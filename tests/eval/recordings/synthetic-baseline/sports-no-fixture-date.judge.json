@@ -1,0 +1,8 @@
+{
+  "caseId": "sports-no-fixture-date",
+  "kind": "judge",
+  "promptKey": "3b67c55711dd7fc36a8c822f3b9a85b5e38a1c3d2ca0838508f49c7577f23802",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":0,\"ambiguity_notes\":\"No player named and no deadline in the text.\"}"
+}

@@ -71,6 +71,10 @@ jobs:
         run: npm run test:x402:prepare
 
       - run: npm test
+      # #67: deterministic replay of recorded model outputs; needs no provider
+      # keys. --live is manual only and never runs in CI.
+      - name: Evaluate market generation (replay)
+        run: npm run eval:markets -- --replay
       - name: End-to-end x402 test
         run: npm run test:e2e:x402
       # Integration tier (#135): real Postgres 16 + Redis 7 from the service

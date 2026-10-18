@@ -1,0 +1,8 @@
+{
+  "caseId": "politics-approval",
+  "kind": "judge",
+  "promptKey": "23ddecfe9b6d09083fb031c5f6c2479b6bd75cdf3bb99df00933df92d2047456",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":1,\"ambiguity_notes\":\"Synthetic judge verdict.\"}"
+}

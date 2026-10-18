@@ -1,0 +1,8 @@
+{
+  "caseId": "crypto-ci-outside",
+  "kind": "judge",
+  "promptKey": "15dc4fd6db87e8928c1ca58bef822ba99426e23427fc09b03668439ea0179f86",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":1,\"ambiguity_notes\":\"Synthetic judge verdict.\"}"
+}

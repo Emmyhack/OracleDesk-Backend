@@ -1,0 +1,8 @@
+{
+  "caseId": "macro-range-no-threshold",
+  "kind": "judge",
+  "promptKey": "0f7848908ed357128a6db735941c4fbb00cdfa0756a6de58b4b1675623eac7eb",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":1,\"ambiguity_notes\":\"Looks fine.\"}"
+}

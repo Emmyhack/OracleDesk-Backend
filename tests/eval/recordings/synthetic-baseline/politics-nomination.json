@@ -1,0 +1,8 @@
+{
+  "caseId": "politics-nomination",
+  "kind": "proposal",
+  "promptKey": "2c22aaba985f4f37b7b9e01d45e5735b6895b5f5f152d98e95852b0c6dda4720",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will the Senate confirm the Treasury nominee by October 2, 2026?\",\"initial_yes_probability\":0.7,\"resolution_oracle\":\"POLITICO\",\"expiry_timestamp\":1790942400,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"POLITICS\",\"confidence_interval\":{\"lower\":0.6,\"upper\":0.8},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"n1\"]}"
+}

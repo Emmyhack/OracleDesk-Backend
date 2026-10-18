@@ -1,0 +1,8 @@
+{
+  "caseId": "geo-opec-output",
+  "kind": "proposal",
+  "promptKey": "239c34ce0e902a3be5f7d2ab8f2e9ee7854186f7476e1227313160e300664297",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will OPEC announce an additional crude production cut at its October 5, 2026 ministerial meeting?\",\"initial_yes_probability\":0.35,\"resolution_oracle\":\"OPEC\",\"expiry_timestamp\":1791201600,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"GEOPOLITICAL\",\"confidence_interval\":{\"lower\":0.25,\"upper\":0.45},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"m1\"]}"
+}

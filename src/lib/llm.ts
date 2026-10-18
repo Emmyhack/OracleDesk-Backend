@@ -68,6 +68,53 @@ export async function completeLLM(req: LlmRequest): Promise<LlmResult> {
   }, req.signal);
 }
 
+// ─── Transport seam (#67) ─────────────────────────────────────────────────────
+
+/**
+ * One JSON completion, as the offline evaluation sees the model: raw text plus
+ * who produced it. The default delegates to the router (Anthropic → Gemini);
+ * `setLlmTransport` swaps in a recording transport so replay needs no keys and
+ * no provider code runs.
+ */
+export interface LlmTransport {
+  /**
+   * With `opts.spec` the call is schema-constrained (the production path) and
+   * the validated value comes back as JSON text; without it, free-form JSON.
+   */
+  json(
+    system: string,
+    user: string,
+    maxTokens: number,
+    opts?: { spec?: StructuredSpec<any> },
+  ): Promise<{ text: string; provider: string; model: string }>;
+}
+
+const EVAL_CTX: CallContext = { purpose: 'eval', priority: 'admin' };
+
+const defaultTransport: LlmTransport = {
+  async json(system, user, maxTokens, opts) {
+    if (opts?.spec) {
+      const r = await callLLMStructured(opts.spec, { system, user }, { maxTokens, ctx: EVAL_CTX, task: 'market_generation' });
+      return { text: JSON.stringify(r.value), provider: r.provider, model: r.model };
+    }
+    const result = await completeLLM({ task: 'market_generation', system, user, mode: 'json', maxTokens, ctx: EVAL_CTX });
+    return { text: result.text, provider: result.provenance.provider, model: result.provenance.model };
+  },
+};
+
+let transport: LlmTransport = defaultTransport;
+
+/** Test/eval seam. Pass null to restore the provider-backed default. Returns the previous transport. */
+export function setLlmTransport(next: LlmTransport | null): LlmTransport {
+  const prev = transport;
+  transport = next ?? defaultTransport;
+  return prev;
+}
+
+export function getLlmTransport(): LlmTransport {
+  return transport;
+}
+
 /** Backwards-compatible JSON wrapper. Invalid JSON triggers provider failover. */
 export async function callLLMJSON(
   systemPrompt: string,
