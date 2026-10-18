@@ -1,0 +1,8 @@
+{
+  "caseId": "edge-no-label",
+  "kind": "proposal",
+  "promptKey": "b763a6958d94a82d47f03b6802cbe217b7eacaa932fc199ea878203d6e8879f5",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will port workers end their strike by November 15, 2026?\",\"initial_yes_probability\":0.5,\"resolution_oracle\":\"GDELT\",\"expiry_timestamp\":1794744000,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"MACRO\",\"confidence_interval\":{\"lower\":0.4,\"upper\":0.6},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"n1\"]}"
+}

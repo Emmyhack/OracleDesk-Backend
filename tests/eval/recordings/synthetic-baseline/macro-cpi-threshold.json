@@ -1,0 +1,8 @@
+{
+  "caseId": "macro-cpi-threshold",
+  "kind": "proposal",
+  "promptKey": "eca4d0fc953d7077e4ebfa4694c3e9177b6fe41a60b742cf8e72a75661a5d85d",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will the BLS report September 2026 CPI inflation above 3.0% year over year?\",\"initial_yes_probability\":0.45,\"resolution_oracle\":\"BLS\",\"expiry_timestamp\":1791979200,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"MACRO\",\"confidence_interval\":{\"lower\":0.35,\"upper\":0.55},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"f1\"]}"
+}

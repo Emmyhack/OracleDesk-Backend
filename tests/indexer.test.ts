@@ -41,6 +41,12 @@ async function setup(events = FIXTURES.map(toEventResponse)) {
     db.events.set(data.id, data);
     return data;
   };
+  (prisma.chainEvent.findMany as any) = async ({ where, take }: any) =>
+    [...db.events.values()]
+      .filter((e) => e.published === where.published)
+      .sort((a, b) => a.ledger - b.ledger || (a.id < b.id ? -1 : 1))
+      .slice(0, take);
+  (prisma.chainEvent.update as any) = async ({ where, data }: any) => Object.assign(db.events.get(where.id), data);
   (prisma.indexerCursor.findUnique as any) = async () => (db.cursor === null ? null : { lastLedger: db.cursor });
   (prisma.indexerCursor.upsert as any) = async ({ update }: any) => { db.cursor = update.lastLedger; return {}; };
   const byChainId = (id: bigint) => [...db.markets.values()].find((m) => m.onChainMarketId === id) ?? null;

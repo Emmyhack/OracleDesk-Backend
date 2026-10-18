@@ -1,0 +1,8 @@
+{
+  "caseId": "geo-ceasefire-past-date",
+  "kind": "judge",
+  "promptKey": "03e6330eea0dfcefbb5262c0507d09c73e409bbb0c1e4ab954466eab43f286a7",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":1,\"ambiguity_notes\":\"Synthetic judge verdict.\"}"
+}

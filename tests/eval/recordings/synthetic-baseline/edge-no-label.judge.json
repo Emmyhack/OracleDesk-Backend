@@ -1,0 +1,8 @@
+{
+  "caseId": "edge-no-label",
+  "kind": "judge",
+  "promptKey": "3bba6c17a92ea2479a96eb3c810a7b49007aaeec9fdb936110b738557f5378b4",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":1,\"ambiguity_notes\":\"Synthetic judge verdict.\"}"
+}

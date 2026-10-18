@@ -17,6 +17,11 @@ import { getLlmUsage } from '../lib/llm-budget';
 import { getCronStatus } from '../cron/registry';
 import { AppError } from '../middlewares/error.middleware';
 import {
+  acknowledge,
+  buildGuardianTx,
+  listDisputes,
+} from '../services/dispute-monitor.service';
+import {
   addSignature,
   cancelOperation,
   getOperation,

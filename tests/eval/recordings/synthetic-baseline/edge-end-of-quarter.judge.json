@@ -1,0 +1,8 @@
+{
+  "caseId": "edge-end-of-quarter",
+  "kind": "judge",
+  "promptKey": "2c281af1c4f1f7b1a3b3354c6de823d3e6a50e2f0f5989f90339d345117e54aa",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":1,\"ambiguity_notes\":\"Synthetic judge verdict.\"}"
+}

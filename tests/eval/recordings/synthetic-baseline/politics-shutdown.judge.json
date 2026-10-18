@@ -1,0 +1,8 @@
+{
+  "caseId": "politics-shutdown",
+  "kind": "judge",
+  "promptKey": "054170df491fe04b97a13f2bd63825c585d026e52bd71c1e3ee82dcaf86e3d9a",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":1,\"ambiguity_notes\":\"Synthetic judge verdict.\"}"
+}

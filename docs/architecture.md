@@ -53,6 +53,34 @@ Publication is durable (#131). Each trace that should be on-chain gets a `trace_
 
 Transient errors retry with backoff `min(2^attempts × 30 s, 1 h)`. Rows are claimed with `FOR UPDATE SKIP LOCKED` and leased, and chain calls run after the claim commits, so several processes can run the worker. `verified` is set only by indexer confirmation (or the duplicate checks, which read the same on-chain record) and by `POST /traces/verify`; dry-run never confirms a row or sets `verified`. The creation trace is pinned with `onChainMarketId: null` when its market is still pending and is **not** re-pinned later: that would change `trace_hash`; the `market_id` argument of `publish_trace` provides the link. Action strings live in `src/lib/trace-actions.ts`.
 
+### LLM provenance (#66)
+
+A pinned trace used to prove only that *these bytes were committed*. It now
+also says what produced the decision. `tracePayload.provenance`
+(`oracledesk.trace.provenance/1`, documented in `docs/api.md`) is added before
+canonicalisation, so it is inside the pinned bytes and the on-chain hash. It is
+built by `callLLMStructured` (provider, model, prompt id/version/hash, params,
+usage, latency, attempts, `fallbackFrom`, `outputSha256`) and assembled in
+`generateReasoningTrace`, which merges the market proposal's entry (passed as
+`upstreamProvenance` by the market maker) with its own hedge-conditions entry.
+Hedge conditions that came from the hard-coded defaults are recorded as
+`source: "default"`, with no model fields.
+
+Prompts live in `src/lib/prompts/`, one file per version. `contentHash` covers
+the template text, so editing a template changes the hash;
+`tests/prompts.test.ts` compares every `{ id, version, contentHash }` with
+`tests/fixtures/prompts.snapshot.json` and fails with "template changed; bump
+version". A change ships as a new version file and a new registry entry; old
+versions stay importable for replay and evaluation.
+
+What provenance proves: that the backend *claimed*, at pin time and under the
+agent's commitment, that this provider, model and prompt version produced the
+output whose hash is `outputSha256`. What it does not prove: that the model
+really produced it. Nothing is signed by the provider, and the raw prompt and
+output are not published (they contain third-party text), so a reader can check
+a copy of the output against `outputSha256` but cannot reproduce the call.
+Provider error messages are never recorded, only a bounded `errorClass`.
+
 ### End-to-end x402 test (#64)
 
 The paid product relies on one invariant: the bytes `pinJson` pins are the
@@ -100,13 +128,87 @@ Each hash is usable once (unique `PaymentEvent.txHash`). There is no development
 
 Outcomes are decided on-chain by the resolver contract. The backend only reads `resolver.state` and `market_core.get_market`; the old endpoint that let any user set an outcome is gone. When the indexer sees `MarketResolved`, it updates the database and closes positions.
 
+### Resolution signers (#91)
+
+Markets created with a `signers` spec commit to an m-of-n signer set. `signer-portal.service.ts` serves the people in that set; it coordinates and never holds a signer key.
+
+- **Authority is the committed spec, not the environment.** `RESOLUTION_SIGNERS` can change after a market exists, so membership is read from `Market.resolutionSpec`, and that JSON is trusted only after it re-hashes (`resolutionHash()`) to `Market.resolutionHash` and to the market's on-chain `resolution_hash`. Any mismatch is `409 SPEC_MISMATCH`.
+- **Prepare** builds `resolver.attest` with a client whose `publicKey` is the signer and which has no signer callback, so the signer is the transaction source and source-account auth satisfies `signer.require_auth()`. The transaction is simulated, must need no other signers, carries time bounds, and is stored with its hash in `signer_attestations`.
+- **Submit** parses the signed envelope, requires its hash to equal the prepared hash (signatures do not change a hash, a different transaction or network does), checks expiry, verifies the wallet's signature, claims the row (`PREPARED` → `SUBMITTED`) so a double submit broadcasts once, then polls for the result.
+- **Counts are api-observed.** The resolver emits no per-attestation event and has no count view, so progress counts only attestations confirmed through this API. The proposal comes from the indexed `ResolutionProposed` event, and a proposal the observed counts cannot explain is reported as `attestationsOutsideApi`.
+- **No help equivocating.** A second outcome for a signer with a confirmed attestation is refused (`CONFLICTING_ATTESTATION`) unless `allowConflict=true`.
+
+### Disputes and guardian actions
+
+This is the runbook for the guardian: the resolver admin, configured here as `RESOLVER_GUARDIAN_ADDRESS` (the resolver has no admin view, so this is configuration; a wrong value shows up as `GUARDIAN_MISMATCH`).
+
+**Why it exists.** In signer mode an outcome is not final when the threshold is reached. The resolver stores a proposal, emits `ResolutionProposed`, and anyone may call `finalize_signers` once `dispute_window` seconds of *ledger time* have passed. Until then only the guardian can call `cancel_proposal`. With the default configuration (the agent as sole signer, threshold 1) a compromised key or a faulty attestation pipeline can propose a wrong outcome with no one else involved, so something has to notice.
+
+**What the monitor does.** For each `ResolutionProposed` the indexer inserts one `DisputeReview` per event id (idempotent). A separate step, not the indexer tick, then:
+
+1. re-hashes the stored spec and compares it to `Market.resolutionHash` (a mismatch is `ERROR` and `CRITICAL`: a proposal on a market whose rules the backend cannot verify is itself suspicious);
+2. fetches the question document from IPFS and checks its sha256 against `Market.questionHash` (a mismatch is `ERROR`);
+3. evaluates the market independently from the resolution source. The evaluator is blind: it is not given the proposed outcome, the signers' evidence or any `ReasoningTrace`. It uses its own prompt and, by default, a different primary model from attestation (`dispute_review` task). Evidence is sanitised, delimited as data, instruction-like items are dropped and a decision must cite evidence ids that were really sent;
+4. compares the result with the proposal and alerts.
+
+**Verdicts** (`DISPUTE_AGREE_MIN_CONFIDENCE`, default 0.8):
+
+| Verdict | Meaning | Alert |
+|---|---|---|
+| `AGREE` | Independent outcome equals the proposal, confidence at or above the threshold. | None, except `INFO` when the market has a single signer with threshold 1 and it is the agent: there is no second opinion on-chain. |
+| `DISAGREE` | Independent outcome differs, confidence at or above the threshold. | `CRITICAL` immediately. |
+| `INSUFFICIENT` | Low confidence, no determination, or evidence that cannot be trusted alone. | `WARN` immediately; `CRITICAL` when less than 25% of the window remains and nobody has acknowledged it. |
+| `ERROR` | Spec or question document does not verify. | `CRITICAL` immediately. |
+
+On a market holding at least `DISPUTE_HIGH_VALUE_LIQUIDITY` USDC, `AGREE` also needs a cited primary (non-news) source, so a manipulated news story cannot fool the signers and the review alike. A proposal observed after its window already ended (indexer catch-up) gets `INFO` only. A proposal found only by the 30-minute polling pass (event missed) gets a `WARN`, with `proposedAt` unknown.
+
+**Time.** Remaining window is measured against the latest ledger close time (RPC `getLatestLedger`, then the indexer's newest event), because the contract compares ledger time. Alerts and the admin API show it; the API also shows server time and which source was used.
+
+**Alerts.** Sinks: `ALERT_WEBHOOK_URLS` (JSON, signed `X-OracleDesk-Signature: sha256=<hmac>` with `ALERT_WEBHOOK_SECRET`) and `ALERT_SLACK_WEBHOOK_URL`. Each has a 5 s timeout, 3 attempts with backoff, and is deduplicated by `reviewId:level:sink` in `alert_deliveries` (so restarts and multiple instances do not repeat an alert, and a failed delivery is retried by the next 5-minute pass). Webhook URLs contain tokens: they are never logged, never put in an error message and never stored; sinks are identified by a hash of the URL, and the logger redacts them. If `RESOLVER_GUARDIAN_ADDRESS` is unset, alerts say so.
+
+**What to do when you get one.**
+
+1. `GET /admin/disputes` for the evidence and time left. Open the cited sources yourself; the review is a prompt to look, not a ruling.
+2. If the proposal is wrong, `POST /admin/disputes/:id/cancel-tx`. It returns `{ xdr, networkPassphrase, validUntil }`: a simulated `cancel_proposal` whose source is the guardian. Sign it with your own wallet or the Stellar CLI (for example `stellar tx sign` with the guardian key, then `stellar tx send`), within `validUntil`. The backend never signs or sends it.
+3. **Cancelling does not clear attestation counts.** The same signers cannot re-attest the same outcome (`AlreadyAttested`), and an outcome that already had threshold votes keeps them. If the whole signer set was wrong, new signers will not help for that market; the remedy is `POST /admin/disputes/:id/void-tx` (`guardian_void_market`), which voids the market through market-core (the indexer then records a `MarketResolved` without an outcome and marks the market `CANCELLED`). Choose between the two before acting. (A resolver that cleared counts on cancel would be a contract change; see `docs/contract-requests.md`.)
+4. `POST /admin/disputes/:id/ack` to record that you looked; acknowledged reviews stop escalating.
+
+**Timings.** The review runs within seconds of the indexed event (poll interval plus evaluation time). Escalation and retries run every 5 minutes, the missed-event pass every 30. With the default 24 h window `CRITICAL` for an unconfirmed proposal arrives with six hours left. `cancel_proposal` only works on a proposal that has not been finalized, and anyone may finalize once the window ends, so treat the window end as the deadline.
+
+## Event bus and socket fan-out (#93)
+
+Socket events used to be emitted by the process that indexed them, so with several API instances clients on the others missed events. Now:
+
+```
+indexer ──publish──▶ Redis Stream (oracledesk:events) ──▶ one fan-out leader ──io.emit──▶ socket.io Redis Streams adapter ──▶ every instance's clients
+```
+
+- **Identity.** Each bus message carries `id = chain_events.id` (the RPC event id), `ledger`, `marketKey` (the on-chain market id) and the payload (bigints as strings).
+- **Publication is tied to the committed row.** `chain_events.published` is false when an event is stored. After side effects, `publishPending()` publishes unpublished rows in `(ledger, id)` order and flags each one once the bus accepted it. A crash between store and publish loses nothing; the next pass publishes it. It stops at the first failure so a later event never overtakes an earlier one, and the live path and recovery share one queue per process. If Redis is down the indexer keeps storing events, the server keeps serving, and the backlog drains when Redis returns. Rows that existed before the migration are marked published.
+- **Delivery semantics: at-least-once publication, effectively-once delivery.** A crash between XADD and the flag, or two indexing instances racing, can put the same id on the stream twice. The fan-out records every delivered id (`seen` keys with a TTL) and skips ids it has already delivered, so clients still get each event once.
+- **Fan-out design.** One instance, elected with `SET leader NX PX` (renewed by compare-and-set), reads the bus with a blocking `XREAD` on its own connection (`getBlockingRedis`, never the shared client) and calls `io.emit`; the streams adapter carries that to every instance. *Alternative considered:* every instance consumes and emits only to its own sockets, with no adapter. It is simpler, but each future feature (per-market rooms, private per-user events) would have to reimplement cross-instance routing, and private events need the adapter anyway. The leader persists the stream id of the last event it delivered (`oracledesk:fanout:cursor`), so a successor resumes there with no gap; the `seen` check prevents the one event that may straddle the switch from being delivered twice. Leadership is re-verified (fenced) before delivering, so a paused leader that lost the lock stops emitting.
+- **Ordering.** One stream and one consumer preserve publish order, which is `(ledger, id)` order, so per-market order holds.
+- **Retention.** `XADD ... MAXLEN ~ EVENT_BUS_MAXLEN` (default 100000) bounds the stream, a delivery buffer only. `chain_events` is the durable history; anything that must replay far back (for example a resumable SSE feed) should read that table.
+- **Not covered here.** Leader election for the *indexer* and splitting API/worker roles (the design works whether one or all instances index), coalescing during a large historical catch-up (the stream stays bounded but is not throttled), and per-market rooms (the `marketKey` field is there for them).
+- **Boot without Redis.** The server starts and logs the degraded state. The streams adapter reports a rejected subscribe as an unhandled rejection while Redis is down (it is logged, not fatal). `EVENT_BUS_ENABLED=false` swaps in an in-process bus and no adapter, for a single instance.
+
+## Socket authentication and private events (#94)
+
+- The handshake accepts the REST API's JWT in `auth.token` through `verifyAccessToken()`, the same function `requireAuth` uses (HS256 only, previous-secret rotation included). No token is an anonymous socket; a bad one fails the handshake with a code; a token in the query string is refused.
+- Private events (`PAYMENT_CONFIRMED`, `PASS_EXPIRING`, `COPY_TRADE_CONFIRMED`) go only through `emitToUser`/`notifyUser`, which target `user:<userId>`. The public emitter wraps `assertPublic`, and a test fails if any file under `src/` emits a private event name directly.
+- A session ends at the token's `exp` (re-armed in chunks, because `setTimeout` overflows above about 24.8 days). The socket gets `SESSION_EXPIRED` and leaves its user room but stays connected for public events, so a long-lived page keeps live prices; `reauth` with a token for the same user restores private events. Switching users on a live socket is refused.
+- Emission happens after the database commit: `PAYMENT_CONFIRMED` after the payment transaction (not on the idempotent re-submit), `COPY_TRADE_CONFIRMED` after the status update, `PASS_EXPIRING` after claiming the pass with a conditional update on `expiryNotifiedAt`, which makes it at-most-once even with several instances.
+- Tokens are never logged; only the user id is.
+
+
 ## Indexer
 
 `indexer.service.ts` polls Stellar RPC `getEvents` for the four contract ids every `INDEXER_POLL_MS`:
 
 - Events are decoded with each binding's spec (`Spec.parseEvent`) and stored in `chain_events` keyed by the RPC event id, so re-reads are idempotent.
 - The ledger cursor lives in `indexer_cursors`. If it is older than RPC retention (about 7 days on testnet), the indexer warns and resumes from the oldest retained ledger; anything in between is lost to it.
-- New `Trade` and `TracePublished` events are pushed to clients over socket.io as `TRADE_EXECUTED` and `REASONING_PUBLISHED`.
+- New `Trade` and `TracePublished` events are published to the event bus and delivered to clients over socket.io as `TRADE_EXECUTED` and `REASONING_PUBLISHED` (see [Event bus and socket fan-out](#event-bus-and-socket-fan-out-93)).
+- `ResolutionProposed` and `ResolutionFinalized` open and close dispute reviews (see [Disputes and guardian actions](#disputes-and-guardian-actions)). The independent evaluation never runs inside the poll.
 
 The indexer and the reconciler (below) both write `markets.chainSyncedLedger`, the ledger a row's chain-derived state reflects. A price or status write applies only when it is not older than that, so the two can never overwrite each other with stale information, and `applyMarketFinality` (`market-finality.ts`) is the one place a market becomes `RESOLVED`/`CANCELLED` and its positions close.
 
@@ -241,6 +343,171 @@ falls back to a plain-text Gemini call (never a JSON one). Tests replace the
 providers through `setAnthropicClient()` / `setGeminiModelFactory()` and replay the
 shapes in `tests/fixtures/llm/` (hand-built examples of the API shapes, not
 captures from a live account).
+
+## Semantic duplicate detection (#69)
+
+The lexical check (token Jaccard > 0.55 or 3+ shared bigrams) misses
+paraphrases and flags unrelated questions that share boilerplate. With
+`EMBEDDING_PROVIDER=gemini|openai` the market maker compares embeddings in
+pgvector instead; with `none` (the default) nothing changes.
+
+**Storage.** `markets.questionEmbedding vector(768)` and `embeddingModel`, added
+by migration `…_market_embeddings` (`CREATE EXTENSION vector`). Prisma cannot read
+or write `Unsupported` columns, so every access is `$queryRaw` / `$executeRaw`
+with the vector bound as `$n::vector` (a `'[0.1,…]'` string), never interpolated.
+The index is `markets_question_embedding_hnsw`, HNSW with `vector_cosine_ops`,
+**partial** on `status IN ('PENDING','ACTIVE')`: pgvector filters after the index
+scan, so a full index would fill its 40-candidate list with old resolved markets
+and hide a near duplicate. The dedup query repeats the predicate, which is what
+lets the planner use it; at a few hundred rows the planner correctly prefers an
+exact scan and sort, which has perfect recall. The index is not in
+`schema.prisma`: `prisma migrate dev` must not be allowed to drop it (check with
+`prisma migrate diff` before accepting a generated migration). The dimension is
+fixed at 768 (Gemini `text-embedding-004`; OpenAI `text-embedding-3-small` with
+`dimensions: 768`); `EMBEDDING_DIM` must equal it, a provider with another size
+is rejected, and a mismatch stops the server at boot.
+
+**Embedding.** `normalizeQuestion()` lowercases, collapses dates to `<date>` (the
+second stage compares dates itself), writes numbers as plain digits (`$70,000`,
+`70k` → `70000`), strips punctuation and caps the text at 512 characters. A new
+market is embedded fire-and-forget after `createMarketFromProposal`; the
+ingestion cron then sweeps `questionEmbedding IS NULL` rows (one batch of 32 per
+tick), and `npm run backfill:embeddings [-- --reembed]` embeds everything else.
+Vectors from two models are never compared: the query filters on
+`embeddingModel`, so after changing `EMBEDDING_MODEL` run
+`backfill:embeddings -- --reembed`.
+
+**Decision** (`checkDuplicate` in `market.service.ts`, returns
+`{ duplicate, method, match? }`, logged to AgentLog as `DEDUP_CHECK` /
+`DUPLICATE_SKIPPED`):
+
+1. *Candidates*: the 10 nearest PENDING/ACTIVE neighbours by cosine similarity;
+   those at or above `DEDUP_SIM_THRESHOLD` continue.
+2. *Confirmation* (`confirmDuplicate`, pure), in order: (a) the resolution dates
+   are within `DEDUP_DATE_WINDOW_DAYS` (default 3), both the expiries and any
+   date written in both questions; (b) the questions do not each state a figure
+   the other lacks (`$70,000` vs `$90,000` are two rungs of a ladder); (c) they
+   share an entity from the rule-based extractor (`dedup-entities.ts`: a gazetteer
+   of central banks, assets, indicators, countries and sources, plus proper
+   nouns) and neither adds an entity the other lacks (Lakers vs Celtics).
+   Similarity ≥ 0.95 skips (c) only, never the date or figure checks.
+3. *Fallback*: markets the vector search cannot see (no embedding yet, or from
+   another model) are compared lexically so nothing is skipped silently. With no
+   provider, or if embedding or the query throws, the lexical check runs and the
+   result says `method: "lexical"`; the cycle is never blocked.
+
+**Calibrating the threshold.** `tests/fixtures/dedup-pairs.json` holds 158 labelled
+pairs (44 paraphrases and 16 formatting variants that are duplicates; different
+date, different entity, boilerplate collision, different strike and unrelated
+pairs that are not). `npm run calibrate:dedup` embeds them, sweeps thresholds
+0.50–0.99 and reports precision, recall and F1 for semantic only, semantic +
+confirmation, and the lexical rule, and recommends the threshold with the highest
+recall at precision ≥ 0.95. `--provider gemini|openai --record` writes the
+vectors to `tests/fixtures/dedup-vectors.<model>.json`, and `--vectors <file>`
+replays them without a key.
+
+The committed run uses `--provider fake`, a deterministic hashing embedder with
+a small synonym map. It validates the harness and the confirmation stage, **not**
+a model: on it the lexical rule scores precision 17.9 % / recall 28.3 %
+(boilerplate makes it flag unrelated questions), and semantic + confirmation
+scores precision 100 % at t = 0.90 with recall 26.7 % because the fake vectors do
+not place paraphrases close together. `DEDUP_SIM_THRESHOLD=0.85` is therefore a
+provisional default; run the calibration with the real provider and replace it
+before enabling `EMBEDDING_PROVIDER` in production.
+
+**Infrastructure.** pgvector is needed by the migration: `docker-compose.yml`, CI
+and the integration containers use `pgvector/pgvector:pg16` (Debian, glibc; the
+old `postgres:16-alpine` is musl, so recreate an existing dev volume or `REINDEX`
+text indexes before switching). Managed Postgres needs `CREATE EXTENSION vector`.
+
+## Calibration (#68)
+
+`src/services/calibration.service.ts` answers whether agent probabilities are
+calibrated. Postgres does the heavy lifting in one query
+(`reasoning_traces JOIN markets` for `RESOLVED` markets with an outcome and an
+`onChainMarketId`, traces strictly before `resolvedAt`); TypeScript weights,
+slices and scores the rows with pure functions (`brier`, `logLoss`,
+`reliability`, `murphy`, `fitShrinkage`). Metric definitions, the weighting
+policy and the exclusions are in `docs/api.md` ("Agent calibration").
+
+- **Snapshots.** `computeAndStoreSnapshots()` stores every
+  window (`30d`, `90d`, `all`) × grouping × key in `calibration_snapshots`
+  (append-only; the API serves the newest `computedAt`). A cron at 03:10 runs it
+  inside a transaction holding `pg_try_advisory_xact_lock`, so only one
+  instance computes.
+- **Index.** `reasoning_traces (marketId, createdAt)` serves the join. Postgres
+  uses it for selective windows (a nested loop of one index range scan per
+  market: 7 ms for 334 markets / 3 340 traces in a test database) and prefers a
+  sequential scan when most markets match (`all`, 55 ms for 200 000 traces).
+- **Trader shrinkage** (`CALIBRATION_SHRINKAGE_ENABLED`, default off). Before
+  sizing, the trader moves its estimate to `0.5 + k (p − 0.5)` with `k` from the
+  latest `all`-window `(TRADER, category)` snapshot, then `(TRADER)`, then 1,
+  only when at least 50 resolved markets back the fit; `k` is bounded to
+  `[0.3, 1]`, so it can only shrink. The factor is recorded in the trace as a
+  `CALIBRATION` entry in `sourcesUsed`.
+- **Limits.** Few resolved markets give noisy numbers: read the Wilson
+  intervals and `nEff`. Calibration says nothing about the trader's *edge* while
+  its probability still equals the market price (`rawValue: marketProb`), and
+  `MARKET_CREATION` has no meaningful market baseline.
+
+## Evaluating market generation (#67)
+
+`npm run eval:markets` measures whether a prompt, model or schema change makes
+proposals better or worse. It is offline: the corpus pins the inputs and
+recordings pin the model's answers, so a run is deterministic and needs no
+keys, database or network.
+
+- **Corpus** (`tests/eval/corpus/<id>.json`, 44 cases): an `asOf` date, the
+  signals (titles and short snippets only, as the prompt truncates them), the
+  fixed list of existing questions used for dedup, and the human `labels`
+  (`category`, `expectDuplicateOf`, `notes`). The committed cases are synthetic,
+  including adversarial ones (past-dated signals, ambiguous events, a sports
+  story with no fixture date, a paraphrase of an existing market, an injected
+  headline). Add real ones from `SignalCache` after stripping keys and PII.
+- **Prompts** are built by `buildMarketPrompts(signals, existing, now, { nonceSeed })`,
+  a pure function: no Prisma, no clock. The runner passes `now = asOf` and a
+  nonce seed derived from the case id, so the prompt is a pure function of the
+  case. `isDuplicateOf(question, existing)` is the pure form of the lexical dedup.
+- **Transport**: `setLlmTransport()` (`src/lib/llm.ts`). Replay reads
+  `tests/eval/recordings/<model>/<id>.json` (and `<id>.judge.json`), each
+  keyed by `sha256(system + user)`. A prompt change changes the key, so replay
+  fails with `recording missing … re-run with --live --record` instead of
+  grading stale output. `--live` uses the real providers; `--record` writes the
+  recordings after refusing any key-looking string.
+- **Graders** (`scripts/eval/graders.ts`), each `{ pass, score, detail }`:
+
+  | Grader | Rule | Judge |
+  |---|---|---|
+  | `schemaValid` | `validateMarketQuestion` parses it | – |
+  | `binary` | one yes/no question; no "or", "how many", "which", bucket ranges | `binary` |
+  | `resolutionSource` | `resolution_oracle` is in `ALLOWED_ORACLES` | `verifiable` |
+  | `dateSanity` | `asOf + 1 d ≤ expiry ≤ asOf + 90 d`, and within 2 days of the latest date written in the question | – |
+  | `category` | equals the label (unlabelled cases are skipped) | – |
+  | `duplicateAccuracy` | `isDuplicateOf` agrees with `expectDuplicateOf` | – |
+  | `ciConsistency` | `lower < p < upper`, width ≤ 0.4 | – |
+
+  A parse failure fails every grader for that case, so a bad prompt cannot hide
+  behind a smaller denominator. The judge (`scripts/eval/judge-prompt.v1.ts`,
+  id, version and hash recorded in each report) can fail a case but never
+  rescues a hard rule failure; rule/judge disagreements are listed separately.
+- **Thresholds** (`tests/eval/thresholds.json`) are minimum pass rates per
+  grader. The report shows counts and Wilson 95 % intervals next to each rate:
+  with 44 cases a difference of a few points is noise. Exit codes: 0 ok, 1 a
+  threshold regressed, 2 the run failed (for example a missing recording).
+- **Reports**: `eval-results/<mode>-<model>.json` and `.md` (prompt and corpus
+  hashes, git sha, per-grader and per-category rates, the worst 10 cases).
+
+CI runs `npm run eval:markets -- --replay` after `npm test`.
+
+**Add a case**: write `tests/eval/corpus/<id>.json`, run it live once
+(`ANTHROPIC_API_KEY=… npm run eval:markets -- --live --record --model <name> --case <id>`)
+and commit the corpus file and the two recordings. **After a prompt change**:
+re-record the whole set the same way (without `--case`), review the diff, and
+commit; only then adjust `thresholds.json`.
+
+The `synthetic-baseline` recordings shipped with the harness are hand-written
+(`scripts/eval/seed-synthetic.ts`), not captures of a live model, and their
+thresholds only guard the graders; the first live run should replace them.
 
 ## Prompt-injection defences (#70)
 

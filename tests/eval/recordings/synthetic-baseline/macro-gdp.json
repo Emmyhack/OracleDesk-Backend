@@ -1,0 +1,8 @@
+{
+  "caseId": "macro-gdp",
+  "kind": "proposal",
+  "promptKey": "ccd4c3032b588ad431db27794246324f3f93101d03470c72903e0a7a6235d460",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will the advance estimate of US Q3 2026 real GDP growth exceed 2.0% annualized?\",\"initial_yes_probability\":0.5,\"resolution_oracle\":\"FRED\",\"expiry_timestamp\":1793275200,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"MACRO\",\"confidence_interval\":{\"lower\":0.4,\"upper\":0.6},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"f1\"]}"
+}

@@ -1,0 +1,8 @@
+{
+  "caseId": "sports-nba-finals",
+  "kind": "proposal",
+  "promptKey": "54a52753e2a8a175ed95c9b94fd741c6112983577d9bef7cc0ac6287e07b108a",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will the Los Angeles Lakers win Game 1 of the NBA Finals on June 4, 2026?\",\"initial_yes_probability\":0.46,\"resolution_oracle\":\"ESPN\",\"expiry_timestamp\":1780574400,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"SPORTS\",\"confidence_interval\":{\"lower\":0.36,\"upper\":0.56},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"n1\"]}"
+}

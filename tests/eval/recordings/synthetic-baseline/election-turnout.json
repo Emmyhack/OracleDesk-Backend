@@ -1,0 +1,8 @@
+{
+  "caseId": "election-turnout",
+  "kind": "proposal",
+  "promptKey": "abf1657b0df8b2eef7726a69f7afc6e23baec6ec810bf9eb657aed4adb074354",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will early in-person turnout be higher this year?\",\"initial_yes_probability\":0.6,\"resolution_oracle\":\"AP_ELECTIONS\",\"expiry_timestamp\":1794312000,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"ELECTION\",\"confidence_interval\":{\"lower\":0.5,\"upper\":0.7},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"n1\"]}"
+}

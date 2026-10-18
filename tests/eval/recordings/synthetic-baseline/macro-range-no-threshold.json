@@ -1,0 +1,8 @@
+{
+  "caseId": "macro-range-no-threshold",
+  "kind": "proposal",
+  "promptKey": "92874e66bf02604da4c09febe788a657b965748e3187719b01449a23100d47c9",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will the 10-year Treasury yield end October 2026 in the 4.0 to 4.5 percent range?\",\"initial_yes_probability\":0.5,\"resolution_oracle\":\"FRED\",\"expiry_timestamp\":1793361600,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"MACRO\",\"confidence_interval\":{\"lower\":0.4,\"upper\":0.6},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"f1\"]}"
+}

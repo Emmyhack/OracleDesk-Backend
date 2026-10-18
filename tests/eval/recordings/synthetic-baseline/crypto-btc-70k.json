@@ -1,0 +1,8 @@
+{
+  "caseId": "crypto-btc-70k",
+  "kind": "proposal",
+  "promptKey": "75b26b540e9d5bbb7c8fe8d551605ea9f90556ef8df476252be86152b8265468",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will the Chainlink BTC/USD price be above $72,000 on October 31, 2026?\",\"initial_yes_probability\":0.4,\"resolution_oracle\":\"CHAINLINK\",\"expiry_timestamp\":1793448000,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"CRYPTO\",\"confidence_interval\":{\"lower\":0.3,\"upper\":0.5},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"n1\"]}"
+}

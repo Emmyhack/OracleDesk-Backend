@@ -1,0 +1,8 @@
+{
+  "caseId": "geo-far-expiry",
+  "kind": "proposal",
+  "promptKey": "ab31329ccfc546ba1142e7215ba14d75cb4e0187ee8b12de9d3c255b49f9e25b",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will the EU ratify the Mercosur trade agreement by March 31, 2027?\",\"initial_yes_probability\":0.2,\"resolution_oracle\":\"GDELT\",\"expiry_timestamp\":1806494400,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"GEOPOLITICAL\",\"confidence_interval\":{\"lower\":0.1,\"upper\":0.3},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"m1\"]}"
+}

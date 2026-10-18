@@ -1,0 +1,34 @@
+{
+  "id": "crypto-schema-bad",
+  "asOf": "2026-10-02T12:00:00Z",
+  "signals": {
+    "news": [
+      {
+        "source": "NEWSAPI",
+        "title": "Ethereum gas fees hit a 2026 low",
+        "content": "Layer-2 adoption is cited.",
+        "publishedAt": "2026-10-02T11:55:00.000Z",
+        "relevanceScore": 0.7,
+        "category": "CRYPTO"
+      }
+    ],
+    "fed": [],
+    "macro": [],
+    "signalCount": 1
+  },
+  "existing": [
+    {
+      "question": "Will the Lakers win the 2026 NBA championship?",
+      "category": "SPORTS"
+    },
+    {
+      "question": "Will Bitcoin trade above $100,000 before year end?",
+      "category": "CRYPTO"
+    }
+  ],
+  "labels": {
+    "category": "CRYPTO",
+    "expectDuplicateOf": null,
+    "notes": "Flaw: schema-invalid output (probability above 1, missing fields). Counts as a schema failure, not a crash."
+  }
+}

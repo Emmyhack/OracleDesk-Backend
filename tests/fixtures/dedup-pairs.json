@@ -1,0 +1,1424 @@
+[
+  {
+    "a": "Will the Fed hold rates at its September meeting?",
+    "b": "Will the FOMC leave the federal funds target unchanged on Sept 17?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-09-17",
+    "dueB": "2026-09-17"
+  },
+  {
+    "a": "Will the Federal Reserve cut interest rates at its October 28, 2026 meeting?",
+    "b": "Will the FOMC lower the federal funds rate on October 28?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-10-28",
+    "dueB": "2026-10-28"
+  },
+  {
+    "a": "Will the Federal Reserve raise rates at its December meeting?",
+    "b": "Will the FOMC hike the federal funds target at the December 9 decision?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-12-09",
+    "dueB": "2026-12-09"
+  },
+  {
+    "a": "Will the Fed keep rates steady in November?",
+    "b": "Will the Federal Reserve maintain the current federal funds rate at its November meeting?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-11-05",
+    "dueB": "2026-11-05"
+  },
+  {
+    "a": "Will the ECB cut its deposit facility rate on December 10, 2026?",
+    "b": "Will the European Central Bank lower the deposit rate at its December 10 meeting?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-12-10",
+    "dueB": "2026-12-10"
+  },
+  {
+    "a": "Will the ECB hold interest rates unchanged in October?",
+    "b": "Will the European Central Bank keep its key rates steady at the October meeting?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-10-29",
+    "dueB": "2026-10-29"
+  },
+  {
+    "a": "Will the Bank of Japan raise its policy rate in October?",
+    "b": "Will the BOJ hike interest rates at its October meeting?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-10-30",
+    "dueB": "2026-10-30"
+  },
+  {
+    "a": "Will the Bank of England cut rates at its November meeting?",
+    "b": "Will the BOE lower the Bank Rate on November 5?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-11-05",
+    "dueB": "2026-11-05"
+  },
+  {
+    "a": "Will Bitcoin trade above $100,000 before the end of the year?",
+    "b": "Will BTC exceed 100k by December 31, 2026?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-12-31",
+    "dueB": "2026-12-31"
+  },
+  {
+    "a": "Will Bitcoin close above $70,000 on October 31, 2026?",
+    "b": "Will BTC finish October 31 higher than $70,000?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-10-31",
+    "dueB": "2026-10-31"
+  },
+  {
+    "a": "Will Ethereum trade above $5,000 by November 30?",
+    "b": "Will ETH exceed 5k before the end of November 2026?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-11-30",
+    "dueB": "2026-11-30"
+  },
+  {
+    "a": "Will Solana close above $300 on December 1, 2026?",
+    "b": "Will SOL finish December 1 over $300?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-12-01",
+    "dueB": "2026-12-01"
+  },
+  {
+    "a": "Will the SEC approve a spot Solana ETF by December 31, 2026?",
+    "b": "Will the Securities and Exchange Commission approve a Solana spot ETF before year end?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-12-31",
+    "dueB": "2026-12-31"
+  },
+  {
+    "a": "Will US CPI inflation for September 2026 exceed 3.0% year over year?",
+    "b": "Will the BLS report September 2026 consumer price inflation above 3.0% annually?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-10-14",
+    "dueB": "2026-10-14"
+  },
+  {
+    "a": "Will the US unemployment rate for October 2026 be above 4.5%?",
+    "b": "Will the BLS report October 2026 joblessness exceeding 4.5%?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-11-06",
+    "dueB": "2026-11-06"
+  },
+  {
+    "a": "Will US real GDP growth for Q3 2026 exceed 2.0% annualized?",
+    "b": "Will the advance estimate of third quarter 2026 US GDP growth top 2.0% annualized?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-10-29",
+    "dueB": "2026-10-29"
+  },
+  {
+    "a": "Will the US Senate pass the sanctions bill by October 9, 2026?",
+    "b": "Will the Senate approve the sanctions legislation before October 9?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-10-09",
+    "dueB": "2026-10-09"
+  },
+  {
+    "a": "Will Congress pass a stopgap funding bill before October 1, 2026?",
+    "b": "Will Congress enact a continuing resolution by September 30, 2026?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-09-30",
+    "dueB": "2026-09-30"
+  },
+  {
+    "a": "Will a federal government shutdown begin on October 1, 2026?",
+    "b": "Will the US government shut down on October 1?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-10-01",
+    "dueB": "2026-10-01"
+  },
+  {
+    "a": "Will Republicans win a majority in the US Senate in the November 3, 2026 elections?",
+    "b": "Will the GOP control the Senate after the November 2026 midterms?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-11-04",
+    "dueB": "2026-11-04"
+  },
+  {
+    "a": "Will Democrats win the House of Representatives in November 2026?",
+    "b": "Will the Democratic Party take control of the House in the 2026 midterm elections?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-11-04",
+    "dueB": "2026-11-04"
+  },
+  {
+    "a": "Will California voters approve the housing bond on November 3, 2026?",
+    "b": "Will the California housing bond measure pass on Election Day 2026?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-11-03",
+    "dueB": "2026-11-03"
+  },
+  {
+    "a": "Will the Lakers win Game 1 of the NBA Finals?",
+    "b": "Will Los Angeles beat Boston in the opening game of the NBA Finals?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-06-04",
+    "dueB": "2026-06-04"
+  },
+  {
+    "a": "Will the Chiefs win the Super Bowl?",
+    "b": "Will Kansas City clinch the Super Bowl title?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2027-02-14",
+    "dueB": "2027-02-14"
+  },
+  {
+    "a": "Will Manchester City win the Premier League this season?",
+    "b": "Will City be crowned English champions in 2026-27?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2027-05-24",
+    "dueB": "2027-05-24"
+  },
+  {
+    "a": "Will the film gross over $130 million domestically in its opening weekend?",
+    "b": "Will the movie open above $130 million at the US box office?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-10-26",
+    "dueB": "2026-10-26"
+  },
+  {
+    "a": "Will the new single reach number one on the Billboard Hot 100?",
+    "b": "Will the latest song top the Billboard Hot 100 chart?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-11-07",
+    "dueB": "2026-11-07"
+  },
+  {
+    "a": "Will OPEC announce a production cut at its October meeting?",
+    "b": "Will OPEC agree to reduce crude output at the October ministerial?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-10-05",
+    "dueB": "2026-10-05"
+  },
+  {
+    "a": "Will Brent crude close above $90 a barrel on November 30?",
+    "b": "Will Brent oil finish November 30 over $90 per barrel?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-11-30",
+    "dueB": "2026-11-30"
+  },
+  {
+    "a": "Will gold trade above $3,500 an ounce by December 31?",
+    "b": "Will the price of gold exceed $3,500 per ounce before year end?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-12-31",
+    "dueB": "2026-12-31"
+  },
+  {
+    "a": "Will Russia and Ukraine sign a ceasefire agreement by November 30, 2026?",
+    "b": "Will Moscow and Kyiv agree to a formal ceasefire before the end of November?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-11-30",
+    "dueB": "2026-11-30"
+  },
+  {
+    "a": "Will the EU ratify the Mercosur trade agreement by December 31?",
+    "b": "Will the European Union approve the Mercosur trade deal before year end?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-12-31",
+    "dueB": "2026-12-31"
+  },
+  {
+    "a": "Will China announce new tariffs on US goods by October 31?",
+    "b": "Will Beijing impose additional tariffs on American imports before the end of October?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-10-31",
+    "dueB": "2026-10-31"
+  },
+  {
+    "a": "Will the Senate confirm the Treasury nominee by October 2?",
+    "b": "Will senators approve the Treasury nominee before October 2?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-10-02",
+    "dueB": "2026-10-02"
+  },
+  {
+    "a": "Will the S&P 500 close above 6,500 on December 31, 2026?",
+    "b": "Will the S&P 500 finish the year over 6500?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-12-31",
+    "dueB": "2026-12-31"
+  },
+  {
+    "a": "Will the 10-year Treasury yield close above 4.5% on October 30?",
+    "b": "Will the 10 year yield finish October 30 higher than 4.5%?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-10-30",
+    "dueB": "2026-10-30"
+  },
+  {
+    "a": "Will Tesla deliver more than 500,000 vehicles in Q4 2026?",
+    "b": "Will Tesla report fourth quarter 2026 deliveries above 500k?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2027-01-03",
+    "dueB": "2027-01-03"
+  },
+  {
+    "a": "Will Apple announce a foldable iPhone at its September event?",
+    "b": "Will Apple unveil a foldable iPhone in September?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-09-15",
+    "dueB": "2026-09-15"
+  },
+  {
+    "a": "Will Nvidia report quarterly revenue above $50 billion in November?",
+    "b": "Will Nvidia post November quarterly revenue exceeding $50B?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-11-25",
+    "dueB": "2026-11-25"
+  },
+  {
+    "a": "Will India overtake Japan as the world's fourth largest economy in the next IMF release?",
+    "b": "Will the IMF rank India ahead of Japan by GDP in its next outlook?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-10-14",
+    "dueB": "2026-10-14"
+  },
+  {
+    "a": "Will the IOC choose a host city for the 2036 Games on September 25, 2026?",
+    "b": "Will the International Olympic Committee select the 2036 host on September 25?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-09-25",
+    "dueB": "2026-09-25"
+  },
+  {
+    "a": "Will Hurricane season produce a Category 5 landfall in the US before November 30?",
+    "b": "Will a Category 5 hurricane make US landfall before the end of November?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-11-30",
+    "dueB": "2026-11-30"
+  },
+  {
+    "a": "Will the WHO declare a new public health emergency by December 31, 2026?",
+    "b": "Will the World Health Organization announce another global health emergency before year end?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-12-31",
+    "dueB": "2026-12-31"
+  },
+  {
+    "a": "Will the UK unemployment rate exceed 5% in the October release?",
+    "b": "Will UK joblessness top 5% in the October figures?",
+    "duplicate": true,
+    "family": "paraphrase",
+    "note": "same event worded differently",
+    "dueA": "2026-10-15",
+    "dueB": "2026-10-15"
+  },
+  {
+    "a": "Will the Federal Reserve cut rates at its October 28, 2026 meeting?",
+    "b": "Will the Federal Reserve cut rates at its 2026-10-28 meeting?",
+    "duplicate": true,
+    "family": "verbatim",
+    "note": "formatting differences only",
+    "dueA": "2026-10-28",
+    "dueB": "2026-10-28"
+  },
+  {
+    "a": "Will Bitcoin close above $70,000 on October 31, 2026?",
+    "b": "Will Bitcoin close above $70000 on 31 October 2026?",
+    "duplicate": true,
+    "family": "verbatim",
+    "note": "formatting differences only",
+    "dueA": "2026-10-31",
+    "dueB": "2026-10-31"
+  },
+  {
+    "a": "Will the ECB hold rates on December 10, 2026?",
+    "b": "Will the ECB hold rates on Dec 10, 2026?",
+    "duplicate": true,
+    "family": "verbatim",
+    "note": "formatting differences only",
+    "dueA": "2026-12-10",
+    "dueB": "2026-12-10"
+  },
+  {
+    "a": "Will US CPI exceed 3.0% in September 2026?",
+    "b": "Will US CPI exceed 3.0% in September 2026??",
+    "duplicate": true,
+    "family": "verbatim",
+    "note": "formatting differences only",
+    "dueA": "2026-10-14",
+    "dueB": "2026-10-14"
+  },
+  {
+    "a": "Will the Lakers win the 2026 NBA championship?",
+    "b": "Will the Lakers win the 2026 NBA championship",
+    "duplicate": true,
+    "family": "verbatim",
+    "note": "formatting differences only",
+    "dueA": "2026-06-20",
+    "dueB": "2026-06-20"
+  },
+  {
+    "a": "Will the Senate pass the sanctions bill by October 9, 2026?",
+    "b": "will the senate pass the sanctions bill by october 9, 2026?",
+    "duplicate": true,
+    "family": "verbatim",
+    "note": "formatting differences only",
+    "dueA": "2026-10-09",
+    "dueB": "2026-10-09"
+  },
+  {
+    "a": "Will Ethereum close above $5,000 on November 30, 2026?",
+    "b": "Will Ethereum close above $5k on November 30, 2026?",
+    "duplicate": true,
+    "family": "verbatim",
+    "note": "formatting differences only",
+    "dueA": "2026-11-30",
+    "dueB": "2026-11-30"
+  },
+  {
+    "a": "Will the unemployment rate be above 4.5% in October 2026?",
+    "b": "Will the unemployment rate be above 4.5% in October, 2026?",
+    "duplicate": true,
+    "family": "verbatim",
+    "note": "formatting differences only",
+    "dueA": "2026-11-06",
+    "dueB": "2026-11-06"
+  },
+  {
+    "a": "Will the Fed hold rates at the September 17, 2026 meeting?",
+    "b": "Will the Fed hold rates at the September 17th, 2026 meeting?",
+    "duplicate": true,
+    "family": "verbatim",
+    "note": "formatting differences only",
+    "dueA": "2026-09-17",
+    "dueB": "2026-09-17"
+  },
+  {
+    "a": "Will OPEC cut production on October 5, 2026?",
+    "b": "Will OPEC cut production on October 5 2026?",
+    "duplicate": true,
+    "family": "verbatim",
+    "note": "formatting differences only",
+    "dueA": "2026-10-05",
+    "dueB": "2026-10-05"
+  },
+  {
+    "a": "Will gold close above $3,500 on December 31, 2026?",
+    "b": "Will gold close above $3500 on Dec. 31, 2026?",
+    "duplicate": true,
+    "family": "verbatim",
+    "note": "formatting differences only",
+    "dueA": "2026-12-31",
+    "dueB": "2026-12-31"
+  },
+  {
+    "a": "Will Solana trade above $300 by year end?",
+    "b": "Will Solana trade above $300 by year-end?",
+    "duplicate": true,
+    "family": "verbatim",
+    "note": "formatting differences only",
+    "dueA": "2026-12-31",
+    "dueB": "2026-12-31"
+  },
+  {
+    "a": "Will the BOJ raise rates at its October 30 meeting?",
+    "b": "Will the BOJ raise rates at its October 30th meeting?",
+    "duplicate": true,
+    "family": "verbatim",
+    "note": "formatting differences only",
+    "dueA": "2026-10-30",
+    "dueB": "2026-10-30"
+  },
+  {
+    "a": "Will the S&P 500 close above 6,500 on December 31, 2026?",
+    "b": "Will the S&P 500 close above 6500 on December 31, 2026?",
+    "duplicate": true,
+    "family": "verbatim",
+    "note": "formatting differences only",
+    "dueA": "2026-12-31",
+    "dueB": "2026-12-31"
+  },
+  {
+    "a": "Will China impose new tariffs on US goods by October 31, 2026?",
+    "b": "Will China impose new tariffs on U.S. goods by October 31, 2026?",
+    "duplicate": true,
+    "family": "verbatim",
+    "note": "formatting differences only",
+    "dueA": "2026-10-31",
+    "dueB": "2026-10-31"
+  },
+  {
+    "a": "Will the film open above $130 million on October 23-25, 2026?",
+    "b": "Will the film open above $130 million on October 23–25, 2026?",
+    "duplicate": true,
+    "family": "verbatim",
+    "note": "formatting differences only",
+    "dueA": "2026-10-26",
+    "dueB": "2026-10-26"
+  },
+  {
+    "a": "Will the Fed cut rates at its September 17, 2026 meeting?",
+    "b": "Will the Fed cut rates at its October 28, 2026 meeting?",
+    "duplicate": false,
+    "family": "different-date",
+    "note": "same subject, different resolution date",
+    "dueA": "2026-09-17",
+    "dueB": "2026-10-28"
+  },
+  {
+    "a": "Will the Fed cut rates at its October 28, 2026 meeting?",
+    "b": "Will the Fed cut rates at its December 9, 2026 meeting?",
+    "duplicate": false,
+    "family": "different-date",
+    "note": "same subject, different resolution date",
+    "dueA": "2026-10-28",
+    "dueB": "2026-12-09"
+  },
+  {
+    "a": "Will the ECB hold rates at its October 29 meeting?",
+    "b": "Will the ECB hold rates at its December 10 meeting?",
+    "duplicate": false,
+    "family": "different-date",
+    "note": "same subject, different resolution date",
+    "dueA": "2026-10-29",
+    "dueB": "2026-12-10"
+  },
+  {
+    "a": "Will Bitcoin close above $100,000 on October 31, 2026?",
+    "b": "Will Bitcoin close above $100,000 on December 31, 2026?",
+    "duplicate": false,
+    "family": "different-date",
+    "note": "same subject, different resolution date",
+    "dueA": "2026-10-31",
+    "dueB": "2026-12-31"
+  },
+  {
+    "a": "Will Ethereum trade above $5,000 by October 31, 2026?",
+    "b": "Will Ethereum trade above $5,000 by January 31, 2027?",
+    "duplicate": false,
+    "family": "different-date",
+    "note": "same subject, different resolution date",
+    "dueA": "2026-10-31",
+    "dueB": "2027-01-31"
+  },
+  {
+    "a": "Will US CPI for September 2026 exceed 3.0%?",
+    "b": "Will US CPI for October 2026 exceed 3.0%?",
+    "duplicate": false,
+    "family": "different-date",
+    "note": "same subject, different resolution date",
+    "dueA": "2026-10-14",
+    "dueB": "2026-11-12"
+  },
+  {
+    "a": "Will the US unemployment rate for September 2026 be above 4.5%?",
+    "b": "Will the US unemployment rate for October 2026 be above 4.5%?",
+    "duplicate": false,
+    "family": "different-date",
+    "note": "same subject, different resolution date",
+    "dueA": "2026-10-02",
+    "dueB": "2026-11-06"
+  },
+  {
+    "a": "Will US GDP growth for Q2 2026 exceed 2.0%?",
+    "b": "Will US GDP growth for Q3 2026 exceed 2.0%?",
+    "duplicate": false,
+    "family": "different-date",
+    "note": "same subject, different resolution date",
+    "dueA": "2026-07-30",
+    "dueB": "2026-10-29"
+  },
+  {
+    "a": "Will the Senate pass the sanctions bill by October 9, 2026?",
+    "b": "Will the Senate pass the sanctions bill by December 18, 2026?",
+    "duplicate": false,
+    "family": "different-date",
+    "note": "same subject, different resolution date",
+    "dueA": "2026-10-09",
+    "dueB": "2026-12-18"
+  },
+  {
+    "a": "Will a government shutdown begin on October 1, 2026?",
+    "b": "Will a government shutdown begin on December 18, 2026?",
+    "duplicate": false,
+    "family": "different-date",
+    "note": "same subject, different resolution date",
+    "dueA": "2026-10-01",
+    "dueB": "2026-12-18"
+  },
+  {
+    "a": "Will OPEC announce a production cut at its October 5 meeting?",
+    "b": "Will OPEC announce a production cut at its December 3 meeting?",
+    "duplicate": false,
+    "family": "different-date",
+    "note": "same subject, different resolution date",
+    "dueA": "2026-10-05",
+    "dueB": "2026-12-03"
+  },
+  {
+    "a": "Will Brent crude close above $90 on October 30, 2026?",
+    "b": "Will Brent crude close above $90 on December 30, 2026?",
+    "duplicate": false,
+    "family": "different-date",
+    "note": "same subject, different resolution date",
+    "dueA": "2026-10-30",
+    "dueB": "2026-12-30"
+  },
+  {
+    "a": "Will gold trade above $3,500 by November 30, 2026?",
+    "b": "Will gold trade above $3,500 by March 31, 2027?",
+    "duplicate": false,
+    "family": "different-date",
+    "note": "same subject, different resolution date",
+    "dueA": "2026-11-30",
+    "dueB": "2027-03-31"
+  },
+  {
+    "a": "Will Russia and Ukraine sign a ceasefire by October 31, 2026?",
+    "b": "Will Russia and Ukraine sign a ceasefire by January 31, 2027?",
+    "duplicate": false,
+    "family": "different-date",
+    "note": "same subject, different resolution date",
+    "dueA": "2026-10-31",
+    "dueB": "2027-01-31"
+  },
+  {
+    "a": "Will the Lakers win Game 1 of the NBA Finals on June 4?",
+    "b": "Will the Lakers win Game 2 of the NBA Finals on June 7?",
+    "duplicate": false,
+    "family": "different-date",
+    "note": "same subject, different resolution date",
+    "dueA": "2026-06-04",
+    "dueB": "2026-06-07"
+  },
+  {
+    "a": "Will the film open above $130 million on October 23-25, 2026?",
+    "b": "Will the film's second weekend gross above $130 million on October 30-November 1, 2026?",
+    "duplicate": false,
+    "family": "different-date",
+    "note": "same subject, different resolution date",
+    "dueA": "2026-10-26",
+    "dueB": "2026-11-02"
+  },
+  {
+    "a": "Will the new single reach number one on the Billboard Hot 100 dated November 7?",
+    "b": "Will the new single reach number one on the Billboard Hot 100 dated December 5?",
+    "duplicate": false,
+    "family": "different-date",
+    "note": "same subject, different resolution date",
+    "dueA": "2026-11-07",
+    "dueB": "2026-12-05"
+  },
+  {
+    "a": "Will the S&P 500 close above 6,500 on October 30, 2026?",
+    "b": "Will the S&P 500 close above 6,500 on December 31, 2026?",
+    "duplicate": false,
+    "family": "different-date",
+    "note": "same subject, different resolution date",
+    "dueA": "2026-10-30",
+    "dueB": "2026-12-31"
+  },
+  {
+    "a": "Will the 10-year yield close above 4.5% on October 30?",
+    "b": "Will the 10-year yield close above 4.5% on December 31?",
+    "duplicate": false,
+    "family": "different-date",
+    "note": "same subject, different resolution date",
+    "dueA": "2026-10-30",
+    "dueB": "2026-12-31"
+  },
+  {
+    "a": "Will Tesla deliver over 500,000 vehicles in Q3 2026?",
+    "b": "Will Tesla deliver over 500,000 vehicles in Q4 2026?",
+    "duplicate": false,
+    "family": "different-date",
+    "note": "same subject, different resolution date",
+    "dueA": "2026-10-02",
+    "dueB": "2027-01-03"
+  },
+  {
+    "a": "Will the BOJ raise rates at its October 30 meeting?",
+    "b": "Will the BOJ raise rates at its December 18 meeting?",
+    "duplicate": false,
+    "family": "different-date",
+    "note": "same subject, different resolution date",
+    "dueA": "2026-10-30",
+    "dueB": "2026-12-18"
+  },
+  {
+    "a": "Will the BOE cut rates on November 5?",
+    "b": "Will the BOE cut rates on December 17?",
+    "duplicate": false,
+    "family": "different-date",
+    "note": "same subject, different resolution date",
+    "dueA": "2026-11-05",
+    "dueB": "2026-12-17"
+  },
+  {
+    "a": "Will the UK unemployment rate exceed 5% in the October release?",
+    "b": "Will the UK unemployment rate exceed 5% in the December release?",
+    "duplicate": false,
+    "family": "different-date",
+    "note": "same subject, different resolution date",
+    "dueA": "2026-10-15",
+    "dueB": "2026-12-16"
+  },
+  {
+    "a": "Will India GDP growth exceed 7% in the September quarter?",
+    "b": "Will India GDP growth exceed 7% in the December quarter?",
+    "duplicate": false,
+    "family": "different-date",
+    "note": "same subject, different resolution date",
+    "dueA": "2026-11-28",
+    "dueB": "2027-02-27"
+  },
+  {
+    "a": "Will the WHO declare a new health emergency by November 30, 2026?",
+    "b": "Will the WHO declare a new health emergency by March 31, 2027?",
+    "duplicate": false,
+    "family": "different-date",
+    "note": "same subject, different resolution date",
+    "dueA": "2026-11-30",
+    "dueB": "2027-03-31"
+  },
+  {
+    "a": "Will Solana close above $300 on November 1, 2026?",
+    "b": "Will Solana close above $300 on December 1, 2026?",
+    "duplicate": false,
+    "family": "different-date",
+    "note": "same subject, different resolution date",
+    "dueA": "2026-11-01",
+    "dueB": "2026-12-01"
+  },
+  {
+    "a": "Will the Fed raise rates at its September 17 meeting?",
+    "b": "Will the Fed raise rates at its December 9 meeting?",
+    "duplicate": false,
+    "family": "different-date",
+    "note": "same subject, different resolution date",
+    "dueA": "2026-09-17",
+    "dueB": "2026-12-09"
+  },
+  {
+    "a": "Will Apple announce a foldable iPhone in September?",
+    "b": "Will Apple announce a foldable iPhone in March?",
+    "duplicate": false,
+    "family": "different-date",
+    "note": "same subject, different resolution date",
+    "dueA": "2026-09-15",
+    "dueB": "2027-03-10"
+  },
+  {
+    "a": "Will Bitcoin close above $100,000 on December 31, 2026?",
+    "b": "Will Ethereum close above $100,000 on December 31, 2026?",
+    "duplicate": false,
+    "family": "different-entity",
+    "note": "same template, different subject",
+    "dueA": "2026-12-31",
+    "dueB": "2026-12-31"
+  },
+  {
+    "a": "Will Solana trade above $300 by November 30?",
+    "b": "Will Dogecoin trade above $300 by November 30?",
+    "duplicate": false,
+    "family": "different-entity",
+    "note": "same template, different subject",
+    "dueA": "2026-11-30",
+    "dueB": "2026-11-30"
+  },
+  {
+    "a": "Will the Fed cut rates on October 28?",
+    "b": "Will the ECB cut rates on October 28?",
+    "duplicate": false,
+    "family": "different-entity",
+    "note": "same template, different subject",
+    "dueA": "2026-10-28",
+    "dueB": "2026-10-28"
+  },
+  {
+    "a": "Will the ECB hold rates on December 10?",
+    "b": "Will the Bank of Japan hold rates on December 10?",
+    "duplicate": false,
+    "family": "different-entity",
+    "note": "same template, different subject",
+    "dueA": "2026-12-10",
+    "dueB": "2026-12-10"
+  },
+  {
+    "a": "Will the Lakers win the NBA championship?",
+    "b": "Will the Celtics win the NBA championship?",
+    "duplicate": false,
+    "family": "different-entity",
+    "note": "same template, different subject",
+    "dueA": "2026-06-20",
+    "dueB": "2026-06-20"
+  },
+  {
+    "a": "Will the Chiefs win the Super Bowl?",
+    "b": "Will the Eagles win the Super Bowl?",
+    "duplicate": false,
+    "family": "different-entity",
+    "note": "same template, different subject",
+    "dueA": "2027-02-14",
+    "dueB": "2027-02-14"
+  },
+  {
+    "a": "Will Manchester City win the Premier League?",
+    "b": "Will Arsenal win the Premier League?",
+    "duplicate": false,
+    "family": "different-entity",
+    "note": "same template, different subject",
+    "dueA": "2027-05-24",
+    "dueB": "2027-05-24"
+  },
+  {
+    "a": "Will Republicans win the Senate in November?",
+    "b": "Will Republicans win the House in November?",
+    "duplicate": false,
+    "family": "different-entity",
+    "note": "same template, different subject",
+    "dueA": "2026-11-04",
+    "dueB": "2026-11-04"
+  },
+  {
+    "a": "Will the Senate pass the sanctions bill by October 9?",
+    "b": "Will the Senate pass the immigration bill by October 9?",
+    "duplicate": false,
+    "family": "different-entity",
+    "note": "same template, different subject",
+    "dueA": "2026-10-09",
+    "dueB": "2026-10-09"
+  },
+  {
+    "a": "Will Russia sign a ceasefire by November 30?",
+    "b": "Will Israel sign a ceasefire by November 30?",
+    "duplicate": false,
+    "family": "different-entity",
+    "note": "same template, different subject",
+    "dueA": "2026-11-30",
+    "dueB": "2026-11-30"
+  },
+  {
+    "a": "Will China impose new tariffs by October 31?",
+    "b": "Will India impose new tariffs by October 31?",
+    "duplicate": false,
+    "family": "different-entity",
+    "note": "same template, different subject",
+    "dueA": "2026-10-31",
+    "dueB": "2026-10-31"
+  },
+  {
+    "a": "Will Brent crude close above $90 on November 30?",
+    "b": "Will gold close above $90 on November 30?",
+    "duplicate": false,
+    "family": "different-entity",
+    "note": "same template, different subject",
+    "dueA": "2026-11-30",
+    "dueB": "2026-11-30"
+  },
+  {
+    "a": "Will US CPI exceed 3.0% in September?",
+    "b": "Will UK CPI exceed 3.0% in September?",
+    "duplicate": false,
+    "family": "different-entity",
+    "note": "same template, different subject",
+    "dueA": "2026-10-14",
+    "dueB": "2026-10-14"
+  },
+  {
+    "a": "Will US unemployment exceed 4.5% in October?",
+    "b": "Will UK unemployment exceed 4.5% in October?",
+    "duplicate": false,
+    "family": "different-entity",
+    "note": "same template, different subject",
+    "dueA": "2026-11-06",
+    "dueB": "2026-11-06"
+  },
+  {
+    "a": "Will Tesla deliver more than 500,000 vehicles in Q4?",
+    "b": "Will Ford deliver more than 500,000 vehicles in Q4?",
+    "duplicate": false,
+    "family": "different-entity",
+    "note": "same template, different subject",
+    "dueA": "2027-01-03",
+    "dueB": "2027-01-03"
+  },
+  {
+    "a": "Will Apple announce a foldable phone in September?",
+    "b": "Will Samsung announce a foldable phone in September?",
+    "duplicate": false,
+    "family": "different-entity",
+    "note": "same template, different subject",
+    "dueA": "2026-09-15",
+    "dueB": "2026-09-15"
+  },
+  {
+    "a": "Will Nvidia report revenue above $50 billion?",
+    "b": "Will Intel report revenue above $50 billion?",
+    "duplicate": false,
+    "family": "different-entity",
+    "note": "same template, different subject",
+    "dueA": "2026-11-25",
+    "dueB": "2026-11-25"
+  },
+  {
+    "a": "Will the film gross over $130 million opening weekend?",
+    "b": "Will the sequel gross over $130 million opening weekend?",
+    "duplicate": false,
+    "family": "different-entity",
+    "note": "same template, different subject",
+    "dueA": "2026-10-26",
+    "dueB": "2026-10-26"
+  },
+  {
+    "a": "Will California approve the housing bond?",
+    "b": "Will Oregon approve the housing bond?",
+    "duplicate": false,
+    "family": "different-entity",
+    "note": "same template, different subject",
+    "dueA": "2026-11-03",
+    "dueB": "2026-11-03"
+  },
+  {
+    "a": "Will the WHO declare a health emergency by December 31?",
+    "b": "Will the UN declare a famine emergency by December 31?",
+    "duplicate": false,
+    "family": "different-entity",
+    "note": "same template, different subject",
+    "dueA": "2026-12-31",
+    "dueB": "2026-12-31"
+  },
+  {
+    "a": "Will the SEC approve a Solana ETF by year end?",
+    "b": "Will the SEC approve an XRP ETF by year end?",
+    "duplicate": false,
+    "family": "different-entity",
+    "note": "same template, different subject",
+    "dueA": "2026-12-31",
+    "dueB": "2026-12-31"
+  },
+  {
+    "a": "Will Japan raise rates in October?",
+    "b": "Will Canada raise rates in October?",
+    "duplicate": false,
+    "family": "different-entity",
+    "note": "same template, different subject",
+    "dueA": "2026-10-30",
+    "dueB": "2026-10-30"
+  },
+  {
+    "a": "Will the Premier League leaders win on Saturday?",
+    "b": "Will the La Liga leaders win on Saturday?",
+    "duplicate": false,
+    "family": "different-entity",
+    "note": "same template, different subject",
+    "dueA": "2026-10-17",
+    "dueB": "2026-10-17"
+  },
+  {
+    "a": "Will Iran sign the nuclear agreement by November 15?",
+    "b": "Will Israel sign the normalisation agreement by November 15?",
+    "duplicate": false,
+    "family": "different-entity",
+    "note": "same template, different subject",
+    "dueA": "2026-11-15",
+    "dueB": "2026-11-15"
+  },
+  {
+    "a": "Will Apple close above $250 by June 30, 2026?",
+    "b": "Will Tesla close above $250 by June 30, 2026?",
+    "duplicate": false,
+    "family": "boilerplate",
+    "note": "shared template and date, unrelated subjects",
+    "dueA": "2026-06-30",
+    "dueB": "2026-06-30"
+  },
+  {
+    "a": "Will Microsoft close above $500 by June 30, 2026?",
+    "b": "Will Nvidia close above $500 by June 30, 2026?",
+    "duplicate": false,
+    "family": "boilerplate",
+    "note": "shared template and date, unrelated subjects",
+    "dueA": "2026-06-30",
+    "dueB": "2026-06-30"
+  },
+  {
+    "a": "Will Amazon close above $220 by June 30, 2026?",
+    "b": "Will Alphabet close above $220 by June 30, 2026?",
+    "duplicate": false,
+    "family": "boilerplate",
+    "note": "shared template and date, unrelated subjects",
+    "dueA": "2026-06-30",
+    "dueB": "2026-06-30"
+  },
+  {
+    "a": "Will the Nikkei 225 close above 45,000 by June 30, 2026?",
+    "b": "Will the FTSE 100 close above 45,000 by June 30, 2026?",
+    "duplicate": false,
+    "family": "boilerplate",
+    "note": "shared template and date, unrelated subjects",
+    "dueA": "2026-06-30",
+    "dueB": "2026-06-30"
+  },
+  {
+    "a": "Will the DAX close above 20,000 by June 30, 2026?",
+    "b": "Will the CAC 40 close above 20,000 by June 30, 2026?",
+    "duplicate": false,
+    "family": "boilerplate",
+    "note": "shared template and date, unrelated subjects",
+    "dueA": "2026-06-30",
+    "dueB": "2026-06-30"
+  },
+  {
+    "a": "Will Brent crude close above $90 by June 30, 2026?",
+    "b": "Will natural gas close above $90 by June 30, 2026?",
+    "duplicate": false,
+    "family": "boilerplate",
+    "note": "shared template and date, unrelated subjects",
+    "dueA": "2026-06-30",
+    "dueB": "2026-06-30"
+  },
+  {
+    "a": "Will the euro close above 1.20 by June 30, 2026?",
+    "b": "Will the pound close above 1.20 by June 30, 2026?",
+    "duplicate": false,
+    "family": "boilerplate",
+    "note": "shared template and date, unrelated subjects",
+    "dueA": "2026-06-30",
+    "dueB": "2026-06-30"
+  },
+  {
+    "a": "Will Netflix close above $1,000 by June 30, 2026?",
+    "b": "Will Disney close above $1,000 by June 30, 2026?",
+    "duplicate": false,
+    "family": "boilerplate",
+    "note": "shared template and date, unrelated subjects",
+    "dueA": "2026-06-30",
+    "dueB": "2026-06-30"
+  },
+  {
+    "a": "Will Coinbase close above $300 by June 30, 2026?",
+    "b": "Will Robinhood close above $300 by June 30, 2026?",
+    "duplicate": false,
+    "family": "boilerplate",
+    "note": "shared template and date, unrelated subjects",
+    "dueA": "2026-06-30",
+    "dueB": "2026-06-30"
+  },
+  {
+    "a": "Will Walmart close above $100 by June 30, 2026?",
+    "b": "Will Costco close above $100 by June 30, 2026?",
+    "duplicate": false,
+    "family": "boilerplate",
+    "note": "shared template and date, unrelated subjects",
+    "dueA": "2026-06-30",
+    "dueB": "2026-06-30"
+  },
+  {
+    "a": "Will copper close above $5 by June 30, 2026?",
+    "b": "Will silver close above $5 by June 30, 2026?",
+    "duplicate": false,
+    "family": "boilerplate",
+    "note": "shared template and date, unrelated subjects",
+    "dueA": "2026-06-30",
+    "dueB": "2026-06-30"
+  },
+  {
+    "a": "Will Shopify close above $150 by June 30, 2026?",
+    "b": "Will Spotify close above $150 by June 30, 2026?",
+    "duplicate": false,
+    "family": "boilerplate",
+    "note": "shared template and date, unrelated subjects",
+    "dueA": "2026-06-30",
+    "dueB": "2026-06-30"
+  },
+  {
+    "a": "Will Ford close above $15 by June 30, 2026?",
+    "b": "Will Toyota close above $15 by June 30, 2026?",
+    "duplicate": false,
+    "family": "boilerplate",
+    "note": "shared template and date, unrelated subjects",
+    "dueA": "2026-06-30",
+    "dueB": "2026-06-30"
+  },
+  {
+    "a": "Will Boeing close above $250 by June 30, 2026?",
+    "b": "Will Airbus close above $250 by June 30, 2026?",
+    "duplicate": false,
+    "family": "boilerplate",
+    "note": "shared template and date, unrelated subjects",
+    "dueA": "2026-06-30",
+    "dueB": "2026-06-30"
+  },
+  {
+    "a": "Will Visa close above $400 by June 30, 2026?",
+    "b": "Will Mastercard close above $400 by June 30, 2026?",
+    "duplicate": false,
+    "family": "boilerplate",
+    "note": "shared template and date, unrelated subjects",
+    "dueA": "2026-06-30",
+    "dueB": "2026-06-30"
+  },
+  {
+    "a": "Will Intel close above $40 by June 30, 2026?",
+    "b": "Will AMD close above $40 by June 30, 2026?",
+    "duplicate": false,
+    "family": "boilerplate",
+    "note": "shared template and date, unrelated subjects",
+    "dueA": "2026-06-30",
+    "dueB": "2026-06-30"
+  },
+  {
+    "a": "Will Uber close above $100 by June 30, 2026?",
+    "b": "Will Lyft close above $100 by June 30, 2026?",
+    "duplicate": false,
+    "family": "boilerplate",
+    "note": "shared template and date, unrelated subjects",
+    "dueA": "2026-06-30",
+    "dueB": "2026-06-30"
+  },
+  {
+    "a": "Will Pfizer close above $40 by June 30, 2026?",
+    "b": "Will Moderna close above $40 by June 30, 2026?",
+    "duplicate": false,
+    "family": "boilerplate",
+    "note": "shared template and date, unrelated subjects",
+    "dueA": "2026-06-30",
+    "dueB": "2026-06-30"
+  },
+  {
+    "a": "Will JPMorgan close above $300 by June 30, 2026?",
+    "b": "Will Goldman Sachs close above $300 by June 30, 2026?",
+    "duplicate": false,
+    "family": "boilerplate",
+    "note": "shared template and date, unrelated subjects",
+    "dueA": "2026-06-30",
+    "dueB": "2026-06-30"
+  },
+  {
+    "a": "Will the Hang Seng close above 25,000 by June 30, 2026?",
+    "b": "Will the Kospi close above 25,000 by June 30, 2026?",
+    "duplicate": false,
+    "family": "boilerplate",
+    "note": "shared template and date, unrelated subjects",
+    "dueA": "2026-06-30",
+    "dueB": "2026-06-30"
+  },
+  {
+    "a": "Will Bitcoin close above $70,000 on October 31, 2026?",
+    "b": "Will Bitcoin close above $90,000 on October 31, 2026?",
+    "duplicate": false,
+    "family": "different-threshold",
+    "note": "same subject and date, different strike",
+    "dueA": "2026-10-31",
+    "dueB": "2026-10-31"
+  },
+  {
+    "a": "Will Ethereum trade above $4,000 by November 30?",
+    "b": "Will Ethereum trade above $6,000 by November 30?",
+    "duplicate": false,
+    "family": "different-threshold",
+    "note": "same subject and date, different strike",
+    "dueA": "2026-11-30",
+    "dueB": "2026-11-30"
+  },
+  {
+    "a": "Will US CPI exceed 3.0% in September 2026?",
+    "b": "Will US CPI exceed 4.0% in September 2026?",
+    "duplicate": false,
+    "family": "different-threshold",
+    "note": "same subject and date, different strike",
+    "dueA": "2026-10-14",
+    "dueB": "2026-10-14"
+  },
+  {
+    "a": "Will the unemployment rate be above 4.3% in October 2026?",
+    "b": "Will the unemployment rate be above 5.0% in October 2026?",
+    "duplicate": false,
+    "family": "different-threshold",
+    "note": "same subject and date, different strike",
+    "dueA": "2026-11-06",
+    "dueB": "2026-11-06"
+  },
+  {
+    "a": "Will gold trade above $3,500 by December 31?",
+    "b": "Will gold trade above $4,500 by December 31?",
+    "duplicate": false,
+    "family": "different-threshold",
+    "note": "same subject and date, different strike",
+    "dueA": "2026-12-31",
+    "dueB": "2026-12-31"
+  },
+  {
+    "a": "Will Brent crude close above $90 on November 30?",
+    "b": "Will Brent crude close above $120 on November 30?",
+    "duplicate": false,
+    "family": "different-threshold",
+    "note": "same subject and date, different strike",
+    "dueA": "2026-11-30",
+    "dueB": "2026-11-30"
+  },
+  {
+    "a": "Will the S&P 500 close above 6,500 on December 31?",
+    "b": "Will the S&P 500 close above 7,500 on December 31?",
+    "duplicate": false,
+    "family": "different-threshold",
+    "note": "same subject and date, different strike",
+    "dueA": "2026-12-31",
+    "dueB": "2026-12-31"
+  },
+  {
+    "a": "Will the film gross over $130 million in its opening weekend?",
+    "b": "Will the film gross over $200 million in its opening weekend?",
+    "duplicate": false,
+    "family": "different-threshold",
+    "note": "same subject and date, different strike",
+    "dueA": "2026-10-26",
+    "dueB": "2026-10-26"
+  },
+  {
+    "a": "Will Solana close above $300 on December 1?",
+    "b": "Will Solana close above $500 on December 1?",
+    "duplicate": false,
+    "family": "different-threshold",
+    "note": "same subject and date, different strike",
+    "dueA": "2026-12-01",
+    "dueB": "2026-12-01"
+  },
+  {
+    "a": "Will US GDP growth for Q3 exceed 2.0% annualized?",
+    "b": "Will US GDP growth for Q3 exceed 4.0% annualized?",
+    "duplicate": false,
+    "family": "different-threshold",
+    "note": "same subject and date, different strike",
+    "dueA": "2026-10-29",
+    "dueB": "2026-10-29"
+  },
+  {
+    "a": "Will the 10-year yield close above 4.5% on October 30?",
+    "b": "Will the 10-year yield close above 5.5% on October 30?",
+    "duplicate": false,
+    "family": "different-threshold",
+    "note": "same subject and date, different strike",
+    "dueA": "2026-10-30",
+    "dueB": "2026-10-30"
+  },
+  {
+    "a": "Will Tesla deliver more than 500,000 vehicles in Q4?",
+    "b": "Will Tesla deliver more than 700,000 vehicles in Q4?",
+    "duplicate": false,
+    "family": "different-threshold",
+    "note": "same subject and date, different strike",
+    "dueA": "2027-01-03",
+    "dueB": "2027-01-03"
+  },
+  {
+    "a": "Will the Fed cut rates at its October meeting?",
+    "b": "Will the Lakers win the NBA championship?",
+    "duplicate": false,
+    "family": "unrelated",
+    "note": "nothing in common",
+    "dueA": "2026-10-28",
+    "dueB": "2026-06-20"
+  },
+  {
+    "a": "Will Bitcoin close above $100,000 this year?",
+    "b": "Will the WHO declare a health emergency by December?",
+    "duplicate": false,
+    "family": "unrelated",
+    "note": "nothing in common",
+    "dueA": "2026-12-31",
+    "dueB": "2026-12-31"
+  },
+  {
+    "a": "Will the Senate confirm the Treasury nominee?",
+    "b": "Will Ethereum trade above $5,000?",
+    "duplicate": false,
+    "family": "unrelated",
+    "note": "nothing in common",
+    "dueA": "2026-10-02",
+    "dueB": "2026-11-30"
+  },
+  {
+    "a": "Will OPEC cut production in October?",
+    "b": "Will the new single top the Billboard Hot 100?",
+    "duplicate": false,
+    "family": "unrelated",
+    "note": "nothing in common",
+    "dueA": "2026-10-05",
+    "dueB": "2026-11-07"
+  },
+  {
+    "a": "Will the ECB cut its deposit rate in December?",
+    "b": "Will Manchester City win the Premier League?",
+    "duplicate": false,
+    "family": "unrelated",
+    "note": "nothing in common",
+    "dueA": "2026-12-10",
+    "dueB": "2027-05-24"
+  },
+  {
+    "a": "Will Russia sign a ceasefire by November 30?",
+    "b": "Will Tesla deliver 500,000 vehicles in Q4?",
+    "duplicate": false,
+    "family": "unrelated",
+    "note": "nothing in common",
+    "dueA": "2026-11-30",
+    "dueB": "2027-01-03"
+  },
+  {
+    "a": "Will California approve the housing bond?",
+    "b": "Will gold trade above $3,500 an ounce?",
+    "duplicate": false,
+    "family": "unrelated",
+    "note": "nothing in common",
+    "dueA": "2026-11-03",
+    "dueB": "2026-12-31"
+  },
+  {
+    "a": "Will US CPI exceed 3% in September?",
+    "b": "Will the IOC pick a 2036 host city?",
+    "duplicate": false,
+    "family": "unrelated",
+    "note": "nothing in common",
+    "dueA": "2026-10-14",
+    "dueB": "2026-09-25"
+  },
+  {
+    "a": "Will Apple unveil a foldable iPhone?",
+    "b": "Will the Chiefs win the Super Bowl?",
+    "duplicate": false,
+    "family": "unrelated",
+    "note": "nothing in common",
+    "dueA": "2026-09-15",
+    "dueB": "2027-02-14"
+  },
+  {
+    "a": "Will China impose new tariffs?",
+    "b": "Will the film open above $130 million?",
+    "duplicate": false,
+    "family": "unrelated",
+    "note": "nothing in common",
+    "dueA": "2026-10-31",
+    "dueB": "2026-10-26"
+  },
+  {
+    "a": "Will the unemployment rate exceed 4.5%?",
+    "b": "Will a Category 5 hurricane make US landfall?",
+    "duplicate": false,
+    "family": "unrelated",
+    "note": "nothing in common",
+    "dueA": "2026-11-06",
+    "dueB": "2026-11-30"
+  },
+  {
+    "a": "Will Nvidia report revenue above $50 billion?",
+    "b": "Will the BOJ raise its policy rate?",
+    "duplicate": false,
+    "family": "unrelated",
+    "note": "nothing in common",
+    "dueA": "2026-11-25",
+    "dueB": "2026-10-30"
+  },
+  {
+    "a": "Will the S&P 500 close above 6,500?",
+    "b": "Will Democrats win the House?",
+    "duplicate": false,
+    "family": "unrelated",
+    "note": "nothing in common",
+    "dueA": "2026-12-31",
+    "dueB": "2026-11-04"
+  },
+  {
+    "a": "Will India overtake Japan in GDP?",
+    "b": "Will Solana close above $300?",
+    "duplicate": false,
+    "family": "unrelated",
+    "note": "nothing in common",
+    "dueA": "2026-10-14",
+    "dueB": "2026-12-01"
+  }
+]

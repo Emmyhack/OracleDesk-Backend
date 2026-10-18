@@ -1,10 +1,13 @@
 import http from 'http';
 import { Server } from 'socket.io';
+import { createAdapter } from '@socket.io/redis-streams-adapter';
 import app from './app';
 import { config } from './config';
 import { initSecrets, startSecretRefresh } from './config/secrets';
+import { assertEmbeddingConfig } from './services/embeddings.service';
 import { logger } from './lib/logger';
 import { prisma } from './lib/prisma';
+import { startDisputeCron } from './cron/dispute.cron';
 import { startIngestionCron } from './cron/ingestion.cron';
 import { startMonitorCron } from './cron/monitor.cron';
 import { startReportCron } from './cron/report.cron';
@@ -13,10 +16,14 @@ import { isAdminToken } from './middlewares/auth.middleware';
 import { startTraceAuditCron } from './cron/trace-audit.cron';
 import { startTracePublicationCron } from './cron/trace-publication.cron';
 import { startEventListener } from './services/indexer.service';
-import { closeRedis } from './lib/redis';
+import { closeRedis, getRedis } from './lib/redis';
+import { memoryEventBus, redisEventBus } from './lib/event-bus';
+import { startFanout, startLocalFanout } from './lib/fanout';
+import { attachSessionLifecycle, setRealtime, socketAuthMiddleware } from './lib/socket-auth';
 import { health } from './services/health.service';
 
 let stopEventListener: (() => void) | null = null;
+let stopFanout: (() => Promise<void>) | null = null;
 let stopSecretRefresh: (() => void) | null = null;
 
 async function bootstrap(): Promise<void> {
@@ -26,6 +33,14 @@ async function bootstrap(): Promise<void> {
     stopSecretRefresh = startSecretRefresh(config);
   } catch (err) {
     logger.fatal({ err: err instanceof Error ? err.message : err }, 'Failed to initialise secrets');
+    process.exit(1);
+  }
+
+  // 0b. A dimension the markets.questionEmbedding column cannot hold fails here, not on the first insert.
+  try {
+    assertEmbeddingConfig();
+  } catch (err) {
+    logger.fatal({ err: err instanceof Error ? err.message : err }, 'Invalid embedding configuration');
     process.exit(1);
   }
 
@@ -55,8 +70,26 @@ async function bootstrap(): Promise<void> {
     },
   });
 
-  // 3. Index Stellar events (resumes from the stored ledger cursor)
-  stopEventListener = startEventListener((event, payload) => io.emit(event, payload));
+  // Authenticated sockets (#94) and cluster-wide broadcast (#93). The Redis
+  // adapter makes one io.emit / io.to(room).emit reach every instance. Redis
+  // being down at boot is not fatal: the adapter and the bus reconnect, and the
+  // indexer keeps events unpublished until the bus accepts them.
+  io.use(socketAuthMiddleware());
+  attachSessionLifecycle(io);
+  setRealtime(io);
+  if (config.EVENT_BUS_ENABLED) {
+    io.adapter(createAdapter(getRedis(), { streamName: 'oracledesk:socket.io', blockTimeInMs: 1000 }));
+  } else {
+    logger.warn('EVENT_BUS_ENABLED=false: in-process event bus; socket events reach this instance only');
+  }
+
+  // 3. Index Stellar events (resumes from the stored ledger cursor). The
+  // indexer publishes to the bus; one elected instance fans out to sockets.
+  const bus = config.EVENT_BUS_ENABLED ? redisEventBus() : memoryEventBus();
+  stopFanout = config.EVENT_BUS_ENABLED ? startFanout(bus, io) : startLocalFanout(bus, io);
+  stopEventListener = startEventListener(async (type, payload, meta) => {
+    await bus.publish({ ...meta, type, payload });
+  });
 
   // 4. Start cron jobs
   startIngestionCron();
@@ -75,9 +108,6 @@ async function bootstrap(): Promise<void> {
       logger.info({ socketId: socket.id }, 'Client disconnected from socket.io');
     });
   });
-
-  // Make io accessible via app
-  app.set('io', io);
 
   server.listen(config.PORT, () => {
     logger.info(
@@ -100,10 +130,12 @@ async function bootstrap(): Promise<void> {
     const { triggerShutdown } = await import('./lib/shutdown');
     triggerShutdown();
 
-    server.close(async () => {
-      if (stopEventListener) stopEventListener();
-      if (stopSecretRefresh) stopSecretRefresh();
-
+    // Stop producing and consuming first, then close sockets and the HTTP
+    // server (io.close also closes `server`), then the shared connections.
+    if (stopEventListener) stopEventListener();
+    if (stopSecretRefresh) stopSecretRefresh();
+    if (stopFanout) await stopFanout().catch(() => undefined);
+    io.close(async () => {
       await prisma.$disconnect();
       await closeRedis();
       logger.info('Database disconnected');

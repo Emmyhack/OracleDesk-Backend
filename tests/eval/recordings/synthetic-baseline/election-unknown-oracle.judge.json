@@ -1,0 +1,8 @@
+{
+  "caseId": "election-unknown-oracle",
+  "kind": "judge",
+  "promptKey": "c76ba99437e68cca72c07545b483c495e04ca4cc0aa202488f77ecd7fafe41f4",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":1,\"ambiguity_notes\":\"Bloomberg publishes results.\"}"
+}

@@ -1,0 +1,8 @@
+{
+  "caseId": "crypto-btc-70k",
+  "kind": "judge",
+  "promptKey": "3b5b404c7f611dcdf2f9c6b4a1a2ddd53edadf8c598fa9cea7731a96d390b092",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":1,\"ambiguity_notes\":\"Synthetic judge verdict.\"}"
+}

@@ -1,0 +1,8 @@
+{
+  "caseId": "crypto-schema-bad",
+  "kind": "proposal",
+  "promptKey": "46cd7acbc0516038484c260da9bc0de7a2368bcec8c307af06ca1b43209c6ad9",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will average Ethereum gas fees fall below 5 gwei before October 30, 2026?\",\"initial_yes_probability\":1.4,\"resolution_oracle\":\"NEWSAPI\",\"expiry_timestamp\":1793000000,\"category\":\"CRYPTO\"}"
+}

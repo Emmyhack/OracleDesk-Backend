@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import os from 'os';
 import dotenv from 'dotenv';
 import { Keypair, Networks, StrKey } from '@stellar/stellar-sdk';
 import { z } from 'zod';
@@ -144,6 +145,29 @@ const envSchema = z
     LIVENESS_MAX_LOOP_DELAY_MS: z.string().default('2000').transform(Number),
     // Time /readyz reports "draining" before the HTTP server stops accepting.
     SHUTDOWN_DRAIN_MS: z.string().default('5000').transform(Number),
+
+    // ── Semantic dedup (#69) ──────────────────────────────────────────────
+    // none keeps the lexical check. The vector column is vector(768): the
+    // dimension must match the migration, and the provider rejects a mismatch.
+    EMBEDDING_PROVIDER: z.enum(['none', 'gemini', 'openai']).default('none'),
+    EMBEDDING_MODEL: optionalString,
+    EMBEDDING_DIM: z.string().default('768').transform(Number).pipe(z.number().int().positive()),
+    // Cosine similarity at which a nearest neighbour becomes a duplicate candidate.
+    DEDUP_SIM_THRESHOLD: z.string().default('0.85').transform(Number).pipe(z.number().min(0).max(1)),
+    // Two markets whose resolution dates are within this many days are "the same date".
+    DEDUP_DATE_WINDOW_DAYS: z.string().default('3').transform(Number).pipe(z.number().min(0)),
+
+    // ── Calibration (#68) ─────────────────────────────────────────────────
+    // Slices with fewer resolved markets report insufficientData instead of noise.
+    MIN_CALIBRATION_MARKETS: z.string().default('20').transform(Number)
+      .pipe(z.number().int().min(1)),
+    // How a market's weight is split between its traces: time | last | first.
+    CALIBRATION_WEIGHTING: z.enum(['time', 'last', 'first']).default('time'),
+    // Shrink the trader's probability toward 0.5 by the fitted calibration factor.
+    CALIBRATION_SHRINKAGE_ENABLED: z.enum(['true', 'false']).default('false').transform((v) => v === 'true'),
+
+    // Build commit, recorded in trace provenance (#66). Set by CI/deploy.
+    GIT_SHA: optionalString,
 
     // ── LLM providers (optional; generation fails at runtime without one) ─
     ANTHROPIC_API_KEY: optionalString,

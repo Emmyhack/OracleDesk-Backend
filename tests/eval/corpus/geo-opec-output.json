@@ -1,0 +1,34 @@
+{
+  "id": "geo-opec-output",
+  "asOf": "2026-09-22T12:00:00Z",
+  "signals": {
+    "news": [],
+    "fed": [],
+    "macro": [
+      {
+        "source": "GDELT",
+        "title": "OPEC+ weighs deeper output cuts",
+        "content": "Delegates cite weak demand.",
+        "publishedAt": "2026-09-22T11:55:00.000Z",
+        "relevanceScore": 0.7,
+        "category": "GEOPOLITICAL"
+      }
+    ],
+    "signalCount": 1
+  },
+  "existing": [
+    {
+      "question": "Will the Lakers win the 2026 NBA championship?",
+      "category": "SPORTS"
+    },
+    {
+      "question": "Will Bitcoin trade above $100,000 before year end?",
+      "category": "CRYPTO"
+    }
+  ],
+  "labels": {
+    "category": "GEOPOLITICAL",
+    "expectDuplicateOf": null,
+    "notes": "OPEC is an allowed oracle."
+  }
+}

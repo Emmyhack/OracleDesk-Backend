@@ -5,6 +5,7 @@ export type LlmTask =
   | 'hedge_conditions'
   | 'forecasting'
   | 'attestation'
+  | 'dispute_review'
   | 'generic_json'
   | 'generic_text';
 

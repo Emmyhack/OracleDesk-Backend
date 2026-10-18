@@ -1,0 +1,8 @@
+{
+  "caseId": "fed-dup-caught",
+  "kind": "judge",
+  "promptKey": "37ad8ec0cae3bc241f3f9b6a06e02e5f75d30d054ce289f125fe43b966d46d85",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":1,\"ambiguity_notes\":\"Synthetic judge verdict.\"}"
+}

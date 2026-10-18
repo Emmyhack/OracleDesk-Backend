@@ -1,0 +1,8 @@
+{
+  "caseId": "crypto-wide-ci",
+  "kind": "judge",
+  "promptKey": "b27edf9290bdf84ec7b6ac61014ae66ac7f7dfec581849847a6830660ecdf43d",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":1,\"ambiguity_notes\":\"Synthetic judge verdict.\"}"
+}

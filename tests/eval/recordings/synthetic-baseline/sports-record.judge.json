@@ -1,0 +1,8 @@
+{
+  "caseId": "sports-record",
+  "kind": "judge",
+  "promptKey": "9dc5fa2d0aff3d72a038cb05b4f613fd9c98e66eb0d50cea31e64ab7b93a6c05",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":1,\"ambiguity_notes\":\"Synthetic judge verdict.\"}"
+}

@@ -1,0 +1,8 @@
+{
+  "caseId": "edge-year-rollover",
+  "kind": "proposal",
+  "promptKey": "4e5e3429a3245fcd7e7c22aa83ac8135d659980ce78af10f2d9a8314d85e0e4e",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will the Federal Reserve lower the federal funds target range at its January 28 meeting?\",\"initial_yes_probability\":0.3,\"resolution_oracle\":\"FRED\",\"expiry_timestamp\":1801137600,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"FED\",\"confidence_interval\":{\"lower\":0.2,\"upper\":0.4},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"f1\"]}"
+}

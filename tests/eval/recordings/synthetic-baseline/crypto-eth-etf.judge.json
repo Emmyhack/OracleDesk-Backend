@@ -1,0 +1,8 @@
+{
+  "caseId": "crypto-eth-etf",
+  "kind": "judge",
+  "promptKey": "887901fab747990d64c60c65a6634b9f94cfc67415efa7f1da4676f2ddf6a5b9",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":1,\"ambiguity_notes\":\"Synthetic judge verdict.\"}"
+}

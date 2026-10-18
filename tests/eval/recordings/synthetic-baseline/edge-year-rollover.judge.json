@@ -1,0 +1,8 @@
+{
+  "caseId": "edge-year-rollover",
+  "kind": "judge",
+  "promptKey": "245aa516d9dcde41195b0638d1ab7cf8a64a03278e618065c073ab4ec6cb0873",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":1,\"ambiguity_notes\":\"Synthetic judge verdict.\"}"
+}

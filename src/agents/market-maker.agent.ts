@@ -1,7 +1,7 @@
 import { aggregateSignals } from '../services/ingestion.service';
 import {
   generateMarketQuestion,
-  isDuplicateMarket,
+  checkDuplicate,
   createMarketFromProposal,
   normalizeCategory,
 } from '../services/market.service';
@@ -71,8 +71,9 @@ export async function runMarketMakerCycle(
 
     // Step 2: Generate market proposal via the LLM
     let proposal;
+    let proposalProvenance;
     try {
-      proposal = await generateMarketQuestion(signals, genCtx);
+      ({ proposal, provenance: proposalProvenance } = await generateMarketQuestion(signals, genCtx));
     } catch (err) {
       if (err instanceof LlmBudgetExceeded) {
         // One agent log per day, not one per 15-minute cycle.
@@ -94,9 +95,16 @@ export async function runMarketMakerCycle(
     signal.throwIfAborted();
 
     // Step 3: Deduplicate
-    const isDuplicate = await isDuplicateMarket(proposal.market_question);
-    if (isDuplicate) {
-      logger.info({ question: proposal.market_question },
+    const dedup = await checkDuplicate(proposal);
+    await writeAgentLog({
+      agentType: 'MARKET_MAKER',
+      level:     dedup.duplicate ? 'WARN' : 'INFO',
+      action:    dedup.duplicate ? 'DUPLICATE_SKIPPED' : 'DEDUP_CHECK',
+      marketId:  dedup.match?.marketId,
+      data:      { method: dedup.method, duplicate: dedup.duplicate, match: dedup.match },
+    }).catch(() => {});
+    if (dedup.duplicate) {
+      logger.info({ method: dedup.method, similarity: dedup.match?.similarity, matchedMarketId: dedup.match?.marketId },
         'Market Maker Agent: duplicate market — skipping');
       return null;
     }

@@ -154,8 +154,10 @@ function escapeLookalikes(text: string, label: string): string {
  * cannot precompute the closing tag). JSON.stringify escapes quotes and line
  * breaks; look-alikes of the delimiter inside the text become `‹label`.
  */
-export function renderUntrustedBlock(signals: SanitizedSignal[], label: string): string {
-  const nonce = randomBytes(6).toString('hex');
+export function renderUntrustedBlock(signals: SanitizedSignal[], label: string, fixedNonce?: string): string {
+  // `fixedNonce` exists only so the offline evaluation (#67) can hash a prompt
+  // reproducibly; production callers always get a fresh random nonce.
+  const nonce = fixedNonce ?? randomBytes(6).toString('hex');
   const lines = signals.map((s, i) =>
     JSON.stringify({
       id: s.id ?? `${label.charAt(0)}${i + 1}`,

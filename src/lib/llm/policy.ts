@@ -10,6 +10,7 @@ const TASKS = [
   'hedge_conditions',
   'forecasting',
   'attestation',
+  'dispute_review',
   'generic_json',
   'generic_text',
 ] as const;
@@ -52,6 +53,8 @@ export const DEFAULT_POLICIES: LlmPolicies = {
   hedge_conditions: [anthropic('claude-sonnet-4-6', 0.2, 1024), gemini(0.1, 1024)],
   forecasting: [anthropic('claude-sonnet-4-6', 0.2, 2048), gemini(0.1, 2048)],
   attestation: [anthropic('claude-sonnet-4-6', 0.1, 1024), gemini(0.1, 1024)],
+  // #92: a different primary model from attestation, so one model's blind spot is not shared.
+  dispute_review: [gemini(0, 1024), anthropic('claude-sonnet-4-6', 0, 1024)],
   generic_json: [anthropic('claude-sonnet-4-6', 0.2, 2048), gemini(0.1, 2048)],
   generic_text: [anthropic('claude-sonnet-4-6', 0.4, 2048), gemini(0.3, 2048)],
 };

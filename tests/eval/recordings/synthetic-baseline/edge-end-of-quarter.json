@@ -1,0 +1,8 @@
+{
+  "caseId": "edge-end-of-quarter",
+  "kind": "proposal",
+  "promptKey": "9ff4b7dc0e6fa5b32845389bf1a6cb1367db5cd50c9eb98fbec0d22030922bd6",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"market_question\":\"Will the US unemployment rate be above 4.2% in the latest BLS release before the end of Q3 2026?\",\"initial_yes_probability\":0.4,\"resolution_oracle\":\"BLS\",\"expiry_timestamp\":1790769600,\"settlement_currency\":\"USDC\",\"minimum_liquidity_usdc\":100,\"category\":\"MACRO\",\"confidence_interval\":{\"lower\":0.3,\"upper\":0.5},\"reasoning\":\"Synthetic recording: hand-written for the evaluation corpus.\",\"grounding_signal_ids\":[\"f1\"]}"
+}

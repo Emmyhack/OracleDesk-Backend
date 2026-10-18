@@ -1,0 +1,8 @@
+{
+  "caseId": "fed-cut-2026-10",
+  "kind": "judge",
+  "promptKey": "81cbd1ab8fe386d7cc654617831110fcfc47c7fe936e9903e884148805d11545",
+  "provider": "synthetic",
+  "model": "synthetic-baseline",
+  "output": "{\"binary\":1,\"verifiable\":1,\"ambiguity_notes\":\"Synthetic judge verdict.\"}"
+}

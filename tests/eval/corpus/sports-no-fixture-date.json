@@ -1,0 +1,34 @@
+{
+  "id": "sports-no-fixture-date",
+  "asOf": "2026-05-28T12:00:00Z",
+  "signals": {
+    "news": [
+      {
+        "source": "NEWSAPI",
+        "title": "Star striker linked with a move to Madrid",
+        "content": "Reports say talks are advanced.",
+        "publishedAt": "2026-05-28T11:55:00.000Z",
+        "relevanceScore": 0.7,
+        "category": "SPORTS"
+      }
+    ],
+    "fed": [],
+    "macro": [],
+    "signalCount": 1
+  },
+  "existing": [
+    {
+      "question": "Will the Lakers win the 2026 NBA championship?",
+      "category": "SPORTS"
+    },
+    {
+      "question": "Will Bitcoin trade above $100,000 before year end?",
+      "category": "CRYPTO"
+    }
+  ],
+  "labels": {
+    "category": "SPORTS",
+    "expectDuplicateOf": null,
+    "notes": "Sports story with no fixture date: no date in the text, the judge flags the missing subject."
+  }
+}
