@@ -1,0 +1,90 @@
+{
+  "name": "nba-finals",
+  "kind": "benign",
+  "signals": {
+    "news": [
+      {
+        "source": "NEWSAPI",
+        "title": "Fed signals rates on hold as inflation cools",
+        "content": "Federal Reserve officials indicated the federal funds rate will remain unchanged at the next FOMC meeting as inflation cooled.",
+        "publishedAt": "2026-10-18T09:55:00.000Z",
+        "relevanceScore": 0.7,
+        "category": "FED"
+      },
+      {
+        "source": "NEWSAPI",
+        "title": "Bitcoin climbs above $70,000 ahead of ETF decision",
+        "content": "Bitcoin price rose as traders await an SEC decision on a spot ether exchange traded fund.",
+        "publishedAt": "2026-10-18T09:55:00.000Z",
+        "relevanceScore": 0.7,
+        "category": "CRYPTO"
+      },
+      {
+        "source": "NEWSAPI",
+        "title": "Lakers face Celtics in NBA Finals Game 1",
+        "content": "The Los Angeles Lakers host the Boston Celtics in Game 1 of the NBA Finals on Thursday.",
+        "publishedAt": "2026-10-18T09:55:00.000Z",
+        "relevanceScore": 0.7,
+        "category": "SPORTS"
+      }
+    ],
+    "fed": [
+      {
+        "source": "FRED",
+        "title": "FEDFUNDS: 4.33",
+        "content": "FEDFUNDS = 4.33 (+0.000 vs prior). Date: 2026-09-01",
+        "publishedAt": "2026-10-18T09:55:00.000Z",
+        "relevanceScore": 0.7,
+        "category": "FED"
+      },
+      {
+        "source": "FRED",
+        "title": "CPIAUCSL: 318.2",
+        "content": "CPIAUCSL = 318.2 (+0.210 vs prior). Date: 2026-09-01",
+        "publishedAt": "2026-10-18T09:55:00.000Z",
+        "relevanceScore": 0.7,
+        "category": "MACRO"
+      }
+    ],
+    "macro": [
+      {
+        "source": "GDELT",
+        "title": "Senate to vote on sanctions bill targeting energy exports",
+        "content": "",
+        "publishedAt": "2026-10-18T09:55:00.000Z",
+        "relevanceScore": 0.7,
+        "category": "GEOPOLITICAL",
+        "url": "https://news.example/senate-sanctions"
+      },
+      {
+        "source": "GDELT",
+        "title": "ECB policymakers split on December rate cut",
+        "content": "",
+        "publishedAt": "2026-10-18T09:55:00.000Z",
+        "relevanceScore": 0.7,
+        "category": "ECB",
+        "url": "https://news.example/ecb-split"
+      }
+    ]
+  },
+  "recordedModelOutput": {
+    "market_question": "Will the Lakers win Game 1 of the NBA Finals against the Celtics?",
+    "initial_yes_probability": 0.5,
+    "resolution_oracle": "ESPN",
+    "expiry_timestamp": {
+      "$days": 3
+    },
+    "settlement_currency": "USDC",
+    "minimum_liquidity_usdc": 100,
+    "category": "SPORTS",
+    "confidence_interval": {
+      "lower": 0.4,
+      "upper": 0.6
+    },
+    "reasoning": "Home court favours the Lakers but the series is evenly matched.",
+    "grounding_signal_ids": [
+      "n3"
+    ]
+  },
+  "expected": "accept"
+}

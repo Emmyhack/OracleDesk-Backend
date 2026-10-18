@@ -22,7 +22,7 @@ import { logger } from '../lib/logger';
 import { agentClients, readClients } from './stellar/clients';
 import { ChainError, contractErrorName, ArchivedEntryError } from './stellar/errors';
 import { withTimeout, TimeoutError } from '../lib/resilience';
-import type { Category, Market as OnChainMarket, Outcome, Position } from '../generated/market-core';
+import type { Category, Config as MarketCoreConfig, Market as OnChainMarket, Outcome, Position } from '../generated/market-core';
 import type { Trace } from '../generated/reasoning-registry';
 import type { DailyUsage, RiskConfig } from '../generated/treasury';
 import type { ResolutionState } from '../generated/resolver';

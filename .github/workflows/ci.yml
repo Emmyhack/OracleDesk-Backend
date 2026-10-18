@@ -59,7 +59,20 @@ jobs:
       - name: Audit database constraints
         run: npx tsx scripts/audit-constraints.ts --json audit.json
       - run: npm run build
+
+      # #64: the contracts repo's x402 service runs against backend-produced
+      # traces. Its dependencies are installed from the submodule's lockfile.
+      - name: Cache x402 dependencies
+        uses: actions/cache@v4
+        with:
+          path: contracts/oracledesk-stellar/x402/node_modules
+          key: x402-node-modules-${{ runner.os }}-${{ hashFiles('contracts/oracledesk-stellar/x402/package-lock.json') }}
+      - name: Install x402 test dependencies
+        run: npm run test:x402:prepare
+
       - run: npm test
+      - name: End-to-end x402 test
+        run: npm run test:e2e:x402
       # Integration tier (#135): real Postgres 16 + Redis 7 from the service
       # containers above. TEST_DATABASE_URL is the admin DB, used to clone a
       # migrated template database per test file.

@@ -2,7 +2,9 @@ import cron from 'node-cron';
 import { runTraderCycle } from '../agents/trader.agent';
 import { expireStaleSubscriptions } from '../services/subscription.service';
 import { logger } from '../lib/logger';
-import { newId, runWithContext } from '../lib/context';
+import { config } from '../config';
+import { postgresContentStore } from '../services/content-store.service';
+import { correlation, newId, runWithContext } from '../lib/context';
 import { purgeExpiredIdempotencyKeys } from '../middlewares/idempotency.middleware';
 import { recordCronRun } from './registry';
 
@@ -31,7 +33,7 @@ export function startMonitorCron(): void {
       return;
     }
 
-    traderRunning = true;
+    runningTraderCycleId = correlation().cycleId ?? 'trader';
     const startedAt = new Date();
     try {
       await runTraderCycle();
@@ -54,7 +56,7 @@ export function startMonitorCron(): void {
       recordCronRun('subscription-expiry', 'failure', startedAt, new Date(), err);
       logger.error({ err }, 'Monitor cron: subscription expiry failed');
     }
-  }));
+  });
 
   // Expired Idempotency-Key rows (24h TTL, #123) — hourly at :10, in batches of 5 000
   cron.schedule('10 * * * *', async () => {
@@ -67,7 +69,7 @@ export function startMonitorCron(): void {
       recordCronRun('idempotency-purge', 'failure', startedAt, new Date(), err);
       logger.error({ err }, 'Monitor cron: idempotency key purge failed');
     }
-  }));
+  });
 
   // Copy trade sweep — every 5 minutes
   cron.schedule('*/5 * * * *', () => tick('copy_trade_sweep', sweepCopyTrades));
@@ -129,8 +131,8 @@ async function sweepCopyTrades(): Promise<void> {
           if (
             isBuy &&
             marketId === ct.market.onChainMarketId &&
-            trader?.toLowerCase() === ct.followerWallet.toLowerCase() &&
-            ((ct.outcome === 'YES' && outcomeTag === 'Yes') || (ct.outcome === 'NO' && outcomeTag === 'No'))
+            trader?.toLowerCase() === (ct as any).followerWallet.toLowerCase() &&
+            (((ct as any).outcome === 'YES' && outcomeTag === 'Yes') || ((ct as any).outcome === 'NO' && outcomeTag === 'No'))
           ) {
             const collateral = BigInt(params?.collateral ?? 0);
             await prisma.copyTrade.update({
@@ -152,11 +154,11 @@ async function sweepCopyTrades(): Promise<void> {
         }
 
         // Otherwise verify via RPC
-        const outcome = ct.outcome === 'YES' ? 'Yes' : 'No';
+        const outcome = (ct as any).outcome === 'YES' ? 'Yes' : 'No';
         const maxCollateral = BigInt(ct.amountRaw ?? '0');
         const verified = await verifyCopyTradeTx({
           txHash: ct.txHash,
-          trader: ct.followerWallet,
+          trader: (ct as any).followerWallet,
           onChainMarketId: ct.market.onChainMarketId,
           outcome,
           maxCollateral,

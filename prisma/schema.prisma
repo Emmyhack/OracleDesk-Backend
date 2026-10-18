@@ -502,6 +502,88 @@ model SpendingAllowance {
   @@map("spending_allowances")
 }
 
+/// Exact bytes of IPFS documents the backend pinned or verified (#100).
+model IpfsContent {
+  cid          String    @id
+  /// sha256 hex of `bytes`; the only admission criterion.
+  sha256       String
+  size         Int
+  bytes        Bytes
+  /// PINNED | GATEWAY_VERIFIED
+  origin       String
+  /// e.g. "pin" or "reasoning_registry:trace:12".
+  verifiedBy   String?
+  createdAt    DateTime  @default(now())
+  lastAccessAt DateTime  @default(now())
+  pinnedUntil  DateTime?
+
+  @@index([sha256])
+  @@index([lastAccessAt])
+  @@map("ipfs_content")
+}
+
+/// Unsigned admin transactions prepared by the treasury operations console (#156).
+model AdminOperation {
+  id              String   @id @default(uuid())
+  kind            String
+  params          Json
+  contractId      String
+  sourceAccount   String
+  unsignedXdr     String
+  /// Hash of the prepared transaction body; signatures do not change it.
+  txHash          String   @unique
+  signedXdr       String?
+  signatures      Json     @default("[]")
+  weightCollected Int      @default(0)
+  /// PREPARED | PARTIALLY_SIGNED | READY | SUBMITTED | SUCCESS | FAILED | EXPIRED | CANCELLED
+  status          String
+  resultXdr       String?
+  ledger          Int?
+  error           Json?
+  requestedBy     String
+  expiresAt       DateTime
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([status, createdAt])
+  @@map("admin_operations")
+}
+
+/// On-chain transparency reports published by the daily job (#159).
+model TransparencyReport {
+  id             String   @id @default(uuid())
+  /// UTC day, YYYY-MM-DD.
+  date           String   @unique
+  anchorLedger   Int
+  cid            String
+  hash           String
+  onChainTraceId BigInt?
+  mode           String
+  /// exact | best_effort
+  consistency    String
+  report         Json
+  createdAt      DateTime @default(now())
+
+  @@index([anchorLedger])
+  @@map("transparency_reports")
+}
+
+/// Immutable reasoning-registry traces, cached so report counts do not walk
+/// the whole registry on every run (#159).
+model RegistryTraceCache {
+  traceId     BigInt   @id
+  agent       String
+  marketId    BigInt
+  action      String
+  traceHash   String
+  ipfsCid     String
+  publishedAt BigInt
+  fetchedAt   DateTime @default(now())
+
+  @@index([agent, action])
+  @@map("registry_trace_cache")
+}
+
 /// Runs of the reasoning trace auditor
 model TraceAuditRun {
   id            String    @id @default(uuid())
@@ -584,6 +666,8 @@ model TracePublication {
 
   @@index([status, nextAttemptAt])
   @@map("trace_publications")
+}
+
 /// Idempotency-Key records for state-changing endpoints (#123). One row per
 /// (scope, method, route, key); see src/middlewares/idempotency.middleware.ts.
 model IdempotencyKey {

@@ -134,10 +134,50 @@ const envSchema = z
     LLM_POLICY: optionalString,
     LLM_POLICY_FILE: optionalString,
 
+    // ── LLM budgets and shared guards (#71) ───────────────────────────────
+    // Counted per UTC day across all providers and instances (see
+    // src/lib/llm-budget.ts). Costs are estimates from a static price table.
+    LLM_DAILY_TOKEN_BUDGET: z.string().default('2000000').transform(Number)
+      .pipe(z.number().int().positive()),
+    LLM_DAILY_COST_BUDGET_MICROS: z.string().default('20000000').transform(Number)
+      .pipe(z.number().int().positive()),
+    // Share of the budgets held back for admin-triggered work (cron stops first).
+    LLM_ADMIN_RESERVE_PCT: z.string().default('10').transform(Number)
+      .pipe(z.number().min(0).max(100)),
+    LLM_ANTHROPIC_RPM: z.string().default('12').transform(Number)
+      .pipe(z.number().int().positive()),
+    LLM_GEMINI_RPM: z.string().default('15').transform(Number)
+      .pipe(z.number().int().positive()),
+    LLM_BREAKER_FAILURE_THRESHOLD: z.string().default('3').transform(Number)
+      .pipe(z.number().int().positive()),
+    LLM_BREAKER_OPEN_MS: z.string().default('3600000').transform(Number)
+      .pipe(z.number().int().positive()),
+    // What to do when the guard store (Redis) is unreachable: refuse LLM calls
+    // (closed, recommended in production) or use a per-process limiter (open).
+    LLM_REDIS_FAIL_MODE: z.enum(['closed', 'open']).default('closed'),
+
     // ── IPFS ──────────────────────────────────────────────────────────────
     PINATA_API_KEY: optionalString,
     PINATA_SECRET_API_KEY: optionalString,
     IPFS_GATEWAY_URL: z.string().url().default('https://gateway.pinata.cloud/ipfs'),
+    // Local verified content store (#100). Both are byte caps.
+    IPFS_CACHE_MAX_OBJECT_BYTES: z.string().default('262144').transform(Number)
+      .pipe(z.number().int().positive()),
+    IPFS_CACHE_BUDGET_BYTES: z.string().default('268435456').transform(Number)
+      .pipe(z.number().int().positive()),
+
+    // ── Transparency reports (#159) ───────────────────────────────────────
+    REPORTS_ENABLED: z.enum(['true', 'false']).default('false').transform((v) => v === 'true'),
+    REPORT_CRON: z.string().default('10 0 * * *'),
+    REPORT_MODE: z.enum(['dry-run', 'live']).default('dry-run'),
+
+    // ── Treasury admin console (#156) ─────────────────────────────────────
+    // Lifetime of a prepared unsigned transaction.
+    TREASURY_OP_TTL_SECONDS: z.string().default('3600').transform(Number)
+      .pipe(z.number().int().positive()),
+    // Optional stricter backend policy for withdraw operations.
+    TREASURY_WITHDRAW_MIN_SIGNERS: z.string().default('0').transform(Number)
+      .pipe(z.number().int().min(0).max(20)),
     // #147 — development-only local IPFS stub selected explicitly.
     IPFS_TRANSPORT: z.enum(['pinata', 'local']).default('pinata'),
     IPFS_LOCAL_DIR: z.string().default('.ipfs-local'),

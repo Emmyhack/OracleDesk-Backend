@@ -9,6 +9,7 @@ import type {
 } from './types';
 import { LlmError } from './types';
 import type { LlmPolicies } from './policy';
+import { LlmBudgetExceeded } from '../llm-budget';
 
 export interface ProviderHealth {
   state: 'healthy' | 'cooling' | 'open';
@@ -150,6 +151,8 @@ export function createRouter(
               },
             };
           } catch (err) {
+            // The budget is global: another provider would draw on the same one.
+            if (err instanceof LlmBudgetExceeded) throw err;
             const normalized = asLlmError(err, spec.provider);
             lastError = normalized;
             const failed: Attempt = {

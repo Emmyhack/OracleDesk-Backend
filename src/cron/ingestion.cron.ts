@@ -1,6 +1,7 @@
 import cron from 'node-cron';
 import { runMarketMakerCycle } from '../agents/market-maker.agent';
 import { logger } from '../lib/logger';
+import { newId, runWithContext } from '../lib/context';
 import { recordCronRun } from './registry';
 
 let runningCycleId: string | null = null;
@@ -25,17 +26,18 @@ export function startIngestionCron(): void {
         return;
       }
 
-    isRunning = true;
-    const startedAt = new Date();
-    try {
-      await runMarketMakerCycle();
-      recordCronRun('ingestion', 'success', startedAt, new Date());
-    } catch (err) {
-      recordCronRun('ingestion', 'failure', startedAt, new Date(), err);
-      logger.error({ err }, 'Ingestion cron: cycle failed');
-    } finally {
-      isRunning = false;
-    }
+      runningCycleId = cycleId;
+      const startedAt = new Date();
+      try {
+        await runMarketMakerCycle();
+        recordCronRun('ingestion', 'success', startedAt, new Date());
+      } catch (err) {
+        recordCronRun('ingestion', 'failure', startedAt, new Date(), err);
+        logger.error({ err }, 'Ingestion cron: cycle failed');
+      } finally {
+        runningCycleId = null;
+      }
+    });
   });
 
   logger.info('Ingestion cron started (every 15 minutes)');

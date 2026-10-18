@@ -63,6 +63,22 @@ If dry-run simulated (and returned the simulated result), the bindings were
 injectable, and `agentSell` existed, `src/services/chain.service.ts` here
 could become a thin wrapper around it. Its method names already match.
 
+## 6. Treasury `admin()` and `is_paused()` views
+
+The admin console has to read `DataKey::Admin` and `DataKey::Paused` from the
+treasury's contract-instance storage via `getLedgerEntries`. That is a
+storage-layout workaround that breaks if the contract's keys change. Expose
+`admin() -> Address` and `is_paused() -> bool` (or include them in
+`get_config`) so clients do not depend on instance storage internals.
+
+## 7. A dedicated `publish_report` entrypoint
+
+Transparency reports use `market_id = u64::MAX` as a documented sentinel in
+`publish_trace`, because reports are not about a single market. A
+`publish_report(agent, action, trace_hash, ipfs_cid)` entrypoint (with its own
+report counter/index) would remove the sentinel hack and let
+`market_trace_count(u64::MAX)` stay a valid market-only index.
+
 ## Note: `publish_trace` action strings differ between repos
 
 The backend publishes traces with `create_market`, `buy_yes` and `buy_no`

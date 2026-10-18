@@ -4,6 +4,7 @@ import { logger } from '../lib/logger';
 import { config } from '../config';
 import { secret } from '../config/secrets';
 import type { RawSignal, AggregatedSignals } from '../types';
+import { sanitizeSignal, type SanitizedSignal } from './llm-guard.service';
 import { bulkheads, deadline } from '../lib/resilience';
 import dayjs from 'dayjs';
 
@@ -11,16 +12,17 @@ const CACHE_TTL_MINUTES = 20; // Slightly longer than the 15-min cron interval t
 
 // ─── Cache helpers ────────────────────────────────────────────────────────────
 
-async function getCachedSignals(source: string): Promise<RawSignal[] | null> {
+async function getCachedSignals(source: string): Promise<SanitizedSignal[] | null> {
   const cached = await prisma.signalCache.findFirst({
     where:   { source, expiresAt: { gt: new Date() } },
     orderBy: { fetchedAt: 'desc' },
   });
   if (!cached) return null;
-  return cached.payload as unknown as RawSignal[];
+  // Rows cached before sanitisation existed are cleaned on the way out too.
+  return (cached.payload as unknown as RawSignal[]).map(sanitizeSignal);
 }
 
-async function cacheSignals(source: string, signals: RawSignal[]): Promise<void> {
+async function cacheSignals(source: string, signals: SanitizedSignal[]): Promise<void> {
   // Delete all expired rows for this source before inserting the fresh one
   // to prevent unbounded DB growth over time.
   await prisma.signalCache.deleteMany({
@@ -42,7 +44,7 @@ async function cacheSignals(source: string, signals: RawSignal[]): Promise<void>
  * Fetches financial, political, sports, and entertainment signals from NewsAPI.
  * Results are cached for 15 minutes (matches cron interval).
  */
-export async function fetchNewsSignals(signal?: AbortSignal): Promise<RawSignal[]> {
+export async function fetchNewsSignals(signal?: AbortSignal): Promise<SanitizedSignal[]> {
   const cached = await getCachedSignals('NEWSAPI');
   if (cached) {
     logger.debug('Using cached NewsAPI signals');
@@ -79,13 +81,15 @@ export async function fetchNewsSignals(signal?: AbortSignal): Promise<RawSignal[
         },
       );
 
-      const signals: RawSignal[] = (data.articles ?? []).map((article: any) => ({
+      // Article text is attacker-controllable: sanitise before it is cached or used.
+      const signals: SanitizedSignal[] = (data.articles ?? []).map((article: any) => sanitizeSignal({
         source:         'NEWSAPI',
         title:          article.title ?? '',
         content:        article.description ?? article.content ?? '',
         publishedAt:    article.publishedAt ?? new Date().toISOString(),
         relevanceScore: 0.7,
         category:       classifyNewsCategory(article.title ?? ''),
+        ...(typeof article.url === 'string' ? { url: article.url } : {}),
       }));
 
       await cacheSignals('NEWSAPI', signals);
@@ -106,7 +110,7 @@ export async function fetchNewsSignals(signal?: AbortSignal): Promise<RawSignal[
  * Series: FEDFUNDS, CPIAUCSL, UNRATE, T10Y2Y
  * Series are fetched concurrently through bulkheads.datasource.
  */
-export async function fetchFedData(signal?: AbortSignal): Promise<RawSignal[]> {
+export async function fetchFedData(signal?: AbortSignal): Promise<SanitizedSignal[]> {
   const cached = await getCachedSignals('FRED');
   if (cached) return cached;
 
@@ -143,10 +147,10 @@ export async function fetchFedData(signal?: AbortSignal): Promise<RawSignal[]> {
     ),
   );
 
-  const signals: RawSignal[] = [];
+  const signals: SanitizedSignal[] = [];
   for (const r of results) {
     if (r.status === 'fulfilled' && r.value) {
-      signals.push(r.value);
+      signals.push(sanitizeSignal(r.value));
     }
   }
 
@@ -159,7 +163,7 @@ export async function fetchFedData(signal?: AbortSignal): Promise<RawSignal[]> {
 
 const GDELT_TIMEOUT_MS = 8_000;
 
-export async function fetchMacroEvents(signal?: AbortSignal): Promise<RawSignal[]> {
+export async function fetchMacroEvents(signal?: AbortSignal): Promise<SanitizedSignal[]> {
   const cached = await getCachedSignals('GDELT');
   if (cached) {
     logger.debug('Using cached GDELT signals');
@@ -187,10 +191,12 @@ export async function fetchMacroEvents(signal?: AbortSignal): Promise<RawSignal[
         );
 
         const articles: any[] = data?.articles ?? [];
-        const signals: RawSignal[] = articles.map((a: any) => ({
+        // The article URL is kept in `url`, not in the text the model sees.
+        const signals: SanitizedSignal[] = articles.map((a: any) => sanitizeSignal({
           source:         'GDELT',
           title:          a.title ?? '',
-          content:        a.url ?? '',
+          content:        '',
+          url:            typeof a.url === 'string' ? a.url : undefined,
           publishedAt:    a.seendate ?? new Date().toISOString(),
           relevanceScore: 0.6,
           category:       classifyNewsCategory(a.title ?? ''),

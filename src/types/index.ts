@@ -16,6 +16,8 @@ export enum JobStatus {
 }
 
 
+import type { SanitizedSignal } from '../services/llm-guard.service';
+
 // ─── Signal types (from ingestion) ───
 export interface RawSignal {
   source: string;
@@ -34,9 +36,9 @@ export interface WeightedSignal extends Record<string, unknown> {
 }
 
 export interface AggregatedSignals {
-  news: RawSignal[];
-  fed: RawSignal[];
-  macro: RawSignal[];
+  news: SanitizedSignal[];
+  fed: SanitizedSignal[];
+  macro: SanitizedSignal[];
   aggregatedAt: Date;
   signalCount: number;
 }
@@ -52,6 +54,8 @@ export interface MarketProposal {
   category: MarketCategory;
   confidence_interval: ConfidenceInterval;
   reasoning: string;
+  /** Ids of the signals the question was grounded in (#70); not persisted. */
+  grounding_signal_ids: string[];
 }
 
 // ─── Probability types ───

@@ -1,0 +1,40 @@
+{
+  "id": "msg_01RecordedSuccess",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-sonnet-4-6",
+  "content": [
+    {
+      "type": "text",
+      "text": "I will submit the proposal now."
+    },
+    {
+      "type": "tool_use",
+      "id": "toolu_01RecordedSuccess",
+      "name": "submit_market_proposal",
+      "input": {
+        "market_question": "Will the Federal Reserve hold the federal funds rate unchanged at its next FOMC meeting?",
+        "initial_yes_probability": 0.64,
+        "resolution_oracle": "FRED",
+        "expiry_timestamp": 4102444800,
+        "settlement_currency": "USDC",
+        "minimum_liquidity_usdc": 100,
+        "category": "FED",
+        "confidence_interval": {
+          "lower": 0.54,
+          "upper": 0.74
+        },
+        "reasoning": "FEDFUNDS is flat and CPI cooled, so a hold is the modal outcome.",
+        "grounding_signal_ids": [
+          "f1"
+        ]
+      }
+    }
+  ],
+  "stop_reason": "tool_use",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 1412,
+    "output_tokens": 231
+  }
+}

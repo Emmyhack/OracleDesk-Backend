@@ -154,7 +154,7 @@ export class Bulkhead {
           if (idx !== -1) {
             this.queue.splice(idx, 1);
           }
-          reject(signal.reason instanceof AppError ? signal.reason : new ClientAbortedError());
+          reject(signal?.reason instanceof AppError ? signal.reason : new ClientAbortedError());
         };
 
         entry = { resolve, reject, signal, onAbort };

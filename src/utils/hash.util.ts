@@ -24,6 +24,55 @@ function sortKeysDeep(value: unknown): unknown {
   return value;
 }
 
+/**
+ * Thrown by {@link assertPlainJson} for values the contracts repo's
+ * `canonicalize` (agents/core/trace.ts) would encode differently from
+ * `canonicalJson`, which would make the pinned bytes fail the x402 service's
+ * on-chain hash check.
+ */
+export class NonPlainJsonError extends Error {
+  constructor(public readonly path: string, public readonly kind: string) {
+    super(`Cannot canonicalise ${kind} at ${path}: only plain JSON values may be pinned`);
+    this.name = 'NonPlainJsonError';
+  }
+}
+
+/**
+ * Rejects anything that is not a plain JSON value (null, boolean, string,
+ * number, bigint, arrays and plain objects). In particular `Date`, `Map`,
+ * `Set`, class instances and functions are refused: the backend would turn a
+ * `Date` into an ISO string while the contracts canonicaliser emits `{}`, so
+ * the two sides would hash different bytes. Format such values before they
+ * reach the document (e.g. `date.toISOString()`).
+ */
+export function assertPlainJson(value: unknown, path = '$'): void {
+  switch (typeof value) {
+    case 'string':
+    case 'boolean':
+    case 'number':
+    case 'bigint':
+    case 'undefined':
+      return;
+    case 'object': {
+      if (value === null) return;
+      if (Array.isArray(value)) {
+        value.forEach((v, i) => assertPlainJson(v, `${path}[${i}]`));
+        return;
+      }
+      const proto = Object.getPrototypeOf(value);
+      if (proto !== Object.prototype && proto !== null) {
+        throw new NonPlainJsonError(path, (value as object).constructor?.name ?? 'non-plain object');
+      }
+      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+        assertPlainJson(v, `${path}.${k}`);
+      }
+      return;
+    }
+    default:
+      throw new NonPlainJsonError(path, typeof value);
+  }
+}
+
 /** Canonical bytes for a JSON document. Hash and upload these exact bytes. */
 export function canonicalBytes(value: unknown): Buffer {
   return Buffer.from(canonicalJson(value), 'utf8');

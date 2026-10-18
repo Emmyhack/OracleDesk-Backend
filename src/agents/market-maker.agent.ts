@@ -9,6 +9,7 @@ import { createMarketOnChain } from '../services/market-chain.service';
 import { enqueueTracePublication } from '../services/trace-publish.service';
 import { TRACE_ACTIONS } from '../lib/trace-actions';
 import { writeAgentLog } from '../lib/agent-log';
+import { LlmBudgetExceeded, claimDailyOnce, getLlmUsage, type CallContext, type Priority } from '../lib/llm-budget';
 import { logger } from '../lib/logger';
 import { config } from '../config';
 import { deadline } from '../lib/resilience';
@@ -32,8 +33,18 @@ export interface MarketCycleResult {
  * Returns null when the cycle is intentionally skipped (no signals,
  * duplicate detected, etc.) — not an error condition.
  */
-export async function runMarketMakerCycle(opts?: { signal?: AbortSignal }): Promise<MarketCycleResult | null> {
+export async function runMarketMakerCycle(
+  opts?: { signal?: AbortSignal; priority?: Priority },
+): Promise<MarketCycleResult | null> {
   logger.info('Market Maker Agent: starting cycle');
+
+  // Cron work stops at the budget minus the admin reserve; admin triggers run
+  // up to the full budget (#71).
+  const priority: Priority = opts?.priority ?? 'cron';
+  const genCtx: CallContext = {
+    purpose: priority === 'admin' ? 'admin_generation' : 'market_generation',
+    priority,
+  };
 
   const parentSignal = opts?.signal
     ? opts.signal
@@ -57,8 +68,21 @@ export async function runMarketMakerCycle(opts?: { signal?: AbortSignal }): Prom
     // Step 2: Generate market proposal via the LLM
     let proposal;
     try {
-      proposal = await generateMarketQuestion(signals);
+      proposal = await generateMarketQuestion(signals, genCtx);
     } catch (err) {
+      if (err instanceof LlmBudgetExceeded) {
+        // One agent log per day, not one per 15-minute cycle.
+        if (await claimDailyOnce('budget-exceeded')) {
+          await writeAgentLog({
+            agentType: 'MARKET_MAKER',
+            level:     'WARN',
+            action:    'LLM_BUDGET_EXCEEDED',
+            data:      { priority, ...(err.details ?? {}) },
+          }).catch(() => {});
+        }
+        logger.warn({ priority }, 'Market Maker Agent: LLM budget exhausted — skipping cycle');
+        return null;
+      }
       logger.error({ err }, 'Market Maker Agent: market generation failed');
       return null;
     }
@@ -107,7 +131,7 @@ export async function runMarketMakerCycle(opts?: { signal?: AbortSignal }): Prom
       marketProbability:   0.5,
       edge:                proposal.initial_yes_probability - 0.5,
       confidenceInterval:  proposal.confidence_interval,
-    });
+    }, { purpose: priority === 'admin' ? 'admin_trace_hedge' : 'trace_hedge', priority });
 
     signal.throwIfAborted();
 
@@ -125,6 +149,9 @@ export async function runMarketMakerCycle(opts?: { signal?: AbortSignal }): Prom
     }
 
     logger.info({ marketId: market.id, traceId: trace.id }, 'Market Maker Agent: cycle complete');
+    await getLlmUsage()
+      .then((usage) => logger.info({ usage }, 'LLM usage after cycle'))
+      .catch(() => undefined);
 
     return {
       marketId: market.id,

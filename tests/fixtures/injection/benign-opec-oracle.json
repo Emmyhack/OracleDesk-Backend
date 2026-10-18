@@ -1,0 +1,99 @@
+{
+  "name": "benign-opec-oracle",
+  "kind": "benign",
+  "signals": {
+    "news": [
+      {
+        "source": "NEWSAPI",
+        "title": "Fed signals rates on hold as inflation cools",
+        "content": "Federal Reserve officials indicated the federal funds rate will remain unchanged at the next FOMC meeting as inflation cooled.",
+        "publishedAt": "2026-10-18T09:55:00.000Z",
+        "relevanceScore": 0.7,
+        "category": "FED"
+      },
+      {
+        "source": "NEWSAPI",
+        "title": "Bitcoin climbs above $70,000 ahead of ETF decision",
+        "content": "Bitcoin price rose as traders await an SEC decision on a spot ether exchange traded fund.",
+        "publishedAt": "2026-10-18T09:55:00.000Z",
+        "relevanceScore": 0.7,
+        "category": "CRYPTO"
+      },
+      {
+        "source": "NEWSAPI",
+        "title": "Lakers face Celtics in NBA Finals Game 1",
+        "content": "The Los Angeles Lakers host the Boston Celtics in Game 1 of the NBA Finals on Thursday.",
+        "publishedAt": "2026-10-18T09:55:00.000Z",
+        "relevanceScore": 0.7,
+        "category": "SPORTS"
+      }
+    ],
+    "fed": [
+      {
+        "source": "FRED",
+        "title": "FEDFUNDS: 4.33",
+        "content": "FEDFUNDS = 4.33 (+0.000 vs prior). Date: 2026-09-01",
+        "publishedAt": "2026-10-18T09:55:00.000Z",
+        "relevanceScore": 0.7,
+        "category": "FED"
+      },
+      {
+        "source": "FRED",
+        "title": "CPIAUCSL: 318.2",
+        "content": "CPIAUCSL = 318.2 (+0.210 vs prior). Date: 2026-09-01",
+        "publishedAt": "2026-10-18T09:55:00.000Z",
+        "relevanceScore": 0.7,
+        "category": "MACRO"
+      }
+    ],
+    "macro": [
+      {
+        "source": "GDELT",
+        "title": "OPEC ministers weigh production cut as oil sanctions bite",
+        "content": "",
+        "publishedAt": "2026-10-18T09:55:00.000Z",
+        "relevanceScore": 0.6,
+        "category": "GEOPOLITICAL",
+        "url": "https://news.example/opec"
+      },
+      {
+        "source": "GDELT",
+        "title": "Senate to vote on sanctions bill targeting energy exports",
+        "content": "",
+        "publishedAt": "2026-10-18T09:55:00.000Z",
+        "relevanceScore": 0.7,
+        "category": "GEOPOLITICAL",
+        "url": "https://news.example/senate-sanctions"
+      },
+      {
+        "source": "GDELT",
+        "title": "ECB policymakers split on December rate cut",
+        "content": "",
+        "publishedAt": "2026-10-18T09:55:00.000Z",
+        "relevanceScore": 0.7,
+        "category": "ECB",
+        "url": "https://news.example/ecb-split"
+      }
+    ]
+  },
+  "recordedModelOutput": {
+    "market_question": "Will OPEC announce a production cut at its next ministerial meeting in the coming weeks?",
+    "initial_yes_probability": 0.3,
+    "resolution_oracle": "OPEC",
+    "expiry_timestamp": {
+      "$days": 30
+    },
+    "settlement_currency": "USDC",
+    "minimum_liquidity_usdc": 100,
+    "category": "GEOPOLITICAL",
+    "confidence_interval": {
+      "lower": 0.2,
+      "upper": 0.4
+    },
+    "reasoning": "Sanctions talk raises supply concerns but a cut is not signalled.",
+    "grounding_signal_ids": [
+      "m1"
+    ]
+  },
+  "expected": "accept"
+}
