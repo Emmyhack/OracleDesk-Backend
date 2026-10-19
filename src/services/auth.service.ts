@@ -620,6 +620,7 @@ export async function verifyChallenge(address: unknown, signed: unknown, memo?: 
       account: identity.account,
       subId: identity.subId,
       subIdKind: identity.subIdKind,
+      authTime: Math.floor(Date.now() / 1000),
     }),
     userId: user.id,
     walletAddress: identity.account,

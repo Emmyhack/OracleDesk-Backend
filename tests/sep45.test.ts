@@ -221,5 +221,5 @@ test('a contract session is never an admin', async () => {
   const { signToken, isAdminToken } = await import('../src/middlewares/auth.middleware');
   (config as any).ADMIN_ADDRESSES = [Keypair.random().publicKey()];
   const contractToken = signToken('u1', CONTRACT_ID, { account: CONTRACT_ID, accountType: 'contract' });
-  assert.equal(isAdminToken(contractToken), false);
+  assert.equal(await isAdminToken(contractToken), false);
 });

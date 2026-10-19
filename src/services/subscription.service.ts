@@ -1,22 +1,23 @@
 import {
   PaymentEventStatus,
   PaymentEventType,
+  Prisma,
   SettlementCurrency,
   SubscriptionStatus,
   SubscriptionType,
 } from '@prisma/client';
-import type { Prisma } from '@prisma/client';
+import type { VerifiedTransfer } from './payment-verification.service';
 import { prisma } from '../lib/prisma';
 import { logger } from '../lib/logger';
 import { config } from '../config';
 import { CONTRACTS, PAYMENTS_RECIPIENT } from '../config/contracts';
-import { formatUsdc, toDisplayUsdc } from '../lib/amounts';
+import { decimalToBigint, formatUsdc, toDisplayUsdc, usdcFromNumber } from '../lib/amounts';
 import { verifyUsdcTransfer } from './payment-verification.service';
 import { AppError } from '../middlewares/error.middleware';
 import type { SubscriptionAccess } from '../types';
 import { summarizeProvenance } from '../lib/llm/provenance';
-import { withAdvisoryLockWait } from '../lib/advisory-lock';
-import dayjs from 'dayjs';
+import { withAdvisoryLocksWait } from '../lib/advisory-lock';
+import { DAY_MS, ledgerCloseDate, utcDayStart } from '../lib/time';
 import { notifyUser } from '../lib/socket-auth';
 
 /** Daily pass price in 7-decimal USDC base units (DAILY_PASS_PRICE_RAW). */
@@ -37,18 +38,34 @@ export async function checkAccess(
   userId: string,
   traceId: string,
 ): Promise<SubscriptionAccess> {
-  // Check for active daily pass (covers all traces)
+  // Check for active daily pass (covers all traces). New rows use the
+  // ledger-anchored [startsAt, endsAt) window (#54); legacy rows fall back to
+  // expiresAt after the backfill.
+  const now = new Date();
   const dailyPass = await prisma.subscription.findFirst({
     where: {
       userId,
       type:   SubscriptionType.DAILY_PASS,
       status: SubscriptionStatus.ACTIVE,
-      expiresAt: { gt: new Date() },
+      AND: [
+        { OR: [{ startsAt: { lte: now } }, { startsAt: null }] },
+        {
+          OR: [
+            { endsAt: { gt: now } },
+            { endsAt: null, expiresAt: { gt: now } },
+          ],
+        },
+      ],
     },
+    orderBy: [{ endsAt: 'desc' }],
   });
 
   if (dailyPass) {
-    return { hasAccess: true, accessType: 'DAILY_PASS', expiresAt: dailyPass.expiresAt ?? undefined };
+    return {
+      hasAccess: true,
+      accessType: 'DAILY_PASS',
+      expiresAt: dailyPass.endsAt ?? dailyPass.expiresAt ?? undefined,
+    };
   }
 
   // Check for a per-trace subscription for this trace
@@ -90,6 +107,11 @@ export function paymentClaimLockKey(txHash: string): string {
   return `payment:claim:${txHash.toLowerCase()}`;
 }
 
+/** One lock per user orders allowance and pass-stacking writes (#53/#54). */
+export function userPaymentLockKey(userId: string): string {
+  return `payment:user:${userId}`;
+}
+
 /**
  * Resolves a hash that is already recorded: its owner gets the subscription it
  * bought (idempotent success), anyone else gets 409. Never reveals whose hash
@@ -113,6 +135,224 @@ export interface ClaimResult {
   subscription: any;
   transfer: { amount: bigint; ledger: number; from: string } | null;
   replay: boolean;
+}
+
+export interface Preauthorization {
+  active: boolean;
+  allowed: boolean;
+  reason: 'ALLOWANCE_PER_TRACE_LIMIT' | 'ALLOWANCE_DAILY_LIMIT' | null;
+  dailyLimitRaw: string | null;
+  perTraceLimitRaw: string | null;
+  spentTodayRaw: string;
+  remainingRaw: string | null;
+  overageRaw: string;
+  wouldOverflowRaw: string;
+}
+
+/** Advisory-only allowance check. Never writes or reserves budget (#53). */
+export async function preauthorizeSpending(
+  userId: string,
+  type: 'PER_TRACE' | 'DAILY_PASS',
+  amountRaw: bigint,
+  now = new Date(),
+): Promise<Preauthorization> {
+  const allowance = await prisma.spendingAllowance.findUnique({ where: { userId } });
+  if (!allowance?.isActive) {
+    return {
+      active: false,
+      allowed: true,
+      reason: null,
+      dailyLimitRaw: null,
+      perTraceLimitRaw: null,
+      spentTodayRaw: '0',
+      remainingRaw: null,
+      overageRaw: '0',
+      wouldOverflowRaw: '0',
+    };
+  }
+  const dayStart = utcDayStart(now);
+  const reset = allowance.windowStartedAt < dayStart;
+  const dailyLimit = decimalToBigint(allowance.dailyLimitRaw);
+  const perTraceLimit = decimalToBigint(allowance.perTraceLimitRaw);
+  const spent = reset ? 0n : decimalToBigint(allowance.spentTodayRaw);
+  const remaining = dailyLimit > spent ? dailyLimit - spent : 0n;
+  const perTraceExceeded = type === 'PER_TRACE' && perTraceLimit > 0n && amountRaw > perTraceLimit;
+  const dailyExceeded = dailyLimit > 0n && amountRaw > remaining;
+  const reason = perTraceExceeded
+    ? 'ALLOWANCE_PER_TRACE_LIMIT'
+    : dailyExceeded
+      ? 'ALLOWANCE_DAILY_LIMIT'
+      : null;
+  return {
+    active: true,
+    allowed: reason === null,
+    reason,
+    dailyLimitRaw: dailyLimit.toString(),
+    perTraceLimitRaw: perTraceLimit.toString(),
+    spentTodayRaw: spent.toString(),
+    remainingRaw: remaining.toString(),
+    overageRaw: decimalToBigint(allowance.overageRaw).toString(),
+    wouldOverflowRaw: (amountRaw > remaining ? amountRaw - remaining : 0n).toString(),
+  };
+}
+
+/**
+ * Applies the exact amount to the raw allowance counters inside the payment
+ * transaction. Over-limit payments are accepted (the chain already moved the
+ * money) and flagged, never rejected or silently dropped (#53).
+ */
+async function applyAllowance(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  type: 'PER_TRACE' | 'DAILY_PASS',
+  amountRaw: bigint,
+  now: Date,
+): Promise<{ overageRaw: bigint; perTraceExceeded: boolean }> {
+  const allowance = await tx.spendingAllowance.findUnique({ where: { userId } });
+  if (!allowance?.isActive) return { overageRaw: 0n, perTraceExceeded: false };
+
+  const dayStart = utcDayStart(now);
+  const reset = allowance.windowStartedAt < dayStart;
+  const dailyLimit = decimalToBigint(allowance.dailyLimitRaw);
+  const perTraceLimit = decimalToBigint(allowance.perTraceLimitRaw);
+  const spent = reset ? 0n : decimalToBigint(allowance.spentTodayRaw);
+  const previousOverage = decimalToBigint(allowance.overageRaw);
+
+  let newSpent = spent;
+  let newOverage = previousOverage;
+  if (dailyLimit > 0n) {
+    const remaining = dailyLimit > spent ? dailyLimit - spent : 0n;
+    if (amountRaw > remaining) {
+      newSpent = dailyLimit;
+      newOverage += amountRaw - remaining;
+    } else {
+      newSpent = spent + amountRaw;
+    }
+  } else {
+    newSpent = spent + amountRaw;
+  }
+
+  const perTraceExceeded = type === 'PER_TRACE' && perTraceLimit > 0n && amountRaw > perTraceLimit;
+  await tx.spendingAllowance.update({
+    where: { userId },
+    data: {
+      spentTodayRaw: newSpent.toString(),
+      spentToday: toDisplayUsdc(newSpent),
+      overageRaw: newOverage.toString(),
+      ...(reset ? { windowStartedAt: dayStart, lastResetAt: now } : {}),
+    },
+  });
+  return { overageRaw: newOverage - previousOverage, perTraceExceeded };
+}
+
+export interface SettlementResult {
+  subscription: any;
+  paymentEventId: string;
+  overageRaw: bigint;
+  perTraceExceeded: boolean;
+  ledgerCloseAt: Date;
+  granted: boolean;
+}
+
+/**
+ * Creates the subscription and payment event for an already verified transfer.
+ * Callers must hold the payment and user advisory locks and have checked that
+ * the txHash is unused.
+ */
+export async function settleVerifiedTransfer(
+  tx: Prisma.TransactionClient,
+  params: {
+    userId: string;
+    traceId?: string | null;
+    type: 'PER_TRACE' | 'DAILY_PASS';
+    transfer: VerifiedTransfer;
+    paymentIntentId?: string | null;
+    now?: Date;
+  },
+): Promise<SettlementResult> {
+  const { userId, traceId, type, transfer, paymentIntentId } = params;
+  const txHash = transfer.txHash.toLowerCase();
+  const now = params.now ?? new Date();
+  const ledgerCloseAt = ledgerCloseDate(transfer.createdAt) ?? now;
+
+  let startsAt = ledgerCloseAt;
+  if (type === 'DAILY_PASS') {
+    const latest = await tx.subscription.findFirst({
+      where: {
+        userId,
+        type: SubscriptionType.DAILY_PASS,
+        status: { in: [SubscriptionStatus.ACTIVE, SubscriptionStatus.PENDING_PAYMENT] },
+        OR: [
+          { endsAt: { gt: ledgerCloseAt } },
+          { endsAt: null, expiresAt: { gt: ledgerCloseAt } },
+        ],
+      },
+      orderBy: [{ endsAt: 'desc' }],
+    });
+    const latestEnd = latest?.endsAt ?? latest?.expiresAt ?? null;
+    if (latestEnd && latestEnd > ledgerCloseAt) startsAt = latestEnd;
+  }
+  const endsAt = new Date(startsAt.getTime() + DAY_MS);
+  const granted = endsAt > now;
+  const amountRaw = transfer.amount;
+  const amount = toDisplayUsdc(amountRaw);
+  const allowance = await applyAllowance(tx, userId, type, amountRaw, now);
+
+  const created = await tx.subscription.create({
+    data: {
+      userId,
+      traceId: traceId ?? null,
+      type: type as SubscriptionType,
+      status: granted ? SubscriptionStatus.ACTIVE : SubscriptionStatus.EXPIRED,
+      amountPaid: amount,
+      currency: SettlementCurrency.USDC,
+      txHash,
+      purchaseLedger: transfer.ledger,
+      startsAt,
+      endsAt,
+      expiresAt: endsAt,
+      paymentIntentId: paymentIntentId ?? null,
+    },
+  });
+
+  const paymentEvent = await tx.paymentEvent.create({
+    data: {
+      userId,
+      traceId: traceId ?? null,
+      txHash,
+      type: type as PaymentEventType,
+      amount,
+      amountRaw: amountRaw.toString(),
+      fromAddress: transfer.from,
+      currency: SettlementCurrency.USDC,
+      status: PaymentEventStatus.CONFIRMED,
+      ledger: transfer.ledger,
+      ledgerCloseTime: ledgerCloseAt,
+      allowanceOverage: allowance.overageRaw > 0n,
+      allowanceOverageRaw: allowance.overageRaw.toString(),
+      paymentIntentId: paymentIntentId ?? null,
+      confirmedAt: now,
+      metadata: {
+        subscriptionId: created.id,
+        ledger: transfer.ledger,
+        ledgerCloseTime: ledgerCloseAt.toISOString(),
+        startsAt: startsAt.toISOString(),
+        endsAt: endsAt.toISOString(),
+        granted,
+        allowanceOverageRaw: allowance.overageRaw.toString(),
+        perTraceExceeded: allowance.perTraceExceeded,
+      } as any,
+    },
+  });
+
+  return {
+    subscription: created,
+    paymentEventId: paymentEvent.id,
+    overageRaw: allowance.overageRaw,
+    perTraceExceeded: allowance.perTraceExceeded,
+    ledgerCloseAt,
+    granted,
+  };
 }
 
 export async function recordPayment(params: {
@@ -139,24 +379,16 @@ export async function recordPayment(params: {
   const early = await existingClaimResult(prisma, txHash, userId);
   if (early) return early;
 
-  // #59: serialize every claim for this hash. Verification runs at most once
-  // at a time, racers wait and then reuse the winner's result instead of each
-  // paying for an RPC read, and the unique index remains as defence in depth.
-  // The lock is a transaction-scoped Postgres advisory lock, so it is safe
-  // across instances and is released by the server if this process dies.
+  // #59 serialises every claim for this hash. #53/#54 additionally serialise
+  // per user so allowance/stacking writes cannot interleave across hashes.
   let claim: { acquired: true; value: ClaimResult } | { acquired: false };
   try {
-    claim = await withAdvisoryLockWait<ClaimResult>(
-      paymentClaimLockKey(txHash),
+    claim = await withAdvisoryLocksWait<ClaimResult>(
+      [paymentClaimLockKey(txHash), userPaymentLockKey(userId)],
       async (tx) => {
         // A racer that waited may now see the committed winner.
         const existing = await existingClaimResult(tx, txHash, userId);
         if (existing) return { subscription: existing, transfer: null, replay: true };
-
-        // Cheap checks before the RPC call: the approval read and, as a lower
-        // bound, the price floor. The verified amount is re-checked below.
-        const allowance = await enforceSpendingAllowance(userId, type, tx);
-        allowance.evaluate(toDisplayUsdc(DAILY_PASS_PRICE_RAW));
 
         const transfer = await verifyUsdcTransfer({
           txHash,
@@ -167,59 +399,19 @@ export async function recordPayment(params: {
           subId,
           subIdKind,
         });
-        const amount = toDisplayUsdc(transfer.amount);
 
-        // The verified amount is what counts against the allowance.
-        allowance.evaluate(amount);
-
-        const expiresAt = dayjs().add(24, 'hour').toDate();
-
-        const created = await tx.subscription.create({
-          data: {
-            userId,
-            traceId:   traceId ?? null,
-            type:      type as SubscriptionType,
-            status:    SubscriptionStatus.ACTIVE,
-            amountPaid: amount,
-            currency:  SettlementCurrency.USDC,
-            txHash,
-            expiresAt,
-          },
+        const settlement = await settleVerifiedTransfer(tx, {
+          userId,
+          traceId: traceId ?? null,
+          type,
+          transfer,
         });
 
-        // Unique on txHash: a concurrent request with the same hash would fail
-        // here, but the advisory lock above already serialized them.
-        await tx.paymentEvent.create({
-          data: {
-            userId,
-            traceId:     traceId ?? null,
-            txHash,
-            type:        type as PaymentEventType,
-            amount,
-            amountRaw:   transfer.amount.toString(),
-            fromAddress: transfer.from,
-            currency:    SettlementCurrency.USDC,
-            status:      PaymentEventStatus.CONFIRMED,
-            confirmedAt: new Date(),
-            metadata:    { subscriptionId: created.id, ledger: transfer.ledger } as any,
-          },
-        });
-
-        await tx.spendingAllowance.updateMany({
-          where: { userId, isActive: true },
-          data: { spentToday: { increment: amount } },
-        });
-
-        return { subscription: created, transfer, replay: false };
+        return { subscription: settlement.subscription, transfer, replay: false };
       },
       { waitMs: CLAIM_WAIT_MS, timeoutMs: CLAIM_TX_TIMEOUT_MS },
     );
   } catch (err) {
-    // The claim transaction rolled back. Only now may the LIMIT_REACHED row be
-    // written, so a losing racer never leaves one behind.
-    if (err instanceof AllowanceLimitError) {
-      await recordLimitReached(err);
-    }
     if (isUniqueViolation(err)) {
       const winner = await existingClaimResult(prisma, txHash, userId);
       if (winner) return winner;
@@ -239,7 +431,17 @@ export async function recordPayment(params: {
   const { subscription, transfer, replay } = claim.value;
   if (replay || !transfer) return subscription;
 
-  logger.info({ subscriptionId: subscription.id, type, userId, amountRaw: transfer.amount.toString() }, 'Subscription created');
+  logger.info(
+    {
+      subscriptionId: subscription.id,
+      type,
+      userId,
+      amountRaw: transfer.amount.toString(),
+      startsAt: subscription.startsAt,
+      endsAt: subscription.endsAt,
+    },
+    'Subscription created',
+  );
   // Only after the transaction committed: a rolled-back payment must not be announced.
   // The idempotent re-submit paths above return earlier and never reach this.
   notifyUser(userId, 'PAYMENT_CONFIRMED', {
@@ -247,7 +449,7 @@ export async function recordPayment(params: {
     type,
     txHash,
     amountRaw: transfer.amount.toString(),
-    expiresAt: subscription.expiresAt,
+    expiresAt: subscription.endsAt ?? subscription.expiresAt,
   });
   return subscription;
 }
@@ -316,11 +518,14 @@ export async function getTracWithAccessControl(
  * Expires overdue subscriptions.
  * Called by a scheduled cron job.
  */
-export async function expireStaleSubscriptions(): Promise<number> {
+export async function expireStaleSubscriptions(now = new Date()): Promise<number> {
   const { count } = await prisma.subscription.updateMany({
     where: {
-      status:    'ACTIVE',
-      expiresAt: { lt: new Date() },
+      status: 'ACTIVE',
+      OR: [
+        { endsAt: { lte: now } },
+        { endsAt: null, expiresAt: { lte: now } },
+      ],
     },
     data: { status: 'EXPIRED' },
   });
@@ -340,10 +545,13 @@ export async function notifyExpiringPasses(windowMins = 60, now = new Date()): P
     where: {
       status: SubscriptionStatus.ACTIVE,
       type: SubscriptionType.DAILY_PASS,
-      expiresAt: { gt: now, lte: horizon },
       expiryNotifiedAt: null,
+      OR: [
+        { endsAt: { gt: now, lte: horizon } },
+        { endsAt: null, expiresAt: { gt: now, lte: horizon } },
+      ],
     },
-    select: { id: true, userId: true, expiresAt: true },
+    select: { id: true, userId: true, endsAt: true, expiresAt: true },
     take: 500,
   });
 
@@ -354,7 +562,8 @@ export async function notifyExpiringPasses(windowMins = 60, now = new Date()): P
       data: { expiryNotifiedAt: now },
     });
     if (claim.count !== 1) continue;
-    notifyUser(pass.userId, 'PASS_EXPIRING', { subscriptionId: pass.id, expiresAt: pass.expiresAt });
+    const expiresAt = pass.endsAt ?? pass.expiresAt;
+    notifyUser(pass.userId, 'PASS_EXPIRING', { subscriptionId: pass.id, expiresAt });
     notified++;
   }
   if (notified > 0) logger.info({ notified }, 'Notified users of expiring passes');
@@ -365,6 +574,8 @@ export async function upsertSpendingAllowance(params: {
   userId: string;
   dailyLimit: number;
   perTraceLimit: number;
+  dailyLimitRaw?: string;
+  perTraceLimitRaw?: string;
   currency?: string;
 }): Promise<any> {
   const { userId, dailyLimit, perTraceLimit, currency = 'USDC' } = params;
@@ -372,120 +583,42 @@ export async function upsertSpendingAllowance(params: {
   if (dailyLimit <= 0 || perTraceLimit <= 0 || perTraceLimit > dailyLimit) {
     throw new AppError(400, 'INVALID_ALLOWANCE', 'perTraceLimit and dailyLimit must be positive, and perTraceLimit cannot exceed dailyLimit');
   }
+  let dailyRaw = params.dailyLimitRaw ? BigInt(params.dailyLimitRaw) : usdcFromNumber(dailyLimit);
+  let perTraceRaw = params.perTraceLimitRaw ? BigInt(params.perTraceLimitRaw) : usdcFromNumber(perTraceLimit);
+  if (dailyRaw <= 0n || perTraceRaw <= 0n || perTraceRaw > dailyRaw) {
+    throw new AppError(400, 'INVALID_ALLOWANCE', 'dailyLimitRaw must be positive and at least perTraceLimitRaw');
+  }
+  if (dailyRaw > (2n ** 127n - 1n)) {
+    throw new AppError(400, 'INVALID_ALLOWANCE', 'dailyLimitRaw is too large');
+  }
 
+  const now = new Date();
   return prisma.spendingAllowance.upsert({
     where: { userId },
-    create: { userId, dailyLimit, perTraceLimit, currency: currency as 'USDC' },
-    update: { dailyLimit, perTraceLimit, currency: currency as 'USDC', isActive: true },
+    create: {
+      userId,
+      dailyLimit,
+      perTraceLimit,
+      dailyLimitRaw: dailyRaw.toString(),
+      perTraceLimitRaw: perTraceRaw.toString(),
+      spentTodayRaw: '0',
+      overageRaw: '0',
+      windowStartedAt: utcDayStart(now),
+      currency: currency as 'USDC',
+    },
+    update: {
+      dailyLimit,
+      perTraceLimit,
+      dailyLimitRaw: dailyRaw.toString(),
+      perTraceLimitRaw: perTraceRaw.toString(),
+      currency: currency as 'USDC',
+      isActive: true,
+    },
   });
 }
 
 export async function getSpendingAllowance(userId: string): Promise<any> {
   return prisma.spendingAllowance.findUnique({ where: { userId } });
-}
-
-/**
- * A refused purchase. The LIMIT_REACHED row is written by the caller after the
- * claim transaction has rolled back, so only the user who actually won the
- * claim can leave one behind (never a losing racer) and the row survives the
- * rollback that the refusal causes.
- */
-class AllowanceLimitError extends AppError {
-  constructor(
-    code: 'ALLOWANCE_PER_TRACE_LIMIT' | 'ALLOWANCE_DAILY_LIMIT',
-    message: string,
-    public readonly limitRow: {
-      userId: string;
-      type: SubscriptionType;
-      amountPaid: number;
-      currency: SettlementCurrency;
-    } | null,
-  ) {
-    super(402, code, message);
-    this.name = 'AllowanceLimitError';
-  }
-}
-
-export interface AllowanceDecision {
-  /** Throws an AllowanceLimitError when `amount` exceeds the approval. */
-  evaluate(amount: number): void;
-}
-
-/**
- * Reads the spending approval inside the claim transaction. The approval is
- * evaluated only after the on-chain amount is known, but the read itself is
- * cheap and runs before any RPC call. A daily reset is applied inside the same
- * transaction, so it commits only together with the purchase it belongs to.
- *
- * #59: this function no longer writes LIMIT_REACHED itself. The caller writes
- * that row only after winning the per-hash claim and after the transaction
- * rolls back, so concurrent losers cannot create duplicate rows.
- */
-async function enforceSpendingAllowance(
-  userId: string,
-  type: 'PER_TRACE' | 'DAILY_PASS',
-  tx: Prisma.TransactionClient,
-): Promise<AllowanceDecision> {
-  const allowance = await tx.spendingAllowance.findUnique({ where: { userId } });
-  if (!allowance?.isActive) return { evaluate: () => undefined };
-
-  const resetNeeded = dayjs(allowance.lastResetAt).isBefore(dayjs().startOf('day'));
-  const effectiveSpentToday = resetNeeded ? 0 : allowance.spentToday;
-
-  if (resetNeeded) {
-    await tx.spendingAllowance.update({
-      where: { userId },
-      data: { spentToday: 0, lastResetAt: new Date() },
-    });
-  }
-
-  const currency = (allowance.currency as SettlementCurrency) || SettlementCurrency.USDC;
-  return {
-    evaluate(amount: number): void {
-      if (type === 'PER_TRACE' && amount > allowance.perTraceLimit) {
-        throw new AllowanceLimitError(
-          'ALLOWANCE_PER_TRACE_LIMIT',
-          'Payment exceeds per-trace spending approval',
-          null,
-        );
-      }
-      if (effectiveSpentToday + amount > allowance.dailyLimit) {
-        throw new AllowanceLimitError(
-          'ALLOWANCE_DAILY_LIMIT',
-          'Payment exceeds daily spending approval',
-          { userId, type: type as SubscriptionType, amountPaid: amount, currency },
-        );
-      }
-    },
-  };
-}
-
-/**
- * Persists the LIMIT_REACHED marker for a refused purchase. The row is written
- * outside the claim transaction (so it survives the rollback that the refusal
- * causes) and deduplicated per user, amount and UTC day, so a burst of
- * concurrent refusals leaves one marker rather than one per request.
- */
-async function recordLimitReached(err: AllowanceLimitError): Promise<void> {
-  if (!err.limitRow) return;
-  try {
-    const existing = await prisma.subscription.findFirst({
-      where: {
-        userId: err.limitRow.userId,
-        status: SubscriptionStatus.LIMIT_REACHED,
-        amountPaid: err.limitRow.amountPaid,
-        createdAt: { gte: dayjs().startOf('day').toDate() },
-      },
-      select: { id: true },
-    });
-    if (existing) return;
-    await prisma.subscription.create({
-      data: { ...err.limitRow, status: SubscriptionStatus.LIMIT_REACHED, txHash: null },
-    });
-  } catch (writeErr) {
-    // Never mask the 402 the caller is about to return.
-    logger.warn({ err: writeErr, userId: err.limitRow.userId }, 'Could not record LIMIT_REACHED subscription');
-  }
 }
 
 export async function listPaymentEvents(userId: string): Promise<any[]> {

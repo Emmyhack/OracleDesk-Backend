@@ -7,6 +7,7 @@ import {
   verifyChallenge,
 } from '../services/auth.service';
 import { createContractChallenge, verifyContractChallenge } from '../services/sep45.service';
+import { signToken } from '../middlewares/auth.middleware';
 
 const challengeSchema = z.object({
   address: z.string().min(1),
@@ -61,6 +62,30 @@ export async function postVerify(req: Request, res: Response): Promise<void> {
     res,
     await verifyChallenge(parsed.data.address, parsed.data.signed, parsed.data.memo),
   );
+}
+
+/**
+ * POST /auth/refresh — issue a new access token without a new wallet proof.
+ * auth_time is copied from the current token, never reset, so a refresh cannot
+ * upgrade an old session past an admin step-up check (#49).
+ */
+export async function postRefresh(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    sendError(res, 401, 'UNAUTHORIZED', 'Authentication required');
+    return;
+  }
+  const user = req.user;
+  sendSuccess(res, {
+    token: signToken(user.userId, user.walletAddress, {
+      account: user.account,
+      subId: user.subId,
+      subIdKind: user.subIdKind,
+      accountType: user.accountType,
+      authTime: user.auth_time ?? user.iat,
+    }),
+    userId: user.userId,
+    walletAddress: user.walletAddress,
+  });
 }
 
 /** GET /auth/challenge/pow — single-use salt for the hashcash-style PoW. */
