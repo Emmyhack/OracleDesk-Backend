@@ -792,14 +792,14 @@ model PaymentEvent {
   metadata      Json?
   createdAt     DateTime           @default(now())
   confirmedAt   DateTime?
-
++  reconciled    Boolean            @default(false) // #56 reconciliation flag
+  
   user  User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   trace ReasoningTrace? @relation(fields: [traceId], references: [id], onDelete: SetNull)
   refund Refund?
 
   @@index([userId])
-  @@index([txHash])
-  @@map("payment_events")
+
 }
 
 // User-defined spending approvals for nanopayment trace access
@@ -816,6 +816,11 @@ model SpendingAllowance {
   lastResetAt   DateTime           @default(now())
   isActive      Boolean            @default(true)
 
+  // Exact‑unit raw fields (base‑unit integers stored as Decimal)
+  dailyLimitRaw    Decimal? @db.Decimal(39, 0)
+  perTraceLimitRaw Decimal? @db.Decimal(39, 0)
+  spentTodayRaw    Decimal? @db.Decimal(39, 0)
+
   createdAt     DateTime           @default(now())
   updatedAt     DateTime           @updatedAt
 
@@ -823,6 +828,18 @@ model SpendingAllowance {
 
   @@index([userId])
   @@map("spending_allowances")
+}
+
+// ─────────────────────────── PRICING SCHEDULE ───────────────────────────
+model PriceSchedule {
+  id                String   @id @default(cuid())
+  version           Int      @unique
+  dailyPassPriceRaw String   // USDC base‑unit integer stored as string
+  perTracePriceRaw  String   // USDC base‑unit integer stored as string
+  effectiveAt       DateTime // when this version becomes active
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  @@map("price_schedules")
 }
 
 /// Exact bytes of IPFS documents the backend pinned or verified (#100).
