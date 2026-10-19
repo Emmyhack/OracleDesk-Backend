@@ -12,7 +12,10 @@ declare global {
 
 export function abortMiddleware(req: Request, res: Response, next: NextFunction): void {
   const controller = new AbortController();
-  req.signal = controller.signal;
+  // Node ≥24 defines a getter-only IncomingMessage.prototype.signal, so a
+  // plain assignment throws there; an own property shadows the getter on
+  // every Node version.
+  Object.defineProperty(req, 'signal', { value: controller.signal, configurable: true, enumerable: true });
 
   let timer: NodeJS.Timeout | null = setTimeout(() => {
     timer = null;
