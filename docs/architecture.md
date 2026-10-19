@@ -96,6 +96,22 @@ To allow concurrent writes by autonomous agent workers without sequence collisio
 4. Pin the canonical question JSON; `question_hash` is the sha256 of those exact bytes and `meta_uri` is `ipfs://<cid>`.
 5. Call `treasury.agent_create_market`. In live mode the returned id becomes `onChainMarketId` and the market goes `ACTIVE`; in dry-run it stays `PENDING`.
 
+### Idempotent market creation across ambiguous outcomes (#41)
+
+Because market creation locks treasury capital (`seed_amount`), duplicate creations spend capital twice. `market-chain.service.ts` wraps creation in an idempotent protocol:
+
+1. **Question Document Hash Invariant**: The question document pinned to IPFS embeds `backendMarketId: market.id`. If a proposal already has a stored `questionHash`, re-pinning must produce the exact same sha256 hash or creation aborts (`QUESTION_HASH_MISMATCH`).
+2. **Atomic Claim & Fencing**: An attempt record is created in `market_creation_attempts` with `INSERT ... ON CONFLICT DO NOTHING` followed by `SELECT ... FOR UPDATE`. Stale or retried attempts increment the `attempts` counter with a fencing check, preventing split-brain execution across slow or resumed workers.
+3. **Discovery Before Submission**: Before calling the treasury, the backend checks if the market already exists on-chain:
+   - Queries RPC `getTransaction` if a `txHash` is stored on the attempt.
+   - Searches indexed `MarketCreated` events in `chain_events` matching `question_hash` where `creator` is the treasury contract.
+   - Executes a bounded backwards scan of on-chain markets (`marketCount` downwards up to 50 markets).
+   Every candidate is confirmed by reading `get_market` and validating that `question_hash`, `resolution_hash`, and `creator === treasury` match. If found, it links immediately without submitting.
+4. **Pre-Submission Count**: Before submitting, the current on-chain `market_count` is recorded with the attempt.
+5. **Handling Ambiguous Outcomes**: Any error after `sendTransaction` marks the attempt as `UNKNOWN`, records `txHash`, and immediately triggers discovery. A retry is permitted only when `decideExpiry` returns `EXPIRED`.
+6. **Atomic Linking**: Linking updates both `markets` (`onChainMarketId`, `status: ACTIVE`) and `market_creation_attempts` (`status: LANDED`) in one transaction. A unique constraint violation on `onChainMarketId` logs `CREATION_ID_CONFLICT` and never overwrites existing markets.
+7. **Periodic Reconciliation**: A sweep in the ingestion cron periodically inspects unresolved attempts (`UNKNOWN` or `EXPIRED`) and links any landed markets.
+
 Backend categories are mapped to the contract enum by `toContractCategory()`.
 
 ### Resolvability and the timing rule (#74)
