@@ -11,6 +11,8 @@ import { toDisplayUsdc } from '../lib/amounts';
 import { prisma } from '../lib/prisma';
 import { generateReasoningTrace } from '../services/reasoning.service';
 import { createMarketOnChain, planMarketCreation } from '../services/market-chain.service';
+import { planPriceMarket } from '../services/price-resolution.service';
+import type { ResolutionSpecJson } from '../lib/resolution-spec';
 import { enqueueTracePublication } from '../services/trace-publish.service';
 import { TRACE_ACTIONS } from '../lib/trace-actions';
 import { writeAgentLog } from '../lib/agent-log';
@@ -18,6 +20,7 @@ import { LlmBudgetExceeded, claimDailyOnce, getLlmUsage, type CallContext, type 
 import { logger } from '../lib/logger';
 import { config } from '../config';
 import { AgentPausedError, gateCycle } from '../services/agent-controls.service';
+import { TransactionError } from '../services/stellar/errors';
 import { deadline } from '../lib/resilience';
 import { shutdownController } from '../lib/shutdown';
 
@@ -119,6 +122,32 @@ export async function runMarketMakerCycle(
 
     signal.throwIfAborted();
 
+    // Step 2c: price mode (#90). A CRYPTO proposal that names a registered
+    // Reflector asset becomes a price spec, and its question is re-rendered from
+    // the structured fields so text and the committed spec agree. Any problem
+    // (parse, unregistered asset, dead feed, excess precision) falls back to the
+    // signer spec, logged as PRICE_SPEC_FALLBACK.
+    let marketSpec: ResolutionSpecJson | undefined;
+    if (
+      normalizeCategory(proposal.category) === 'CRYPTO' &&
+      proposal.price_asset && proposal.price_threshold && proposal.price_direction && proposal.price_close_timestamp
+    ) {
+      const plan = await planPriceMarket({
+        category: 'CRYPTO',
+        proposal: {
+          asset: proposal.price_asset,
+          threshold: proposal.price_threshold,
+          direction: proposal.price_direction,
+          close_timestamp: proposal.price_close_timestamp,
+        },
+        network: config.STELLAR_NETWORK_PASSPHRASE,
+      });
+      if (plan.spec && plan.question) {
+        marketSpec = plan.spec;
+        proposal = { ...proposal, market_question: plan.question };
+      }
+    }
+
     // Step 3: Deduplicate
     const dedup = await checkDuplicate(proposal);
     await writeAgentLog({
@@ -175,10 +204,13 @@ export async function runMarketMakerCycle(
     // Note: Do not abort between a chain submission and its DB write.
     let onChainMarketId: bigint | null = null;
     try {
-      const result = await createMarketOnChain(market, undefined, { seedRaw: decision.seedRaw, initialYesBps: decision.initialYesBps });
+      const result = await createMarketOnChain(market, marketSpec, { seedRaw: decision.seedRaw, initialYesBps: decision.initialYesBps });
       if (result.mode === 'live') onChainMarketId = result.value;
     } catch (err) {
-      logger.error({ err, marketId: market.id }, 'Market Maker Agent: on-chain creation failed; market stays PENDING');
+      // #40: a transient/ambiguous failure leaves the market PENDING rather than
+      // FAILED; only a permanent classification would need operator repair.
+      const failureClass = err instanceof TransactionError ? (err.details as { failureClass?: string } | undefined)?.failureClass : undefined;
+      logger.error({ err, marketId: market.id, failureClass }, 'Market Maker Agent: on-chain creation failed; market stays PENDING');
     }
 
     signal.throwIfAborted();

@@ -56,6 +56,11 @@ export interface MarketProposal {
   reasoning: string;
   /** Ids of the signals the question was grounded in (#70); not persisted. */
   grounding_signal_ids: string[];
+  /** Optional structured price fields for Reflector-priced CRYPTO markets (#90). */
+  price_asset?: string;
+  price_threshold?: string;
+  price_direction?: 'Above' | 'AtOrAbove' | 'Below' | 'AtOrBelow';
+  price_close_timestamp?: number;
 }
 
 // ─── Probability types ───

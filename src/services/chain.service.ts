@@ -17,15 +17,24 @@
  * so the two can converge (see docs/contract-requests.md).
  */
 import type { AssembledTransaction } from '@stellar/stellar-sdk/contract';
+import type { rpc } from '@stellar/stellar-sdk';
 import { config } from '../config';
 import { logger } from '../lib/logger';
-import { agentClients, readClients } from './stellar/clients';
-import { ChainError, contractErrorName, ArchivedEntryError } from './stellar/errors';
-import { withTimeout, TimeoutError } from '../lib/resilience';
+import { agentClients, agentSigner, readClients } from './stellar/clients';
+import { ChainError, TransactionError, contractErrorName, ArchivedEntryError } from './stellar/errors';
+import { SequenceLockLost, rebuildWithSequence, withSourceAccount } from './stellar/sequence';
+import {
+  ChainWriteFailure,
+  classifyFailure,
+  retryDecision,
+  type ClassifiedFailure,
+  type RetryOptions,
+} from './stellar/failures';
+import { withTimeout, TimeoutError, sleep } from '../lib/resilience';
 import type { Category, Config as MarketCoreConfig, Market as OnChainMarket, Outcome, Position } from '../generated/market-core';
 import type { Trace } from '../generated/reasoning-registry';
 import type { DailyUsage, RiskConfig } from '../generated/treasury';
-import type { ResolutionState } from '../generated/resolver';
+import type { PriceConfig, ResolutionState } from '../generated/resolver';
 import { agentScopeForTraceAction } from '../lib/trace-actions';
 import {
   AgentPausedError,
@@ -144,13 +153,41 @@ async function read<T>(
   return (await readTx<T>(contract, method, call, signal)).value;
 }
 
+const retryOptions = (): RetryOptions => ({
+  maxAttempts: config.CHAIN_RETRY_MAX_ATTEMPTS,
+  baseDelayMs: config.CHAIN_RETRY_BASE_MS,
+  maxDelayMs: config.CHAIN_RETRY_MAX_MS,
+  deadlineMs: config.CHAIN_RETRY_DEADLINE_MS,
+});
+
+/** Pull a structured send response off an SDK error, when the SDK attached one. */
+function extractSendResponse(err: unknown): rpc.Api.SendTransactionResponse | undefined {
+  const anyErr = err as {
+    status?: string;
+    sendTransactionResponse?: rpc.Api.SendTransactionResponse;
+    response?: rpc.Api.SendTransactionResponse;
+    errorResult?: unknown;
+    errorResultXdr?: string;
+  };
+  for (const candidate of [anyErr?.sendTransactionResponse, anyErr?.response]) {
+    if (candidate && typeof (candidate as { status?: unknown }).status === 'string') return candidate;
+  }
+  if (typeof anyErr?.status === 'string' && (anyErr.errorResult || anyErr.errorResultXdr)) {
+    return anyErr as unknown as rpc.Api.SendTransactionResponse;
+  }
+  return undefined;
+}
+
 /**
  * Every chain write goes through here (#79): the agent's control state is
  * checked before the transaction is built, re-checked under a share lock after
  * simulation (right before signing), and the outcome feeds the failure breaker.
+ * Live failures are classified and retried by policy (#40); dry-run never
+ * retries and never touches the network.
  */
 async function write<T>(
   scope: AgentScope,
+  contract: 'treasury' | 'reasoningRegistry' | 'resolver',
   opClass: OperationClass,
   contract: 'treasury' | 'reasoningRegistry',
   method: string,
@@ -160,6 +197,10 @@ async function write<T>(
 ): Promise<WriteResult<T>> {
   const seenVersion = await assertAgentActive(scope);
   try {
+    const result =
+      config.CHAIN_EXECUTION_MODE === 'dry-run'
+        ? await dryRunWrite<T>(scope, seenVersion, contract, method, args, call)
+        : await liveWriteWithRetry<T>(scope, seenVersion, contract, method, args, call, signal);
     const result = await submitWrite<T>(scope, seenVersion, opClass, contract, method, args, call, signal);
     await recordChainWriteOutcome(scope, true, null);
     return result;
@@ -172,9 +213,13 @@ async function write<T>(
   }
 }
 
-async function submitWrite<T>(
+async function dryRunWrite<T>(
   scope: AgentScope,
   seenVersion: number,
+  contract: ContractKey,
+  method: string,
+  args: Record<string, unknown>,
+  call: () => Promise<AssembledTransaction<unknown>>,
   opClass: OperationClass,
   contract: 'treasury' | 'reasoningRegistry',
   method: string,
@@ -198,6 +243,46 @@ async function submitWrite<T>(
       signer = channelSigner(leasedChannel.channel.keypair, agentKeypair);
     }
   }
+  const simulated = simulatedValue<T>(contract, method, tx);
+  await assertAgentActiveLocked(scope, seenVersion);
+  logger.info({ method, args: printable(args), simulated: printable(simulated) }, 'dry-run: simulated, not submitted');
+  return { mode: 'dry-run', method, value: simulated, txHash: null };
+}
+
+/** Retry loop for live writes (#40): only provably-not-applied failures retry. */
+async function liveWriteWithRetry<T>(
+  scope: AgentScope,
+  seenVersion: number,
+  contract: ContractKey,
+  method: string,
+  args: Record<string, unknown>,
+  call: () => Promise<AssembledTransaction<unknown>>,
+  signal?: AbortSignal,
+): Promise<WriteResult<T>> {
+  const opts = retryOptions();
+  const startedAt = Date.now();
+  let attempt = 0;
+  for (;;) {
+    try {
+      return await attemptWrite<T>(scope, seenVersion, contract, method, args, call, signal);
+    } catch (err) {
+      if (err instanceof AgentPausedError) throw err;
+      const failure: ClassifiedFailure =
+        err instanceof ChainWriteFailure ? err.failure : classifyFailure({ contract, err });
+      const { retry, delayMs } = retryDecision(failure, attempt, opts, Date.now() - startedAt);
+      if (!retry) {
+        throw new TransactionError(`${method} failed (${failure.class})`, failure, attempt + 1);
+      }
+      logger.warn(
+        {
+          method,
+          failureClass: failure.class,
+          txCode: failure.txCode,
+          opCode: failure.opCode,
+          attempt: attempt + 1,
+          delayMs,
+        },
+        'chain write retrying',
 
   try {
     let tx: AssembledTransaction<unknown>;
@@ -335,11 +420,9 @@ async function submitWrite<T>(
         { outcome: 'unknown', txHash },
         'CHAIN_SUBMISSION_TIMEOUT',
       );
+      await sleep(delayMs, signal);
+      attempt++;
     }
-    throw new ChainError(`${method} submission failed`, contractErrorName(contract, err), {
-      method,
-      cause: err instanceof Error ? err.message : String(err),
-    });
   }
 
   const finalHash = sendRes?.sendTransactionResponse?.hash ?? sendRes?.hash ?? txHash;
@@ -547,6 +630,94 @@ async function submitWrite<T>(
   }
 }
 
+async function attemptWrite<T>(
+  scope: AgentScope,
+  seenVersion: number,
+  contract: ContractKey,
+  method: string,
+  args: Record<string, unknown>,
+  call: () => Promise<AssembledTransaction<unknown>>,
+  signal?: AbortSignal,
+): Promise<WriteResult<T>> {
+  // Live: build, simulate, sign and send inside the per-source-account critical
+  // section so the sequence number is collision-free across writers (#36). The
+  // lock is released as soon as sendTransaction returns, not after confirmation.
+  const account = agentSigner().publicKey as string;
+  return withSourceAccount(
+    account,
+    async (ctx) => {
+      let tx: AssembledTransaction<unknown>;
+      try {
+        tx = await call();
+      } catch (err) {
+        throw new ChainError(`${method} could not be built`, contractErrorName(contract, err), {
+          method,
+          cause: err instanceof Error ? err.message : String(err),
+        });
+      }
+      const simulated = simulatedValue<T>(contract, method, tx);
+
+      // A pause that landed while the transaction was being built stops here.
+      await assertAgentActiveLocked(scope, seenVersion);
+
+      // The binding built and simulated against the RPC's account; rewrite the
+      // built transaction with the sequence allocated from the cached counter.
+      const rawTx = tx as unknown as { built?: unknown };
+      if (rawTx?.built) {
+        try {
+          rawTx.built = rebuildWithSequence(rawTx.built, ctx.account, config.STELLAR_NETWORK_PASSPHRASE);
+        } catch (err) {
+          throw new ChainError(`${method} could not apply the allocated sequence`, null, {
+            method,
+            cause: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      let txHash: string | null = null;
+      try {
+        const built = rawTx?.built as { hash?: () => Buffer } | undefined;
+        if (typeof built?.hash === 'function') txHash = built.hash().toString('hex');
+      } catch {}
+
+      try {
+        // Fence: a holder that lost its lock must never submit.
+        ctx.assertHeld();
+        const sent = await withTimeout('rpc-write', async () => tx.signAndSend(), { signal });
+        // The network accepted the envelope: reserve the sequence.
+        await ctx.advanceSequence();
+        const value = simulatedValueFromSent<T>(contract, method, sent.result);
+        const finalHash = sent.sendTransactionResponse?.hash ?? txHash;
+        logger.info({ method, txHash: finalHash }, 'submitted');
+        return { mode: 'live', method, value, txHash: finalHash };
+      } catch (err: any) {
+        if (err instanceof SequenceLockLost) {
+          // Aborted before send: safe to retry on a fresh sequence.
+          await ctx.resync().catch(() => undefined);
+          throw new ChainWriteFailure(
+            { class: 'TRANSIENT_RPC', txCode: null, opCode: null, contractError: null, txHash, submitted: false },
+            err,
+          );
+        }
+        if (err instanceof TimeoutError || err?.code === 'UPSTREAM_TIMEOUT') {
+          // The submission may have been applied: re-read and never rebuild it.
+          await ctx.resync().catch(() => undefined);
+          throw new ChainWriteFailure(
+            { class: 'UNKNOWN_OUTCOME', txCode: null, opCode: null, contractError: null, txHash, submitted: true },
+            err,
+          );
+        }
+        const failure = classifyFailure({ contract, err, send: extractSendResponse(err) });
+        if (failure.class === 'BAD_SEQUENCE' || failure.class === 'UNKNOWN_OUTCOME') {
+          await ctx.resync().catch(() => undefined);
+        }
+        throw new ChainWriteFailure({ ...failure, txHash: failure.txHash ?? txHash }, err);
+      }
+    },
+    { waitMs: config.SEQ_LOCK_WAIT_MS, signal },
+  );
+}
+
 function simulatedValueFromSent<T>(contract: ContractKey, method: string, result: unknown): T {
   if (result && typeof result === 'object' && 'isOk' in result) {
     const r = result as { isOk(): boolean; unwrap(): T };
@@ -674,6 +845,18 @@ export const agentCreateMarket = (args: CreateMarketArgs, signal?: AbortSignal) 
     agentClients.treasury(signer).agent_create_market(args, opts as any), signal,
   );
 
+export type AgentBuyArgs = { market_id: bigint; outcome: Outcome; collateral_in: bigint; min_shares_out: bigint };
+
+/**
+ * Buys through the treasury. The argument source may be a thunk so a retried
+ * attempt (#40) re-quotes `min_shares_out` against the live price instead of
+ * reusing the first attempt's stale bound.
+ */
+export const agentBuy = (args: AgentBuyArgs | (() => Promise<AgentBuyArgs>), signal?: AbortSignal) => {
+  const resolver = typeof args === 'function' ? args : async () => args;
+  return write<bigint>('TRADER', 'treasury', 'agent_buy', typeof args === 'function' ? {} : args, async () =>
+    agentClients.treasury().agent_buy(await resolver()), signal);
+};
 export const agentBuy = (args: { market_id: bigint; outcome: Outcome; collateral_in: bigint; min_shares_out: bigint }, signal?: AbortSignal) =>
   write<bigint>('TRADER', 'trade', 'treasury', 'agent_buy', args, async (opts, signer) =>
     agentClients.treasury(signer).agent_buy(args, opts as any), signal,
@@ -693,4 +876,19 @@ export const publishTrace = (args: {
 }, signal?: AbortSignal, scope: AgentScope = agentScopeForTraceAction(args.action)) =>
   write<bigint>(scope, 'trace_publish', 'reasoningRegistry', 'publish_trace', args, async (opts, signer) =>
     agentClients.reasoningRegistry(signer).publish_trace(args, opts as any), signal,
+  );
+
+// ─── Resolver writes (#90) ───────────────────────────────────────────────────
+// Both calls are permissionless; the agent only pays the fee and provides the
+// source account. Reveal commits the price spec; resolve reads the feed at
+// close_time and finalises market-core.
+
+export const registerPriceSpec = (marketId: bigint, spec: PriceConfig, signal?: AbortSignal) =>
+  write<void>('MARKET_MAKER', 'resolver', 'register_price_spec', { market_id: marketId, spec }, async () =>
+    agentClients.resolver().register_price_spec({ market_id: marketId, spec }), signal,
+  );
+
+export const resolvePrice = (marketId: bigint, signal?: AbortSignal) =>
+  write<Outcome>('MARKET_MAKER', 'resolver', 'resolve_price', { market_id: marketId }, async () =>
+    agentClients.resolver().resolve_price({ market_id: marketId }), signal,
   );

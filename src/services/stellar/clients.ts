@@ -56,6 +56,11 @@ export function agentSigner(): Signer {
 }
 
 export const agentClients = {
+  treasury: () => new TreasuryClient(baseOptions(CONTRACTS.treasury, agentSigner())),
+  reasoningRegistry: () => new ReasoningRegistryClient(baseOptions(CONTRACTS.reasoningRegistry, agentSigner())),
+  // The agent is only the fee source for the resolver: both calls are
+  // permissionless (#90).
+  resolver: () => new ResolverClient(baseOptions(CONTRACTS.resolver, agentSigner())),
   treasury: (signer: Signer = agentSigner()) => new TreasuryClient(baseOptions(CONTRACTS.treasury, signer)),
   reasoningRegistry: (signer: Signer = agentSigner()) =>
     new ReasoningRegistryClient(baseOptions(CONTRACTS.reasoningRegistry, signer)),

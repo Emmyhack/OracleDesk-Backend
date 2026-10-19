@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import Redis from 'ioredis';
 import { config } from '../config';
 import { logger } from './logger';
@@ -40,4 +41,126 @@ export async function closeRedis(): Promise<void> {
     await client.quit().catch(() => undefined);
     client = null;
   }
+}
+
+// ─── Distributed lock primitives (#36) ───────────────────────────────────────
+
+/**
+ * Extend the TTL of a held lock, but only if this call still owns it. Exposed
+ * as a constant so the in-memory test double can recognise and execute it.
+ */
+export const RENEW_LOCK_SCRIPT = `
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('PEXPIRE', KEYS[1], ARGV[2])
+else
+  return 0
+end`;
+
+/** Delete a lock, but only if this call still owns it (compare-and-delete). */
+export const RELEASE_LOCK_SCRIPT = `
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('DEL', KEYS[1])
+else
+  return 0
+end`;
+
+/**
+ * Write a cached sequence number, but only when the caller's fencing token is
+ * at least as new as the token that last wrote it. A holder that lost its lock
+ * (and therefore its token is older) can never move the sequence backwards.
+ */
+export const ADVANCE_SEQUENCE_SCRIPT = `
+local stored = redis.call('GET', KEYS[2])
+if stored and tonumber(stored) > tonumber(ARGV[2]) then
+  return 0
+end
+redis.call('SET', KEYS[1], ARGV[1])
+redis.call('SET', KEYS[2], ARGV[2])
+return 1`;
+
+export interface LockHandle {
+  /** Unpredictable owner token; the lock value. */
+  token: string;
+  /** Monotonic fencing token, ordered across all acquisitions of this lock. */
+  fence: number;
+}
+
+export interface AcquireLockDeps {
+  redis?: Redis;
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+  /** Injectable jitter source for deterministic tests. Returns [0, 1). */
+  random?: () => number;
+}
+
+const LOCK_POLL_MS = 50;
+const LOCK_POLL_JITTER_MS = 25;
+
+/**
+ * Fair, FIFO per-key lock. Waiters take a monotonic ticket from
+ * `<key>:fence`, push it onto the `<key>:queue` sorted set and only the head of
+ * that queue tries to take the lock, so a busy cron cannot starve an admin
+ * call. The lock itself is a single `SET NX PX` so a crashed holder cannot
+ * block the queue for longer than its TTL.
+ *
+ * Returns null when `waitMs` elapses without acquiring.
+ */
+export async function acquireLock(
+  key: string,
+  ttlMs: number,
+  waitMs: number,
+  deps: AcquireLockDeps = {},
+): Promise<LockHandle | null> {
+  const redis = deps.redis ?? getRedis();
+  const now = deps.now ?? Date.now;
+  const sleep = deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
+  const random = deps.random ?? Math.random;
+
+  const token = crypto.randomUUID();
+  const fence = await redis.incr(`${key}:fence`);
+  const member = `${fence}:${token}`;
+  const queueKey = `${key}:queue`;
+  await redis.zadd(queueKey, fence, member);
+  const deadline = now() + waitMs;
+
+  try {
+    for (;;) {
+      const head = await redis.zrange(queueKey, 0, 0);
+      if (head.length > 0 && head[0] === member) {
+        const acquired = await redis.set(key, token, 'PX', ttlMs, 'NX');
+        if (acquired === 'OK') {
+          await redis.zrem(queueKey, member);
+          return { token, fence };
+        }
+      }
+      if (now() >= deadline) return null;
+      await sleep(LOCK_POLL_MS + Math.floor(random() * LOCK_POLL_JITTER_MS));
+    }
+  } catch (err) {
+    await redis.zrem(queueKey, member).catch(() => undefined);
+    throw err;
+  }
+}
+
+/** Renew a held lock. False when it has already expired or been taken over. */
+export async function renewLock(key: string, token: string, ttlMs: number, redis: Redis = getRedis()): Promise<boolean> {
+  const result = await redis.eval(RENEW_LOCK_SCRIPT, 1, key, token, String(ttlMs));
+  return Number(result) === 1;
+}
+
+/** Release a held lock (no-op if it was already lost). */
+export async function releaseLock(key: string, token: string, redis: Redis = getRedis()): Promise<void> {
+  await redis.eval(RELEASE_LOCK_SCRIPT, 1, key, token);
+}
+
+/** Advance the cached sequence to `seq`, fenced by `fence`. */
+export async function advanceSequence(
+  seqKey: string,
+  fenceKey: string,
+  seq: bigint,
+  fence: number,
+  redis: Redis = getRedis(),
+): Promise<boolean> {
+  const result = await redis.eval(ADVANCE_SEQUENCE_SCRIPT, 2, seqKey, fenceKey, seq.toString(), String(fence));
+  return Number(result) === 1;
 }

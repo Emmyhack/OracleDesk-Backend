@@ -24,6 +24,41 @@ Express 5 with helmet, hpp, an env CORS allowlist, rate limits (global, `/auth/*
 
 The contracts repo's `agents/stellar/adapter.ts` covers similar ground, but its dry-run doesn't simulate and it lacks `agent_sell`, so this service mirrors its method names instead of depending on it. The intended long-term split is that the agents package owns signing and this repo stays the API, indexer and LLM pipeline (see [contract-requests.md](contract-requests.md)).
 
+### Sequence numbers (#36)
+
+Every Stellar transaction consumes one sequence number of its source account. Several paths write with the same agent account (the market-maker cron, the trader cron's fire-and-forget trace publication, and the admin `POST /markets/generate`), and every backend instance runs its own crons. Two builds that read the same RPC account produce two transactions with the same sequence and only one can land.
+
+`services/stellar/sequence.ts` serialises live writes per source account:
+
+- `withSourceAccount(account, fn)` takes a **fair** lock: waiters take a monotonic ticket from `lock:src:<net>:<account>:fence` and only the head of the `<lock>:queue` sorted set may take the lock, so one busy cron cannot starve an admin call. The lock itself is a single `SET NX PX` (`SEQ_LOCK_TTL_MS`, renewed by a heartbeat every `SEQ_LOCK_HEARTBEAT_MS`), released by a compare-and-delete Lua script, so a crashed holder cannot block the queue for longer than its TTL. A waiter that exceeds `SEQ_LOCK_WAIT_MS` fails with a retryable `SEQUENCE_LOCK_TIMEOUT` instead of hanging.
+- The **fencing token** (the ticket) is written next to the cached sequence (`seq:<net>:<account>`, `seq:<net>:<account>:fence`) by an atomic Lua script that refuses to move the sequence backwards, so a holder that lost its lock can never corrupt the counter. Before `sendTransaction`, the caller calls `ctx.assertHeld()`; a stale holder aborts without submitting.
+- The cached sequence is initialised from `rpc.getAccount` at startup and after a `txBadSeq` rejection, and advanced by exactly one only when the network **accepted** the envelope. A rejected submission never advances it. A timed-out submission re-syncs before the next build.
+- Dry-run takes no lock and never touches the sequence cache. Simulation does not consume a sequence. Redis being unavailable makes a live write fail closed (`SEQUENCE_LOCK_UNAVAILABLE`), never submit unlocked.
+- The binding clients build through `rpc.getAccount` themselves, so the allocated sequence cannot be handed to them directly. After simulation, `rebuildWithSequence` rewrites the built transaction with `TransactionBuilder.cloneFrom` (replacing the source account and re-applying the Soroban data), which is a clean seam that does not edit `src/generated`. Auth entries are unaffected because the agent uses source-account credentials.
+
+The lock covers one attempt, from sequence allocation until `sendTransaction` returns; confirmation polling happens after release, which is safe because the sequence is already reserved.
+
+### Write failure classification and retry (#40)
+
+A live write failure is classified from the actual Stellar result codes (`services/stellar/failures.ts`) into one of `TRANSIENT_RPC`, `BAD_SEQUENCE`, `INSUFFICIENT_FEE`, `EXPIRED`, `RESOURCE_OR_STATE`, `CONTRACT_ERROR`, `AUTH`, `INSUFFICIENT_BALANCE`, `UNKNOWN_OUTCOME` or `UNKNOWN`. Only the first five are retried, and only when the envelope is provably *not* applied:
+
+- `TRANSIENT_RPC` (e.g. `TRY_AGAIN_LATER`, a connection error before send) rebuilds.
+- `BAD_SEQUENCE` re-syncs the cached sequence and rebuilds.
+- `INSUFFICIENT_FEE`, `EXPIRED` and `RESOURCE_OR_STATE` rebuild, because the previous envelope was rejected, not applied.
+- `CONTRACT_ERROR`, `AUTH`, `INSUFFICIENT_BALANCE` and `UNKNOWN` are permanent and never retried.
+- `UNKNOWN_OUTCOME` (a send timeout, a `DUPLICATE`, a `NOT_FOUND` poll) is ambiguous: the transaction may have been applied. It is **never** re-submitted with a rebuilt transaction; the cached sequence is re-synced and the failure surfaces as a `TransactionError` with `submitted: true`.
+
+Backoff is jittered exponential, `min(CHAIN_RETRY_MAX_MS, CHAIN_RETRY_BASE_MS × 2^attempt) × U(0.5, 1)`, capped by `CHAIN_RETRY_MAX_ATTEMPTS` attempts and `CHAIN_RETRY_DEADLINE_MS` total. Trade execution re-quotes `min_shares_out` on each rebuild so a retry never reuses a bound a moved price has invalidated, and it marks a `PENDING` trade `FAILED` only for a permanent classification — transient or ambiguous failures stay retryable. The market-maker's on-chain creation likewise leaves a market `PENDING` rather than failed.
+
+### Fee bumps (#38)
+A transaction whose inclusion fee is below the surge price is not rebuilt: a rebuilt transaction is a new hash with a new sequence that can execute alongside the original, which would double-execute a treasury trade. Instead the stored inner envelope is wrapped unchanged in a `FeeBumpTransaction` (`services/stellar/fee-bump.ts`) paid by `FEE_PAYER_SECRET`, so at most one envelope can ever land.
+
+The outer fee is `resourceFee + inclusionPerOp × (operations + 1)` — the `+1` accounts for the fee-bump operation — where `inclusionPerOp = max(prev × FEE_BUMP_MULTIPLIER, p90 surge price, innerInclusion + 1)` and `resourceFee` is read from the inner `sorobanData.resourceFee()`. It is refused with `FEE_BUMP_CAP_EXCEEDED` above `FEE_BUMP_MAX_STROOPS`. The SDK builder only computes `baseFee × (operations + 1)`, so the total is set explicitly after asserting the builder's base-fee semantics, then the outer transaction is signed by the fee payer (the inner signatures are never touched).
+
+Both hashes are tracked: the inner `hash` is the outbox identity and dedup key, and every build appends its outer hash to `feeBumpHashes` before submission. Recovery (`services/stellar/outbox.ts`) polls `[hash, ...feeBumpHashes]`; whichever lands first resolves the row and sets `landedHash`. If the inner lands first, an outstanding bump is automatically invalid (`txFeeBumpInnerFailed`/`txBadSeq`) and its error is ignored after a re-poll. Domain rows store the landed hash in `txHash`/`creationTxHash`/`publishTxHash` and the inner hash in the matching `*InnerTxHash` column, and the indexer resolves an event's outer hash back to the inner hash through the outbox. Rows are only bumped while pending past `FEE_BUMP_AFTER_LEDGERS`, under `FEE_BUMP_MAX_ATTEMPTS`, and never within one ledger of the inner `maxTime` (a bump cannot extend timebounds). A fee bump cannot change `resourceFee`, so a resource/state failure stops bumping rather than escalating.
+
+
+
 ### Dynamic inclusion fees and resource budgets (#39)
 
 Stellar Soroban fees follow a two-part model:
@@ -113,6 +148,51 @@ Because market creation locks treasury capital (`seed_amount`), duplicate creati
 7. **Periodic Reconciliation**: A sweep in the ingestion cron periodically inspects unresolved attempts (`UNKNOWN` or `EXPIRED`) and links any landed markets.
 
 Backend categories are mapped to the contract enum by `toContractCategory()`.
+
+### Price-mode markets (#90)
+
+A `CRYPTO` proposal that names a registered asset can commit to a Reflector
+(SEP-40) price feed instead of a signer set. This needs no human: after close,
+`resolver.resolve_price` reads the feed at `close_time`, compares it to the
+threshold and finalises market-core directly.
+
+- **Feed registry**: addresses are configuration, never hard-coded. They come
+  from `REFLECTOR_FEEDS_JSON` (keyed by network passphrase → symbol → feed),
+  validated in `config/index.ts`. Every entry carries a `source` citation. An
+  empty registry disables price mode, so every CRYPTO market falls back to
+  signer mode.
+- **Structured proposals**: the generation schema carries optional
+  `price_asset`/`price_threshold`/`price_direction`/`price_close_timestamp`
+  fields. `planPriceMarket()` parses them and, on any problem (parse,
+  unregistered asset, dead feed, or more fractional digits than `decimals()`),
+  logs `PRICE_SPEC_FALLBACK` and returns null so creation keeps the signer spec.
+- **Exact threshold**: `toFixedPoint(human, decimals)` uses string arithmetic
+  (never `parseFloat`) and rejects excess precision rather than rounding, since
+  a wrongly-scaled threshold silently flips outcomes.
+- **Deterministic text**: `renderPriceQuestion()` renders the question from the
+  structured fields, and that rendering replaces the LLM text for price markets,
+  so the human question and the committed spec cannot disagree. The pinned
+  question document gains a `priceResolution` block with the raw threshold,
+  decimals and direction.
+- **Pre-creation checks**: `checkFeed()` asserts the feed supports the asset and
+  that `lastprice` exists and is younger than `maxStaleness` — a dead feed today
+  is dead at close.
+- **Reveal**: right after a live creation `register_price_spec` commits the
+  spec; `MarketAlreadyConfigured` counts as success. Failures are retried by the
+  5-minute cron, which reveals any price market the resolver still reports
+  `Unconfigured`.
+- **Resolution**: the same cron calls `resolve_price` for closed price markets.
+  `MarketNotClosed` retries (ledger time may lag). `PriceUnavailable` and
+  `StalePrice` retry with exponential backoff up to
+  `PRICE_RESOLUTION_MAX_WAIT_SECS`, then log an `ERROR`
+  `PRICE_RESOLUTION_STUCK` so a guardian can decide on `guardian_void_market`.
+  `AlreadyFinalized` ends the loop quietly. Resolution always uses the stored
+  spec, never the current registry, so changing feeds never affects existing
+  markets.
+
+`validateResolutionSpec()` requires `maxStaleness > 0` (matching the contract's
+`InvalidConfig`), and, only at reveal time, rejects a negative threshold; the
+spec-hash fixtures still hash unchanged.
 
 ### Resolvability and the timing rule (#74)
 

@@ -18,6 +18,33 @@ test('config names every missing or invalid variable', async () => {
   assert.throws(() => loadConfig({ DATABASE_URL: 'x', NODE_ENV: 'production' }), /JWT_SECRET is required in production/);
 });
 
+test('fee bump config rejects a fee payer equal to the agent and requires testnet', async () => {
+  const { loadConfig } = await import('../src/config');
+  const agent = Keypair.random().secret();
+  const payer = Keypair.random().secret();
+  assert.throws(
+    () => loadConfig({ DATABASE_URL: 'x', CHAIN_EXECUTION_MODE: 'live', AGENT_SECRET_KEY: agent, FEE_PAYER_SECRET: agent }),
+    /FEE_PAYER_SECRET must differ from AGENT_SECRET_KEY/,
+  );
+  assert.throws(
+    () => loadConfig({ DATABASE_URL: 'x', FEE_BUMP_ENABLED: 'true' }),
+    /FEE_PAYER_SECRET is required/,
+  );
+  assert.throws(
+    () =>
+      loadConfig({
+        DATABASE_URL: 'x',
+        FEE_BUMP_ENABLED: 'true',
+        FEE_PAYER_SECRET: payer,
+        STELLAR_NETWORK_PASSPHRASE: 'Public Global Stellar Network ; September 2015',
+      }),
+    /fee bumps are testnet-only/,
+  );
+  const c = loadConfig({ DATABASE_URL: 'x', FEE_BUMP_ENABLED: 'true', FEE_PAYER_SECRET: payer });
+  assert.equal(c.FEE_BUMP_ENABLED, true);
+  assert.equal(c.FEE_BUMP_MAX_ATTEMPTS, 3);
+});
+
 test('defaults to dry-run on testnet, and generates dev-only ephemeral secrets', async () => {
   const { loadConfig } = await import('../src/config');
   const c = loadConfig({ DATABASE_URL: 'x' });

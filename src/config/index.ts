@@ -52,6 +52,39 @@ const seedCategoryBase = z
     ),
   );
 
+// ── Price-mode feed registry (#90) ──────────────────────────────────────────
+// REFLECTOR_FEEDS_JSON is a JSON object keyed by network passphrase → asset
+// symbol → feed. Addresses are cited, never hard-coded. Empty disables price
+// mode (every market falls back to signer mode).
+const reflectorFeedSchema = z.object({
+  reflector: z.string().refine((v) => StrKey.isValidContract(v), 'must be a C… Stellar contract id'),
+  asset: z.union([
+    z.object({ kind: z.literal('other'), symbol: z.string().min(1) }),
+    z.object({
+      kind: z.literal('stellar'),
+      address: z
+        .string()
+        .refine((v) => StrKey.isValidEd25519PublicKey(v) || StrKey.isValidContract(v), 'must be a G… or C… address'),
+    }),
+  ]),
+  quote: z.literal('USD'),
+  maxStaleness: z.number().int().positive(),
+  source: z.string().url(),
+});
+
+const reflectorFeeds = z
+  .string()
+  .default('{}')
+  .transform((v, ctx) => {
+    try {
+      return JSON.parse(v) as unknown;
+    } catch {
+      ctx.addIssue({ code: 'custom', message: 'must be a JSON object keyed by network passphrase → symbol → feed' });
+      return z.NEVER;
+    }
+  })
+  .pipe(z.record(z.string(), z.record(z.string(), reflectorFeedSchema)));
+
 export const PROBE_NAMES = ['database', 'redis', 'rpc', 'indexer'] as const;
 
 const probeName = z
@@ -124,12 +157,47 @@ const envSchema = z
     CHAIN_EXECUTION_MODE: z.enum(['dry-run', 'live']).default('dry-run'),
     AGENT_SECRET_KEY: optionalString,
 
+    // ── Source-account sequencing (#36) ───────────────────────────────────
+    // Live writes take a fenced per-account lock in Redis before allocating a
+    // sequence number. The TTL must cover simulate + sign + sendTransaction.
+    SEQ_LOCK_TTL_MS: z.string().default('45000').transform(Number).pipe(z.number().int().min(1000)),
+    SEQ_LOCK_HEARTBEAT_MS: z.string().default('15000').transform(Number).pipe(z.number().int().min(1000)),
+    SEQ_LOCK_WAIT_MS: z.string().default('120000').transform(Number).pipe(z.number().int().min(0)),
+
+    // ── Write retry policy (#40) ──────────────────────────────────────────
+    // Live writes are retried only for classes that are provably not applied.
+    // The deadline caps total time; attempts caps rebuilds.
+    CHAIN_RETRY_MAX_ATTEMPTS: z.string().default('3').transform(Number).pipe(z.number().int().min(1)),
+    CHAIN_RETRY_BASE_MS: z.string().default('250').transform(Number).pipe(z.number().int().min(1)),
+    CHAIN_RETRY_MAX_MS: z.string().default('5000').transform(Number).pipe(z.number().int().min(1)),
+    CHAIN_RETRY_DEADLINE_MS: z.string().default('30000').transform(Number).pipe(z.number().int().min(1)),
+
+    // ── Fee bump sponsorship (#38) ────────────────────────────────────────
+    // When an outbox row stays pending past FEE_BUMP_AFTER_LEDGERS, its stored
+    // inner envelope is wrapped in a fee bump paid by FEE_PAYER_SECRET. The
+    // inclusion fee starts at the previous value × FEE_BUMP_MULTIPLIER (or the
+    // p90 surge price) and is capped by FEE_BUMP_MAX_STROOPS.
+    FEE_PAYER_SECRET: optionalString,
+    FEE_BUMP_ENABLED: z.enum(['true', 'false']).default('false').transform((v) => v === 'true'),
+    FEE_BUMP_AFTER_LEDGERS: z.string().default('3').transform(Number).pipe(z.number().int().min(1)),
+    FEE_BUMP_MULTIPLIER: z.string().default('2').transform(Number).pipe(z.number().min(1)),
+    FEE_BUMP_MAX_STROOPS: z.string().default('10000000').transform(Number).pipe(z.number().int().min(1)),
+    FEE_BUMP_MAX_ATTEMPTS: z.string().default('3').transform(Number).pipe(z.number().int().min(1)),
+
     // Resolution spec committed at market creation (ADR 0001). Signer mode:
     // RESOLUTION_SIGNERS attest the outcome on the resolver contract. Empty
     // means the agent account is the only signer.
     RESOLUTION_SIGNERS: commaList(stellarAccount),
     RESOLUTION_THRESHOLD: z.string().default('1').transform(Number),
     RESOLUTION_DISPUTE_WINDOW_SECS: z.string().default('86400').transform(Number),
+
+    // ── Price-mode markets (#90) ──────────────────────────────────────────
+    // Cited Reflector (SEP-40) feeds; see src/config/reflector-feeds.ts.
+    REFLECTOR_FEEDS_JSON: reflectorFeeds,
+    // How long resolve_price keeps retrying PriceUnavailable/StalePrice before
+    // escalating with an ERROR AgentLog for a guardian to void the market.
+    PRICE_RESOLUTION_MAX_WAIT_SECS: z.string().default('86400').transform(Number).pipe(z.number().int().min(60)),
+    PRICE_RESOLUTION_POLL_MS: z.string().default('300000').transform(Number).pipe(z.number().int().min(1000)),
 
     // Failure breaker (#79): this many chain-write failures inside the window
     // pause the writing agent until an operator resumes it.
@@ -366,6 +434,23 @@ const envSchema = z
         });
       }
     }
+    if (env.FEE_BUMP_ENABLED) {
+      if (!env.FEE_PAYER_SECRET) {
+        ctx.addIssue({ code: 'custom', path: ['FEE_PAYER_SECRET'], message: 'is required when FEE_BUMP_ENABLED=true' });
+      }
+      if (env.STELLAR_NETWORK_PASSPHRASE !== Networks.TESTNET) {
+        ctx.addIssue({ code: 'custom', path: ['FEE_PAYER_SECRET'], message: 'fee bumps are testnet-only' });
+      }
+    }
+    if (env.FEE_PAYER_SECRET) {
+      if (!StrKey.isValidEd25519SecretSeed(env.FEE_PAYER_SECRET)) {
+        ctx.addIssue({ code: 'custom', path: ['FEE_PAYER_SECRET'], message: 'must be a Stellar secret seed (S…)' });
+      }
+      if (env.FEE_PAYER_SECRET === env.AGENT_SECRET_KEY) {
+        ctx.addIssue({ code: 'custom', path: ['FEE_PAYER_SECRET'], message: 'must differ from AGENT_SECRET_KEY' });
+      }
+      if (env.FEE_PAYER_SECRET === env.AUTH_SIGNING_SECRET) {
+        ctx.addIssue({ code: 'custom', path: ['FEE_PAYER_SECRET'], message: 'must differ from AUTH_SIGNING_SECRET' });
 
     // ── Channel Accounts validation (#37) ──
     const channelKeys: string[] = [];

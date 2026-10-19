@@ -142,6 +142,15 @@ export const marketProposalWireSchema = z.object({
   reasoning: z.string().min(1),
   /** Ids of the untrusted signals the question is grounded in (#70). */
   grounding_signal_ids: z.array(z.string()).min(1).max(5),
+  /**
+   * Optional structured price fields (#90). Present only when the model chose a
+   * Reflector-priced CRYPTO market; the backend renders the question from them
+   * so text and the committed price spec cannot disagree.
+   */
+  price_asset: z.string().min(1).optional(),
+  price_threshold: z.string().regex(/^\d+(\.\d+)?$/).optional(),
+  price_direction: z.enum(['Above', 'AtOrAbove', 'Below', 'AtOrBelow']).optional(),
+  price_close_timestamp: z.number().int().positive().optional(),
 });
 
 /**

@@ -185,6 +185,9 @@ model Market {
   onChainMarketId    BigInt?            @unique
   /// CHECK: markets_creation_tx_hash_format (creationTxHash IS NULL OR 64 hex chars)
   creationTxHash     String?
+  /// CHECK: markets_creation_inner_tx_hash_format (creationInnerTxHash IS NULL OR 64 hex chars)
+  /// Inner (pre-fee-bump) hash of the creation transaction (#38).
+  creationInnerTxHash String?
   /// CHECK: markets_seed_amount_raw_digits (seedAmountRaw IS NULL OR digits only)
   /// Seed liquidity in 7-decimal USDC base units.
   seedAmountRaw      String?
@@ -254,6 +257,9 @@ model Trade {
   edgeDetected Float
   kellyFraction Float
   txHash       String?
+  /// CHECK: trades_inner_tx_hash_format (innerTxHash IS NULL OR 64 hex chars)
+  /// Inner (pre-fee-bump) hash; txHash is what appears on chain (#38).
+  innerTxHash  String?
   builderFee   Float          @default(0)
   errorMessage String?
   executedAt   DateTime?
@@ -408,6 +414,9 @@ model ReasoningTrace {
   onChainTraceId      BigInt?           @unique
   /// CHECK: reasoning_traces_publish_tx_hash_format (publishTxHash IS NULL OR 64 hex chars)
   publishTxHash       String?
+  /// CHECK: reasoning_traces_publish_inner_tx_hash_format (publishInnerTxHash IS NULL OR 64 hex chars)
+  /// Inner (pre-fee-bump) hash of the publish transaction (#38).
+  publishInnerTxHash  String?
   verified            Boolean           @default(false)
   isPublic            Boolean           @default(false)
   previewSources      Json?             // First 2 sources (free preview)
@@ -869,6 +878,40 @@ model ReconcileRun {
   @@map("reconcile_runs")
 }
 
+/// Transaction outbox: every live write persists its signed inner envelope here
+/// before submission, and a recovery worker polls and fee-bumps stuck rows
+/// (#38). The inner `hash` is the identity; fee-bump envelopes are extra.
+model ChainTransaction {
+  id String @id @default(uuid())
+  /// Domain object the write belongs to: 'trade' | 'market' | 'trace'.
+  kind   String
+  refId  String?
+  /// Inner transaction hash (hex). The outbox identity and dedup key.
+  hash   String @unique
+  /// Signed inner envelope (base64 XDR), wrapped unchanged by a fee bump.
+  envelopeXdr String
+  /// PENDING | SUBMITTED | SUCCESS | FAILED | EXPIRED
+  status      String @default('PENDING')
+  submitLedger Int?
+  /// Inner transaction maxTime (unix seconds); a bump cannot extend it.
+  maxTime      BigInt?
+  innerFee     String?
+  resourceFee  String?
+  /// Outer (fee-bump) hashes, in submission order.
+  feeBumpHashes String[] @default([])
+  /// Array of { hash, fee, xdr, at } for each bump built.
+  feeBumpEnvelopes Json?
+  /// The hash that actually executed on chain (outer when bumped).
+  landedHash   String?
+  bumpAttempts Int @default(0)
+  error        String?
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([status])
+  @@index([landedHash])
+  @@index([kind, refId])
+  @@map("chain_transactions")
 /// On-chain fees recorded per transaction (#39).
 model ChainFee {
   txHash       String   @id @map("tx_hash")
