@@ -123,6 +123,13 @@ const envSchema = z
     CHAIN_EXECUTION_MODE: z.enum(['dry-run', 'live']).default('dry-run'),
     AGENT_SECRET_KEY: optionalString,
 
+    // ── Source-account sequencing (#36) ───────────────────────────────────
+    // Live writes take a fenced per-account lock in Redis before allocating a
+    // sequence number. The TTL must cover simulate + sign + sendTransaction.
+    SEQ_LOCK_TTL_MS: z.string().default('45000').transform(Number).pipe(z.number().int().min(1000)),
+    SEQ_LOCK_HEARTBEAT_MS: z.string().default('15000').transform(Number).pipe(z.number().int().min(1000)),
+    SEQ_LOCK_WAIT_MS: z.string().default('120000').transform(Number).pipe(z.number().int().min(0)),
+
     // Resolution spec committed at market creation (ADR 0001). Signer mode:
     // RESOLUTION_SIGNERS attest the outcome on the resolver contract. Empty
     // means the agent account is the only signer.

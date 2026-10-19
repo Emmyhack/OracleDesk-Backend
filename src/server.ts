@@ -1,5 +1,6 @@
 import http from 'http';
 import { Server } from 'socket.io';
+import { Keypair } from '@stellar/stellar-sdk';
 import { createAdapter } from '@socket.io/redis-streams-adapter';
 import app from './app';
 import { config } from './config';
@@ -61,6 +62,18 @@ async function bootstrap(): Promise<void> {
     );
   }
   logger.info({ mode: config.CHAIN_EXECUTION_MODE }, 'Chain execution mode');
+
+  // Initialise the cached agent sequence before any live write can race (#36).
+  if (config.CHAIN_EXECUTION_MODE === 'live' && config.AGENT_SECRET_KEY) {
+    try {
+      const { syncSequence } = await import('./services/stellar/sequence');
+      const agent = Keypair.fromSecret(config.AGENT_SECRET_KEY).publicKey();
+      const sequence = await syncSequence(agent);
+      logger.info({ agent, sequence: sequence.toString() }, 'Agent sequence cache initialised');
+    } catch (err) {
+      logger.warn({ err: err instanceof Error ? err.message : err }, 'Could not initialise the agent sequence cache; live writes will resync on first use');
+    }
+  }
 
   // 2. Start HTTP server with Socket.io
   const server = http.createServer(app);

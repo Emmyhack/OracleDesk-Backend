@@ -24,6 +24,21 @@ Express 5 with helmet, hpp, an env CORS allowlist, rate limits (global, `/auth/*
 
 The contracts repo's `agents/stellar/adapter.ts` covers similar ground, but its dry-run doesn't simulate and it lacks `agent_sell`, so this service mirrors its method names instead of depending on it. The intended long-term split is that the agents package owns signing and this repo stays the API, indexer and LLM pipeline (see [contract-requests.md](contract-requests.md)).
 
+### Sequence numbers (#36)
+
+Every Stellar transaction consumes one sequence number of its source account. Several paths write with the same agent account (the market-maker cron, the trader cron's fire-and-forget trace publication, and the admin `POST /markets/generate`), and every backend instance runs its own crons. Two builds that read the same RPC account produce two transactions with the same sequence and only one can land.
+
+`services/stellar/sequence.ts` serialises live writes per source account:
+
+- `withSourceAccount(account, fn)` takes a **fair** lock: waiters take a monotonic ticket from `lock:src:<net>:<account>:fence` and only the head of the `<lock>:queue` sorted set may take the lock, so one busy cron cannot starve an admin call. The lock itself is a single `SET NX PX` (`SEQ_LOCK_TTL_MS`, renewed by a heartbeat every `SEQ_LOCK_HEARTBEAT_MS`), released by a compare-and-delete Lua script, so a crashed holder cannot block the queue for longer than its TTL. A waiter that exceeds `SEQ_LOCK_WAIT_MS` fails with a retryable `SEQUENCE_LOCK_TIMEOUT` instead of hanging.
+- The **fencing token** (the ticket) is written next to the cached sequence (`seq:<net>:<account>`, `seq:<net>:<account>:fence`) by an atomic Lua script that refuses to move the sequence backwards, so a holder that lost its lock can never corrupt the counter. Before `sendTransaction`, the caller calls `ctx.assertHeld()`; a stale holder aborts without submitting.
+- The cached sequence is initialised from `rpc.getAccount` at startup and after a `txBadSeq` rejection, and advanced by exactly one only when the network **accepted** the envelope. A rejected submission never advances it. A timed-out submission re-syncs before the next build.
+- Dry-run takes no lock and never touches the sequence cache. Simulation does not consume a sequence. Redis being unavailable makes a live write fail closed (`SEQUENCE_LOCK_UNAVAILABLE`), never submit unlocked.
+- The binding clients build through `rpc.getAccount` themselves, so the allocated sequence cannot be handed to them directly. After simulation, `rebuildWithSequence` rewrites the built transaction with `TransactionBuilder.cloneFrom` (replacing the source account and re-applying the Soroban data), which is a clean seam that does not edit `src/generated`. Auth entries are unaffected because the agent uses source-account credentials.
+
+The lock covers one attempt, from sequence allocation until `sendTransaction` returns; confirmation polling happens after release, which is safe because the sequence is already reserved.
+
+
 ## Market creation (ADR 0001)
 
 `market-chain.service.ts` turns a generated proposal into an on-chain market:

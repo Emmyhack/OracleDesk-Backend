@@ -19,8 +19,9 @@
 import type { AssembledTransaction } from '@stellar/stellar-sdk/contract';
 import { config } from '../config';
 import { logger } from '../lib/logger';
-import { agentClients, readClients } from './stellar/clients';
+import { agentClients, agentSigner, readClients } from './stellar/clients';
 import { ChainError, contractErrorName, ArchivedEntryError } from './stellar/errors';
+import { SequenceLockLost, rebuildWithSequence, withSourceAccount } from './stellar/sequence';
 import { withTimeout, TimeoutError } from '../lib/resilience';
 import type { Category, Config as MarketCoreConfig, Market as OnChainMarket, Outcome, Position } from '../generated/market-core';
 import type { Trace } from '../generated/reasoning-registry';
@@ -125,7 +126,7 @@ async function read<T>(
  */
 async function write<T>(
   scope: AgentScope,
-  contract: 'treasury' | 'reasoningRegistry',
+  contract: 'treasury' | 'reasoningRegistry' | 'resolver',
   method: string,
   args: Record<string, unknown>,
   call: () => Promise<AssembledTransaction<unknown>>,
@@ -148,59 +149,112 @@ async function write<T>(
 async function submitWrite<T>(
   scope: AgentScope,
   seenVersion: number,
-  contract: 'treasury' | 'reasoningRegistry',
+  contract: 'treasury' | 'reasoningRegistry' | 'resolver',
   method: string,
   args: Record<string, unknown>,
   call: () => Promise<AssembledTransaction<unknown>>,
   signal?: AbortSignal,
 ): Promise<WriteResult<T>> {
-  let tx: AssembledTransaction<unknown>;
-  try {
-    tx = await call();
-  } catch (err) {
-    throw new ChainError(`${method} could not be built`, contractErrorName(contract, err), {
-      method,
-      cause: err instanceof Error ? err.message : String(err),
-    });
-  }
-  const simulated = simulatedValue<T>(contract, method, tx);
-
-  // A pause that landed while the transaction was being built stops here.
-  await assertAgentActiveLocked(scope, seenVersion);
-
   if (config.CHAIN_EXECUTION_MODE === 'dry-run') {
+    let tx: AssembledTransaction<unknown>;
+    try {
+      tx = await call();
+    } catch (err) {
+      throw new ChainError(`${method} could not be built`, contractErrorName(contract, err), {
+        method,
+        cause: err instanceof Error ? err.message : String(err),
+      });
+    }
+    const simulated = simulatedValue<T>(contract, method, tx);
+    await assertAgentActiveLocked(scope, seenVersion);
     logger.info({ method, args: printable(args), simulated: printable(simulated) }, 'dry-run: simulated, not submitted');
     return { mode: 'dry-run', method, value: simulated, txHash: null };
   }
 
-  let txHash: string | null = null;
-  try {
-    const rawTx = tx as any;
-    if (typeof rawTx?.built?.hash === 'function') {
-      txHash = rawTx.built.hash().toString('hex');
-    }
-  } catch {}
+  // Live: build, simulate, sign and send inside the per-source-account critical
+  // section so the sequence number is collision-free across writers (#36). The
+  // lock is released as soon as sendTransaction returns, not after confirmation.
+  const account = agentSigner().publicKey as string;
+  return withSourceAccount(
+    account,
+    async (ctx) => {
+      let tx: AssembledTransaction<unknown>;
+      try {
+        tx = await call();
+      } catch (err) {
+        throw new ChainError(`${method} could not be built`, contractErrorName(contract, err), {
+          method,
+          cause: err instanceof Error ? err.message : String(err),
+        });
+      }
+      const simulated = simulatedValue<T>(contract, method, tx);
 
-  try {
-    const sent = await withTimeout('rpc-write', async () => tx.signAndSend(), { signal });
-    const value = simulatedValueFromSent<T>(contract, method, sent.result);
-    const finalHash = sent.sendTransactionResponse?.hash ?? txHash;
-    logger.info({ method, txHash: finalHash }, 'submitted');
-    return { mode: 'live', method, value, txHash: finalHash };
-  } catch (err: any) {
-    if (err instanceof TimeoutError || err?.code === 'UPSTREAM_TIMEOUT') {
-      throw new ChainError(
-        `${method} submission timed out`,
-        null,
-        { outcome: 'unknown', txHash },
-        'CHAIN_SUBMISSION_TIMEOUT',
-      );
-    }
-    throw new ChainError(`${method} submission failed`, contractErrorName(contract, err), {
-      method,
-      cause: err instanceof Error ? err.message : String(err),
-    });
-  }
+      // A pause that landed while the transaction was being built stops here.
+      await assertAgentActiveLocked(scope, seenVersion);
+
+      // The binding built and simulated against the RPC's account; rewrite the
+      // built transaction with the sequence allocated from the cached counter.
+      const rawTx = tx as unknown as { built?: unknown };
+      if (rawTx?.built) {
+        try {
+          rawTx.built = rebuildWithSequence(rawTx.built, ctx.account, config.STELLAR_NETWORK_PASSPHRASE);
+        } catch (err) {
+          throw new ChainError(`${method} could not apply the allocated sequence`, null, {
+            method,
+            cause: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      let txHash: string | null = null;
+      try {
+        const built = rawTx?.built as { hash?: () => Buffer } | undefined;
+        if (typeof built?.hash === 'function') txHash = built.hash().toString('hex');
+      } catch {}
+
+      try {
+        // Fence: a holder that lost its lock must never submit.
+        ctx.assertHeld();
+        const sent = await withTimeout('rpc-write', async () => tx.signAndSend(), { signal });
+        // The network accepted the envelope: reserve the sequence.
+        await ctx.advanceSequence();
+        const value = simulatedValueFromSent<T>(contract, method, sent.result);
+        const finalHash = sent.sendTransactionResponse?.hash ?? txHash;
+        logger.info({ method, txHash: finalHash }, 'submitted');
+        return { mode: 'live', method, value, txHash: finalHash };
+      } catch (err: any) {
+        if (err instanceof SequenceLockLost) {
+          throw new ChainError(`${method} not submitted: source-account lock was lost`, null, { account }, 'SEQUENCE_LOCK_LOST');
+        }
+        if (err instanceof TimeoutError || err?.code === 'UPSTREAM_TIMEOUT') {
+          // The submission may have been applied: re-read before the next build.
+          await ctx.resync().catch(() => undefined);
+          throw new ChainError(
+            `${method} submission timed out`,
+            null,
+            { outcome: 'unknown', txHash },
+            'CHAIN_SUBMISSION_TIMEOUT',
+          );
+        }
+        const text = err instanceof Error ? err.message : String(err);
+        const contractError = contractErrorName(contract, err);
+        if (/bad.?seq|txBadSeq/i.test(`${text} ${contractError ?? ''}`)) {
+          await ctx.resync().catch(() => undefined);
+          throw new ChainError(`${method} rejected with a bad sequence; resynced`, contractError, {
+            method,
+            retriable: true,
+            txHash,
+          }, 'BAD_SEQ_RESYNCED');
+        }
+        throw new ChainError(`${method} submission failed`, contractError, {
+          method,
+          cause: text,
+          txHash,
+        });
+      }
+    },
+    { waitMs: config.SEQ_LOCK_WAIT_MS, signal },
+  );
 }
 
 function simulatedValueFromSent<T>(contract: ContractKey, method: string, result: unknown): T {
