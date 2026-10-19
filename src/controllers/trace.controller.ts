@@ -5,12 +5,28 @@ import { sendSuccess, sendError, parsePagination, buildPaginationMeta } from '..
 import { summarizeProvenance } from '../lib/llm/provenance';
 import { verifyTraceOnChain } from '../services/trace-publish.service';
 import {
+  DAILY_PASS_PRICE_RAW,
   getTracWithAccessControl,
   getSpendingAllowance,
   listPaymentEvents,
+  preauthorizeSpending,
   recordPayment,
   upsertSpendingAllowance,
 } from '../services/subscription.service';
+import {
+  createPaymentIntent,
+  getPaymentIntent,
+  submitPaymentIntent,
+} from '../services/payment-intent.service';
+
+const preauthorizeSchema = z.object({
+  type: z.enum(['PER_TRACE', 'DAILY_PASS']).default('DAILY_PASS'),
+  amountRaw: z.string().regex(/^\d+$/, 'must be an integer in 7-decimal base units').optional(),
+});
+
+const intentSubmitSchema = z.object({
+  txHash: z.string().regex(/^[0-9a-fA-F]{64}$/, 'must be a 64-character hex transaction hash'),
+});
 
 const unlockSchema = z.object({
   txHash:    z.string().regex(/^[0-9a-fA-F]{64}$/, 'must be a 64-character hex transaction hash'),
@@ -209,4 +225,74 @@ export async function getMyPaymentEvents(req: Request, res: Response): Promise<v
 
   const payments = await listPaymentEvents(req.user.userId);
   sendSuccess(res, payments);
+}
+/**
+ * POST /traces/access/preauthorize
+ * Advisory-only check against the user's exact spending approval (#53). It
+ * never reserves budget or writes; the payment can still be accepted with an
+ * overage flag, but the client should warn before asking the wallet to sign.
+ */
+export async function preauthorizeAccess(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    sendError(res, 401, 'UNAUTHORIZED', 'Authentication required');
+    return;
+  }
+  const parsed = preauthorizeSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    sendError(res, 400, 'VALIDATION_ERROR', 'Invalid preauthorization request', parsed.error.flatten().fieldErrors as any);
+    return;
+  }
+  const amountRaw = parsed.data.amountRaw
+    ? BigInt(parsed.data.amountRaw)
+    : parsed.data.type === 'DAILY_PASS'
+      ? DAILY_PASS_PRICE_RAW
+      : null;
+  if (amountRaw == null || amountRaw <= 0n) {
+    sendError(res, 400, 'VALIDATION_ERROR', 'amountRaw is required for PER_TRACE preauthorization');
+    return;
+  }
+  const decision = await preauthorizeSpending(req.user.userId, parsed.data.type, amountRaw);
+  sendSuccess(res, { type: parsed.data.type, amountRaw: amountRaw.toString(), ...decision });
+}
+
+/** POST /traces/payment-intents — issue a server-priced daily-pass intent (#52). */
+export async function createIntent(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    sendError(res, 401, 'UNAUTHORIZED', 'Authentication required');
+    return;
+  }
+  const created = await createPaymentIntent(req.user.userId, req.user.walletAddress);
+  sendSuccess(res, created, 201);
+}
+
+/** GET /traces/payment-intents/:id — the caller's own intent. */
+export async function getIntent(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    sendError(res, 401, 'UNAUTHORIZED', 'Authentication required');
+    return;
+  }
+  sendSuccess(res, await getPaymentIntent(req.user.userId, String(req.params.id)));
+}
+
+/**
+ * POST /traces/payment-intents/:id/submit — attach a tx hash and settle or
+ * move the intent to PENDING_PAYMENT. Safe to call again.
+ */
+export async function submitIntent(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    sendError(res, 401, 'UNAUTHORIZED', 'Authentication required');
+    return;
+  }
+  const parsed = intentSubmitSchema.safeParse(req.body);
+  if (!parsed.success) {
+    sendError(res, 400, 'VALIDATION_ERROR', 'txHash is required', parsed.error.flatten().fieldErrors as any);
+    return;
+  }
+  const result = await submitPaymentIntent({
+    userId: req.user.userId,
+    walletAddress: req.user.walletAddress,
+    id: String(req.params.id),
+    txHash: parsed.data.txHash,
+  });
+  sendSuccess(res, result, result.status === 'CONFIRMED' ? 201 : 202);
 }

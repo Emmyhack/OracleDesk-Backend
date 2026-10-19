@@ -651,8 +651,70 @@ Errors: `400 VALIDATION_ERROR`, `402 PAYMENT_NOT_FOUND`,
 
 #### `GET /traces/access/allowance`, `PUT /traces/access/allowance` (auth)
 
-Unchanged. `PUT` body `{ dailyLimit: number, perTraceLimit: number, currency?: "USDC" }`
-(display USDC). Response: `SpendingAllowance | null`.
+`PUT` body `{ dailyLimit: number, perTraceLimit: number, dailyLimitRaw?: "base units", perTraceLimitRaw?: "base units", currency?: "USDC" }`.
+The float fields are display mirrors; enforcement uses the raw `NUMERIC(39,0)`
+columns (#53). Response: `SpendingAllowance | null`.
+
+#### `POST /traces/access/preauthorize` (auth)
+
+Advisory-only allowance check (#53). Body
+`{ type?: "DAILY_PASS" | "PER_TRACE", amountRaw?: "base units" }`; for
+`DAILY_PASS` the price defaults to `DAILY_PASS_PRICE_RAW` and for `PER_TRACE`
+`amountRaw` is required. It never writes or reserves budget. Response:
+
+```json
+{
+  "type": "DAILY_PASS",
+  "amountRaw": "5000000",
+  "active": true,
+  "allowed": false,
+  "reason": "ALLOWANCE_DAILY_LIMIT",
+  "dailyLimitRaw": "5000000",
+  "perTraceLimitRaw": "5000000",
+  "spentTodayRaw": "4000000",
+  "remainingRaw": "1000000",
+  "overageRaw": "0",
+  "wouldOverflowRaw": "4000000"
+}
+```
+
+An over-limit payment is still accepted on-chain and flagged
+(`allowanceOverage` on the `PaymentEvent`, `overageRaw` on the allowance); it is
+never refused and never silently dropped.
+
+#### `POST /traces/payment-intents` (auth)
+
+Issues a server-priced `DAILY_PASS` intent (#52): the server fixes `amountRaw`,
+`recipient`, `token`, a unique `memo`, and `expiresAt`. Clients should pay that
+exact transfer and then `POST` the hash. Response `201`:
+`{ intent, allowance }` where `allowance` is the preauthorization above.
+Errors: `429 TOO_MANY_PAYMENT_INTENTS`.
+
+#### `GET /traces/payment-intents/:id` (auth)
+
+The caller's own intent. Errors: `404 PAYMENT_INTENT_NOT_FOUND`.
+
+#### `POST /traces/payment-intents/:id/submit` (auth)
+
+Body `{ txHash: "64-hex" }`. Verifies the transfer's sender, recipient, token,
+memo and amount. A transaction not yet visible moves the intent to
+`PENDING_PAYMENT` and a background confirmer retries with backoff; a confirmed
+payment returns `201` with the intent `CONFIRMED` and its `subscriptionId`.
+Response `202` when still pending. Underpayments and payments whose ledger
+close time is after `expiresAt` are recorded as `PaymentEvent`s with no
+coverage and the intent becomes `REFUND_REQUIRED`. Errors:
+`400 VALIDATION_ERROR`, `409 PAYMENT_ALREADY_USED`,
+`409 PAYMENT_INTENT_CLOSED`, `409 PAYMENT_INTENT_TX_MISMATCH`,
+`409 PAYMENT_CLAIM_IN_PROGRESS`, `402 PAYMENT_MEMO_MISMATCH`.
+
+#### Pass windows and stacking (#54)
+
+New subscriptions store `startsAt`, `endsAt`, `purchaseLedger` and keep
+`expiresAt = endsAt`. Coverage is `[startsAt, endsAt)` anchored to the payment
+transaction's ledger close time. A second pass stacks: it starts at the later
+of the ledger close time and the last active/queued pass's `endsAt`. A payment
+whose computed window is already in the past is recorded but grants no
+coverage (`EXPIRED`).
 
 #### `GET /traces/payments` (auth)
 
