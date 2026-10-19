@@ -1,7 +1,7 @@
 import cron from 'node-cron';
 import { runTraderCycle } from '../agents/trader.agent';
 import { computeCorrelationSnapshot } from '../services/correlation.service';
-import { expireStaleSubscriptions } from '../services/subscription.service';
+import { expireStaleSubscriptions, notifyExpiringPasses } from '../services/subscription.service';
 import { logger } from '../lib/logger';
 import { config } from '../config';
 import { postgresContentStore } from '../services/content-store.service';

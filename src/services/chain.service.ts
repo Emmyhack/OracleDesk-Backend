@@ -62,7 +62,7 @@ import {
   type Signer,
 } from './stellar/channels';
 
-export { ExpiredError };
+export { ExpiredError, ArchivedEntryError };
 
 type ContractKey = 'marketCore' | 'treasury' | 'resolver' | 'reasoningRegistry';
 
@@ -182,26 +182,30 @@ function extractSendResponse(err: unknown): rpc.Api.SendTransactionResponse | un
  * Every chain write goes through here (#79): the agent's control state is
  * checked before the transaction is built, re-checked under a share lock after
  * simulation (right before signing), and the outcome feeds the failure breaker.
- * Live failures are classified and retried by policy (#40); dry-run never
- * retries and never touches the network.
+ *
+ * Routing:
+ * - dry-run, and live writes through a leased channel account (#37), go
+ *   through `submitWrite`: fee from the oracle (#39), explicit timebounds and
+ *   expiry tracking (#42).
+ * - live writes from the agent account go through the sequence-locked
+ *   attempt (#36) with classified retries (#40), using the same fee and
+ *   timeout choice.
  */
 async function write<T>(
   scope: AgentScope,
-  contract: 'treasury' | 'reasoningRegistry' | 'resolver',
   opClass: OperationClass,
-  contract: 'treasury' | 'reasoningRegistry',
+  contract: WriteContract,
   method: string,
   args: Record<string, unknown>,
-  call: (options?: { fee?: bigint; timeoutInSeconds?: number }, signer?: Signer) => Promise<AssembledTransaction<unknown>>,
+  call: WriteCall,
   signal?: AbortSignal,
 ): Promise<WriteResult<T>> {
   const seenVersion = await assertAgentActive(scope);
   try {
-    const result =
-      config.CHAIN_EXECUTION_MODE === 'dry-run'
-        ? await dryRunWrite<T>(scope, seenVersion, contract, method, args, call)
-        : await liveWriteWithRetry<T>(scope, seenVersion, contract, method, args, call, signal);
-    const result = await submitWrite<T>(scope, seenVersion, opClass, contract, method, args, call, signal);
+    const viaAgentAccount = config.CHAIN_EXECUTION_MODE === 'live' && getChannelPool().size === 0;
+    const result = viaAgentAccount
+      ? await liveWriteWithRetry<T>(scope, seenVersion, opClass, contract, method, args, call, signal)
+      : await submitWrite<T>(scope, seenVersion, opClass, contract, method, args, call, signal);
     await recordChainWriteOutcome(scope, true, null);
     return result;
   } catch (err) {
@@ -213,18 +217,17 @@ async function write<T>(
   }
 }
 
-async function dryRunWrite<T>(
+type WriteContract = 'treasury' | 'reasoningRegistry' | 'resolver';
+type WriteCall = (options?: { fee?: bigint; timeoutInSeconds?: number }, signer?: Signer) => Promise<AssembledTransaction<unknown>>;
+
+async function submitWrite<T>(
   scope: AgentScope,
   seenVersion: number,
-  contract: ContractKey,
-  method: string,
-  args: Record<string, unknown>,
-  call: () => Promise<AssembledTransaction<unknown>>,
   opClass: OperationClass,
-  contract: 'treasury' | 'reasoningRegistry',
+  contract: WriteContract,
   method: string,
   args: Record<string, unknown>,
-  call: (options?: { fee?: bigint; timeoutInSeconds?: number }, signer?: Signer) => Promise<AssembledTransaction<unknown>>,
+  call: WriteCall,
   signal?: AbortSignal,
 ): Promise<WriteResult<T>> {
   const oracle = getFeeOracle();
@@ -243,46 +246,6 @@ async function dryRunWrite<T>(
       signer = channelSigner(leasedChannel.channel.keypair, agentKeypair);
     }
   }
-  const simulated = simulatedValue<T>(contract, method, tx);
-  await assertAgentActiveLocked(scope, seenVersion);
-  logger.info({ method, args: printable(args), simulated: printable(simulated) }, 'dry-run: simulated, not submitted');
-  return { mode: 'dry-run', method, value: simulated, txHash: null };
-}
-
-/** Retry loop for live writes (#40): only provably-not-applied failures retry. */
-async function liveWriteWithRetry<T>(
-  scope: AgentScope,
-  seenVersion: number,
-  contract: ContractKey,
-  method: string,
-  args: Record<string, unknown>,
-  call: () => Promise<AssembledTransaction<unknown>>,
-  signal?: AbortSignal,
-): Promise<WriteResult<T>> {
-  const opts = retryOptions();
-  const startedAt = Date.now();
-  let attempt = 0;
-  for (;;) {
-    try {
-      return await attemptWrite<T>(scope, seenVersion, contract, method, args, call, signal);
-    } catch (err) {
-      if (err instanceof AgentPausedError) throw err;
-      const failure: ClassifiedFailure =
-        err instanceof ChainWriteFailure ? err.failure : classifyFailure({ contract, err });
-      const { retry, delayMs } = retryDecision(failure, attempt, opts, Date.now() - startedAt);
-      if (!retry) {
-        throw new TransactionError(`${method} failed (${failure.class})`, failure, attempt + 1);
-      }
-      logger.warn(
-        {
-          method,
-          failureClass: failure.class,
-          txCode: failure.txCode,
-          opCode: failure.opCode,
-          attempt: attempt + 1,
-          delayMs,
-        },
-        'chain write retrying',
 
   try {
     let tx: AssembledTransaction<unknown>;
@@ -420,9 +383,11 @@ async function liveWriteWithRetry<T>(
         { outcome: 'unknown', txHash },
         'CHAIN_SUBMISSION_TIMEOUT',
       );
-      await sleep(delayMs, signal);
-      attempt++;
     }
+    throw new ChainError(`${method} submission failed`, contractErrorName(contract, err), {
+      method,
+      cause: err instanceof Error ? err.message : String(err),
+    });
   }
 
   const finalHash = sendRes?.sendTransactionResponse?.hash ?? sendRes?.hash ?? txHash;
@@ -630,13 +595,56 @@ async function liveWriteWithRetry<T>(
   }
 }
 
+/** Retry loop for live writes (#40): only provably-not-applied failures retry. */
+async function liveWriteWithRetry<T>(
+  scope: AgentScope,
+  seenVersion: number,
+  opClass: OperationClass,
+  contract: WriteContract,
+  method: string,
+  args: Record<string, unknown>,
+  call: WriteCall,
+  signal?: AbortSignal,
+): Promise<WriteResult<T>> {
+  const opts = retryOptions();
+  const startedAt = Date.now();
+  let attempt = 0;
+  for (;;) {
+    try {
+      return await attemptWrite<T>(scope, seenVersion, opClass, contract, method, args, call, signal);
+    } catch (err) {
+      if (err instanceof AgentPausedError) throw err;
+      const failure: ClassifiedFailure =
+        err instanceof ChainWriteFailure ? err.failure : classifyFailure({ contract, err });
+      const { retry, delayMs } = retryDecision(failure, attempt, opts, Date.now() - startedAt);
+      if (!retry) {
+        throw new TransactionError(`${method} failed (${failure.class})`, failure, attempt + 1);
+      }
+      logger.warn(
+        {
+          method,
+          failureClass: failure.class,
+          txCode: failure.txCode,
+          opCode: failure.opCode,
+          attempt: attempt + 1,
+          delayMs,
+        },
+        'chain write retrying',
+      );
+      await sleep(delayMs, signal);
+      attempt++;
+    }
+  }
+}
+
 async function attemptWrite<T>(
   scope: AgentScope,
   seenVersion: number,
-  contract: ContractKey,
+  opClass: OperationClass,
+  contract: WriteContract,
   method: string,
   args: Record<string, unknown>,
-  call: () => Promise<AssembledTransaction<unknown>>,
+  call: WriteCall,
   signal?: AbortSignal,
 ): Promise<WriteResult<T>> {
   // Live: build, simulate, sign and send inside the per-source-account critical
@@ -648,7 +656,7 @@ async function attemptWrite<T>(
     async (ctx) => {
       let tx: AssembledTransaction<unknown>;
       try {
-        tx = await call();
+        tx = await call({ fee: await getFeeOracle().pickInclusionFee(opClass), timeoutInSeconds: timeoutFor(opClass) });
       } catch (err) {
         throw new ChainError(`${method} could not be built`, contractErrorName(contract, err), {
           method,
@@ -717,6 +725,7 @@ async function attemptWrite<T>(
     { waitMs: config.SEQ_LOCK_WAIT_MS, signal },
   );
 }
+
 
 function simulatedValueFromSent<T>(contract: ContractKey, method: string, result: unknown): T {
   if (result && typeof result === 'object' && 'isOk' in result) {
@@ -852,15 +861,16 @@ export type AgentBuyArgs = { market_id: bigint; outcome: Outcome; collateral_in:
  * attempt (#40) re-quotes `min_shares_out` against the live price instead of
  * reusing the first attempt's stale bound.
  */
-export const agentBuy = (args: AgentBuyArgs | (() => Promise<AgentBuyArgs>), signal?: AbortSignal) => {
+export const agentBuy = (
+  args: AgentBuyArgs | (() => Promise<AgentBuyArgs>),
+  signal?: AbortSignal,
+  /** Logged with the write and keyed into chain_submissions (#42). */
+  meta: { attemptId?: string; rebuildCount?: number } = {},
+) => {
   const resolver = typeof args === 'function' ? args : async () => args;
-  return write<bigint>('TRADER', 'treasury', 'agent_buy', typeof args === 'function' ? {} : args, async () =>
-    agentClients.treasury().agent_buy(await resolver()), signal);
+  return write<bigint>('TRADER', 'trade', 'treasury', 'agent_buy', { ...(typeof args === 'function' ? {} : args), ...meta }, async (opts, signer) =>
+    agentClients.treasury(signer).agent_buy(await resolver(), opts as any), signal);
 };
-export const agentBuy = (args: { market_id: bigint; outcome: Outcome; collateral_in: bigint; min_shares_out: bigint }, signal?: AbortSignal) =>
-  write<bigint>('TRADER', 'trade', 'treasury', 'agent_buy', args, async (opts, signer) =>
-    agentClients.treasury(signer).agent_buy(args, opts as any), signal,
-  );
 
 export const agentSell = (args: { market_id: bigint; outcome: Outcome; collateral_out: bigint; max_shares_in: bigint }, signal?: AbortSignal) =>
   write<bigint>('TRADER', 'trade', 'treasury', 'agent_sell', args, async (opts, signer) =>
@@ -884,11 +894,11 @@ export const publishTrace = (args: {
 // close_time and finalises market-core.
 
 export const registerPriceSpec = (marketId: bigint, spec: PriceConfig, signal?: AbortSignal) =>
-  write<void>('MARKET_MAKER', 'resolver', 'register_price_spec', { market_id: marketId, spec }, async () =>
-    agentClients.resolver().register_price_spec({ market_id: marketId, spec }), signal,
+  write<void>('MARKET_MAKER', 'maintenance', 'resolver', 'register_price_spec', { market_id: marketId, spec }, async (opts) =>
+    agentClients.resolver().register_price_spec({ market_id: marketId, spec }, opts as any), signal,
   );
 
 export const resolvePrice = (marketId: bigint, signal?: AbortSignal) =>
-  write<Outcome>('MARKET_MAKER', 'resolver', 'resolve_price', { market_id: marketId }, async () =>
-    agentClients.resolver().resolve_price({ market_id: marketId }), signal,
+  write<Outcome>('MARKET_MAKER', 'maintenance', 'resolver', 'resolve_price', { market_id: marketId }, async (opts) =>
+    agentClients.resolver().resolve_price({ market_id: marketId }, opts as any), signal,
   );

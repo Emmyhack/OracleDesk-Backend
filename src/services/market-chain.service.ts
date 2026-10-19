@@ -209,8 +209,7 @@ export async function createMarketOnChain(
 ): Promise<WriteResult<bigint>> {
   const resolutionHashBytes = resolutionHash(spec);
   const resolutionHashHex = resolutionHashBytes.toString('hex');
-  const pinned = await pinJson(questionDocument(market, resolutionHashHex, spec), `oracledesk-market-${market.id}`);
-  const doc = questionDocument(market, resolutionHashHex);
+  const doc = questionDocument(market, resolutionHashHex, spec);
   const pinned = await pinJson(doc, `oracledesk-market-${market.id}`);
 
   // Abort if a re-pinned question document produces a hash different from stored (#41)
