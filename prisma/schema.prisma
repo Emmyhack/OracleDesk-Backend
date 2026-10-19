@@ -96,6 +96,19 @@ enum PaymentEventStatus {
   REFUNDED
 }
 
+/// Admin refund lifecycle (#57). Transitions are enforced in the service:
+/// REQUESTED -> APPROVED -> PREPARED -> SUBMITTED -> CONFIRMED, plus REJECTED
+/// from REQUESTED and FAILED from PREPARED/SUBMITTED.
+enum RefundStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+  PREPARED
+  SUBMITTED
+  CONFIRMED
+  FAILED
+}
+
 enum GenerationJobStatus {
   PROCESSING
   COMPLETED
@@ -154,6 +167,9 @@ model User {
   copyTrades    CopyTrade[]
   paymentEvents PaymentEvent[]
   spendingAllowance SpendingAllowance?
+  refunds       Refund[]
+  entitlementTokens EntitlementToken[]
+  x402Settlements X402Settlement[]
 
   @@index([walletAddress])
   @@map("users")
@@ -525,6 +541,98 @@ model Subscription {
   @@map("subscriptions")
 }
 
+/// One admin refund request for one PaymentEvent (#57). The backend never
+/// holds the revenue account's secret key: it only prepares unsigned XDR,
+/// verifies the returned envelope byte-for-byte, submits it and confirms the
+/// on-chain transfer before marking the payment refunded.
+model Refund {
+  id              String             @id @default(uuid())
+  /// Refundable at most once: one refund row per payment event.
+  paymentEventId  String             @unique
+  userId          String
+  /// Original payment amount in 7-decimal base units. CHECK: digits only.
+  amountRaw       String
+  currency        SettlementCurrency @default(USDC)
+  status          RefundStatus       @default(REQUESTED)
+  reason          String
+  rejectionReason String?
+  /// Base64 XDR of the simulated, unsigned SAC transfer.
+  unsignedXdr     String?
+  /// Hash of the exact prepared transaction body; signatures do not change it.
+  preparedHash    String?
+  preparedExpiresAt DateTime?
+  /// Hash of the submitted transaction (unique: one refund per transaction).
+  submittedTxHash String?            @unique
+  ledger          Int?
+  error           String?
+  requestedBy     String
+  approvedBy      String?
+  preparedBy      String?
+  submittedBy     String?
+  requestedAt     DateTime           @default(now())
+  approvedAt      DateTime?
+  rejectedAt      DateTime?
+  preparedAt      DateTime?
+  submittedAt     DateTime?
+  confirmedAt     DateTime?
+  failedAt        DateTime?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  paymentEvent PaymentEvent @relation(fields: [paymentEventId], references: [id], onDelete: Restrict)
+
+  @@index([status, createdAt])
+  @@index([userId])
+  @@map("refunds")
+}
+
+/// A settlement reported by the x402 facilitator (#61). Inserting the row is
+/// the exactly-once claim for the settlement transaction hash, so a retry can
+/// resume recording a settled payment instead of charging again.
+model X402Settlement {
+  txHash         String             @id
+  userId         String
+  payer          String
+  amountRaw      String
+  currency       SettlementCurrency @default(USDC)
+  network        String
+  asset          String
+  /// RECEIVED | RECORDED | FAILED
+  status         String             @default("RECEIVED")
+  paymentEventId String?            @unique
+  subscriptionId String?
+  attempts       Int                @default(0)
+  lastError      String?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status, createdAt])
+  @@map("x402_settlements")
+}
+
+/// Issued trace-entitlement tokens (#62), kept so a refund or revocation can
+/// revoke their jtis in Redis. The token itself carries no PII beyond the
+/// user's public address.
+model EntitlementToken {
+  jti            String    @id
+  userId         String
+  subscriptionId String?
+  traceId        String
+  expiresAt      DateTime
+  issuedAt       DateTime  @default(now())
+  revokedAt      DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([subscriptionId])
+  @@index([expiresAt])
+  @@map("entitlement_tokens")
+}
+
 /// Full audit trail of every agent decision and action
 model AgentLog {
   id        String    @id @default(uuid())
@@ -610,6 +718,7 @@ model PaymentEvent {
 
   user  User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   trace ReasoningTrace? @relation(fields: [traceId], references: [id], onDelete: SetNull)
+  refund Refund?
 
   @@index([userId])
   @@index([txHash])

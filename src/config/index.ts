@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import { Keypair, Networks, StrKey } from '@stellar/stellar-sdk';
 import { z } from 'zod';
 import { resolveFileVars, validateSecrets, SECRET_NAMES } from './secrets';
+import { generateEntitlementKey } from '../services/entitlement/keys';
 
 dotenv.config();
 
@@ -116,6 +117,10 @@ const envSchema = z
     // Server key that signs SEP-10 challenge transactions. Not a funded
     // account and never the agent key. Same ephemeral fallback as above.
     AUTH_SIGNING_SECRET: optionalString,
+    // Ed25519 key that signs trace-entitlement tokens (#62). Dedicated: never
+    // JWT_SECRET, AUTH_SIGNING_SECRET or a wallet key. Format documented in
+    // docs/contract-requests.md; a missing key in production stops boot.
+    ENTITLEMENT_SIGNING_KEY: optionalString,
     AUTH_HOME_DOMAIN: z.string().default('localhost'),
     AUTH_WEB_AUTH_DOMAIN: optionalString,
     // G… addresses allowed to call admin endpoints.
@@ -151,6 +156,32 @@ const envSchema = z
     // (see docs/api.md: that makes subscription revenue trading capital).
     PAYMENTS_RECIPIENT: optionalAddress,
     DAILY_PASS_PRICE_RAW: z.string().regex(/^\d+$/, 'must be an integer in 7-decimal base units').default('5000000'),
+
+    // ── x402 daily pass (#61) ─────────────────────────────────────────────
+    // The facilitator that verifies and settles x402 payments on Stellar.
+    // Required to boot when X402_ENABLED=true; empty disables the endpoint.
+    X402_ENABLED: z.enum(['true', 'false']).default('false').transform((v) => v === 'true'),
+    X402_FACILITATOR_URL: optionalString,
+    // CAIP-2 network id, e.g. stellar:testnet.
+    X402_NETWORK: z.string().default('stellar:testnet'),
+    // Seconds the x402 middleware may take talking to the facilitator.
+    X402_FACILITATOR_TIMEOUT_MS: z.string().default('15000').transform(Number)
+      .pipe(z.number().int().min(1000)),
+
+    // ── Trace entitlement tokens (#62) ────────────────────────────────────
+    // Audience the x402 service must expect; also the `aud` claim.
+    X402_ENTITLEMENT_AUDIENCE: z.string().default('oracledesk-x402'),
+    // Minutes; never longer than the remaining pass time.
+    ENTITLEMENT_TOKEN_TTL_SECONDS: z.string().default('300').transform(Number)
+      .pipe(z.number().int().min(30).max(3600)),
+    // Comma-separated public keys (`ed25519-public:<base64 SPKI>`) accepted
+    // during rotation, in addition to the current signing key.
+    ENTITLEMENT_PREVIOUS_PUBLIC_KEYS: commaList(z.string()),
+
+    // ── Refund workflow (#57) ─────────────────────────────────────────────
+    // How long a prepared refund XDR stays valid before it must be rebuilt.
+    REFUND_PREPARE_TTL_SECONDS: z.string().default('600').transform(Number)
+      .pipe(z.number().int().min(60).max(86_400)),
 
     // dry-run: every write is built and simulated, never signed or sent.
     // live: writes are signed with AGENT_SECRET_KEY and submitted (testnet only).
@@ -422,6 +453,16 @@ const envSchema = z
     if (env.NODE_ENV === 'production' && env.IPFS_TRANSPORT === 'local') {
       ctx.addIssue({ code: 'custom', path: ['IPFS_TRANSPORT'], message: 'local IPFS is development-only' });
     }
+    if (env.X402_ENABLED) {
+      if (!env.X402_FACILITATOR_URL) {
+        ctx.addIssue({ code: 'custom', path: ['X402_FACILITATOR_URL'], message: 'is required when X402_ENABLED=true' });
+      } else if (!URL.canParse(env.X402_FACILITATOR_URL) || !/^https?:\/\//.test(env.X402_FACILITATOR_URL)) {
+        ctx.addIssue({ code: 'custom', path: ['X402_FACILITATOR_URL'], message: 'must be an http(s) URL' });
+      }
+      if (!/^[a-z0-9-]+:[a-z0-9-]+$/i.test(env.X402_NETWORK)) {
+        ctx.addIssue({ code: 'custom', path: ['X402_NETWORK'], message: 'must be a CAIP-2 network id such as stellar:testnet' });
+      }
+    }
     if (env.CHAIN_EXECUTION_MODE === 'live') {
       if (!env.AGENT_SECRET_KEY) {
         ctx.addIssue({ code: 'custom', path: ['AGENT_SECRET_KEY'], message: 'is required when CHAIN_EXECUTION_MODE=live' });
@@ -604,6 +645,11 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   if (!data.AUTH_SIGNING_SECRET && data.NODE_ENV !== 'production') {
     data.AUTH_SIGNING_SECRET = Keypair.random().secret();
     ephemeralSecrets.push('AUTH_SIGNING_SECRET');
+  }
+  if (!data.ENTITLEMENT_SIGNING_KEY && data.NODE_ENV !== 'production') {
+    // Generated, never printed. Dev/test only: tokens stop verifying on restart.
+    data.ENTITLEMENT_SIGNING_KEY = generateEntitlementKey();
+    ephemeralSecrets.push('ENTITLEMENT_SIGNING_KEY');
   }
   if (!data.AUTH_WEB_AUTH_DOMAIN) data.AUTH_WEB_AUTH_DOMAIN = data.AUTH_HOME_DOMAIN;
   // Prisma's env("DATABASE_URL") reads this process-wide value at client build.
