@@ -254,6 +254,16 @@ const envSchema = z
     // during rotation, in addition to the current signing key.
     ENTITLEMENT_PREVIOUS_PUBLIC_KEYS: commaList(z.string()),
 
+    // ── x402 trace price discovery (#63) ──────────────────────────────────
+    // The authoritative x402 service URL. Empty disables discovery (reported as unknown).
+    X402_SERVICE_URL: optionalString,
+    // Request timeout for price discovery queries.
+    X402_DISCOVERY_TIMEOUT_MS: z.string().default('5000').transform(Number)
+      .pipe(z.number().int().min(100)),
+    // In-memory cache TTL for validated payment requirements.
+    X402_PRICE_CACHE_TTL_MS: z.string().default('60000').transform(Number)
+      .pipe(z.number().int().min(1000)),
+
     // ── Refund workflow (#57) ─────────────────────────────────────────────
     // How long a prepared refund XDR stays valid before it must be rebuilt.
     REFUND_PREPARE_TTL_SECONDS: z.string().default('600').transform(Number)

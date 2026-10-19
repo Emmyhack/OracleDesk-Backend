@@ -582,7 +582,11 @@ pagination in `meta`.
 #### `GET /traces/:id` (optional auth)
 
 Without access: the preview (first two sources) plus
-`{ accessLevel: "FREE_PREVIEW", lockedFields, unlockPriceRaw, dailyPassPriceRaw }`.
+`{ accessLevel: "FREE_PREVIEW", lockedFields, unlockPriceRaw, unlockPrice, unlockPriceStatus, paymentRequirements, dailyPassPriceRaw, dailyPassPrice }`.
+The trace unlock price is discovered live from the authoritative x402 service (#63)
+and validated against deployment network and USDC asset rules. If the x402 service
+is unavailable or requirements fail validation, `unlockPriceStatus` is `"unknown"`,
+`unlockPriceRaw` is `null`, and no fallback price is invented.
 With a daily pass: the full trace and `accessLevel: "DAILY_PASS"`.
 (Previously the route never read the token, so subscribers always got the
 preview. Fixed.)
