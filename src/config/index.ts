@@ -98,6 +98,52 @@ const commaList = (item: z.ZodType<string, string>, fallback = "") =>
     .transform((v) => v.split(',').map((s) => s.trim()).filter(Boolean))
     .pipe(z.array(item));
 
+/**
+ * `AUTH_PREVIOUS_SIGNING_KEYS`: comma-separated `G…[@ISO-8601]` entries (#48).
+ * Only public keys are accepted; a secret seed is not a valid previous key.
+ */
+export interface PreviousSigningKey {
+  publicKey: string;
+  /** When set, the key stops verifying challenges after this instant. */
+  retireAt: Date | null;
+}
+
+const previousSigningKeys = z
+  .string()
+  .default('')
+  .transform((value, ctx) => {
+    const out: PreviousSigningKey[] = [];
+    for (const raw of value.split(',')) {
+      const item = raw.trim();
+      if (!item) continue;
+      const at = item.indexOf('@');
+      const publicKey = (at === -1 ? item : item.slice(0, at)).trim();
+      const retireRaw = at === -1 ? '' : item.slice(at + 1).trim();
+      if (!StrKey.isValidEd25519PublicKey(publicKey)) {
+        ctx.addIssue({
+          code: 'custom',
+          message: `"${publicKey}" must be a G… Stellar public key (never a secret)`,
+        });
+        continue;
+      }
+      let retireAt: Date | null = null;
+      if (retireRaw) {
+        const ms = Date.parse(retireRaw);
+        if (Number.isNaN(ms)) {
+          ctx.addIssue({ code: 'custom', message: `"${retireRaw}" must be an ISO-8601 retirement time` });
+          continue;
+        }
+        retireAt = new Date(ms);
+      }
+      out.push({ publicKey, retireAt });
+    }
+    return out;
+  });
+
+/** `true`/`false`, with the default used when unset. */
+const boolDefault = (fallback: 'true' | 'false') =>
+  z.enum(['true', 'false']).default(fallback).transform((v) => v === 'true');
+
 const envSchema = z
   .object({
     DATABASE_URL: z.string({ error: 'is required' }).min(1, 'is required'),
@@ -118,8 +164,38 @@ const envSchema = z
     AUTH_SIGNING_SECRET: optionalString,
     AUTH_HOME_DOMAIN: z.string().default('localhost'),
     AUTH_WEB_AUTH_DOMAIN: optionalString,
+    // Public keys of previous server signing keys that may still verify
+    // challenges they issued (#48). Format: G…[@ISO-8601-retirement].
+    AUTH_PREVIOUS_SIGNING_KEYS: previousSigningKeys,
     // G… addresses allowed to call admin endpoints.
     ADMIN_ADDRESSES: commaList(stellarAccount),
+
+    // ── Challenge issuance hardening (#50) ───────────────────────────────
+    AUTH_MAX_OUTSTANDING_PER_ADDRESS: z.string().default('5').transform(Number)
+      .pipe(z.number().int().min(1).max(1000)),
+    AUTH_MAX_OUTSTANDING_PER_IP: z.string().default('30').transform(Number)
+      .pipe(z.number().int().min(1).max(100000)),
+    AUTH_POW_THRESHOLD_PER_MIN: z.string().default('600').transform(Number)
+      .pipe(z.number().int().min(0)),
+    AUTH_POW_BITS: z.string().default('18').transform(Number)
+      .pipe(z.number().int().min(1).max(32)),
+    AUTH_POW_TTL_SECONDS: z.string().default('60').transform(Number)
+      .pipe(z.number().int().min(10).max(600)),
+    AUTH_CHALLENGE_TTL_SECONDS: z.string().default('300').transform(Number)
+      .pipe(z.number().int().min(30).max(3600)),
+    // Salt mixed into the SHA-256 of client IPs before they reach Redis.
+    AUTH_IP_HASH_SALT: optionalString,
+    // Express `trust proxy`; a comma list of hops or addresses, or "true".
+    TRUST_PROXY: optionalString,
+    REDIS_COMMAND_TIMEOUT_MS: z.string().default('500').transform(Number)
+      .pipe(z.number().int().min(50).max(30000)),
+    REDIS_CONNECT_TIMEOUT_MS: z.string().default('2000').transform(Number)
+      .pipe(z.number().int().min(100).max(60000)),
+
+    // ── SEP-45 contract-account auth (#47) ───────────────────────────────
+    SEP45_ENABLED: boolDefault('false'),
+    WEB_AUTH_CONTRACT_ID: optionalContract,
+    SEP45_RPC_URL: optionalString,
 
     // ── Secrets (#145) ────────────────────────────────────────────────────
     // env: process environment (default); file: <NAME>_FILE mounts; vault:
@@ -413,6 +489,59 @@ const envSchema = z
     COPY_TRADE_MAX_PENDING: z.string().default('5').transform(Number),
   })
   .superRefine((env, ctx) => {
+    // ── Login signing-key rotation (#48) ──
+    const currentPublic =
+      env.AUTH_SIGNING_SECRET && StrKey.isValidEd25519SecretSeed(env.AUTH_SIGNING_SECRET)
+        ? Keypair.fromSecret(env.AUTH_SIGNING_SECRET).publicKey()
+        : null;
+    if (env.AUTH_SIGNING_SECRET && env.AGENT_SECRET_KEY && env.AUTH_SIGNING_SECRET === env.AGENT_SECRET_KEY) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['AUTH_SIGNING_SECRET'],
+        message: 'must differ from AGENT_SECRET_KEY',
+      });
+    }
+    const seenPrevious = new Set<string>();
+    const maxRetire = Date.now() + 24 * 60 * 60 * 1000;
+    for (const key of env.AUTH_PREVIOUS_SIGNING_KEYS) {
+      if (seenPrevious.has(key.publicKey)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['AUTH_PREVIOUS_SIGNING_KEYS'],
+          message: `duplicate previous signing key ${key.publicKey}`,
+        });
+        continue;
+      }
+      seenPrevious.add(key.publicKey);
+      if (currentPublic && key.publicKey === currentPublic) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['AUTH_PREVIOUS_SIGNING_KEYS'],
+          message: 'must not contain the current signing key',
+        });
+      }
+      if (env.NODE_ENV === 'production' && !key.retireAt) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['AUTH_PREVIOUS_SIGNING_KEYS'],
+          message: 'every previous signing key needs a retirement time in production (G…@ISO-8601)',
+        });
+      }
+      if (key.retireAt && key.retireAt.getTime() > maxRetire) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['AUTH_PREVIOUS_SIGNING_KEYS'],
+          message: 'retirement time must be at most 24 hours in the future',
+        });
+      }
+    }
+    if (env.SEP45_ENABLED && !env.WEB_AUTH_CONTRACT_ID) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['WEB_AUTH_CONTRACT_ID'],
+        message: 'is required when SEP45_ENABLED=true',
+      });
+    }
     if (env.SECRETS_PROVIDER === 'vault') {
       if (!env.VAULT_ADDR) ctx.addIssue({ code: 'custom', path: ['VAULT_ADDR'], message: 'is required when SECRETS_PROVIDER=vault' });
       else if (!URL.canParse(env.VAULT_ADDR)) ctx.addIssue({ code: 'custom', path: ['VAULT_ADDR'], message: 'must be a URL' });
@@ -606,6 +735,12 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     ephemeralSecrets.push('AUTH_SIGNING_SECRET');
   }
   if (!data.AUTH_WEB_AUTH_DOMAIN) data.AUTH_WEB_AUTH_DOMAIN = data.AUTH_HOME_DOMAIN;
+  if (!data.SEP45_RPC_URL) data.SEP45_RPC_URL = data.STELLAR_RPC_URL;
+  if (!data.AUTH_IP_HASH_SALT) {
+    // A per-process salt still makes IPs unlinkable across instances; set
+    // AUTH_IP_HASH_SALT explicitly to keep hashes stable across restarts.
+    data.AUTH_IP_HASH_SALT = crypto.randomBytes(16).toString('hex');
+  }
   // Prisma's env("DATABASE_URL") reads this process-wide value at client build.
   if (data.DATABASE_URL) process.env.DATABASE_URL = data.DATABASE_URL;
   return { ...data, ephemeralSecrets };
