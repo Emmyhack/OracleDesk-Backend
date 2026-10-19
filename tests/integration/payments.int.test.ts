@@ -33,8 +33,8 @@ const PRICE = 5_000_000n;
 const code = (p: Promise<unknown>) => p.then(() => 'ok', (e: any) => e.code ?? e.message);
 
 /** A successful USDC transfer of the pass price from `from`, served by a fake reader. */
-function useTransfer(from: string) {
-  const tx = new TransactionBuilder(new Account(from, '1'), { fee: '100', networkPassphrase: passphrase })
+function transferTx(from: string) {
+  return new TransactionBuilder(new Account(from, '1'), { fee: '100', networkPassphrase: passphrase })
     .addOperation(Operation.invokeContractFunction({
       contract: usdc,
       function: 'transfer',
@@ -42,11 +42,32 @@ function useTransfer(from: string) {
     }))
     .setTimeout(30)
     .build();
+}
+
+function useTransfer(from: string) {
+  const tx = transferTx(from);
   return verification.setTransactionReader({
     async getTransaction(hash: string) {
       return { status: rpc.Api.GetTransactionStatus.SUCCESS, txHash: hash, ledger: 42, envelopeXdr: tx.toEnvelope() } as any;
     },
   });
+}
+
+/** Like useTransfer, but counts getTransaction calls so races can be asserted. */
+function countingTransfer(from: string) {
+  const tx = transferTx(from);
+  const calls = { getTransaction: 0 };
+  return {
+    calls,
+    reader: {
+      async getTransaction(hash: string) {
+        calls.getTransaction++;
+        // Widen the race window so a non-serialized implementation would show it.
+        await new Promise((r) => setTimeout(r, 25));
+        return { status: rpc.Api.GetTransactionStatus.SUCCESS, txHash: hash, ledger: 42, envelopeXdr: tx.toEnvelope() } as any;
+      },
+    },
+  };
 }
 
 test('grants pass once (idempotent re-submit)', { skip: skipReason() }, async () => {
@@ -86,19 +107,60 @@ test('rejects hash reuse by another user', { skip: skipReason() }, async () => {
   }
 });
 
-test('concurrent double claim yields one subscription', { skip: skipReason() }, async () => {
+test('concurrent double claim by the same user yields one pass and one RPC call (#59)', { skip: skipReason() }, async () => {
   const user = await makeUser(prisma);
-  const prev = useTransfer(user.walletAddress);
+  const { reader, calls } = countingTransfer(user.walletAddress);
+  const prev = verification.setTransactionReader(reader);
   try {
     const hash = 'ef'.repeat(32);
-    const claim = () => code(recordPayment({ userId: user.id, walletAddress: user.walletAddress, type: 'DAILY_PASS', txHash: hash }));
-    const results = await Promise.all([claim(), claim()]);
-    // The real payment_events.txHash unique index guarantees one pass.
+    const claim = () => code(recordPayment({ userId: user.id, walletAddress: user.walletAddress, type: 'DAILY_PASS' as const, txHash: hash }));
+    const results = await Promise.all(Array.from({ length: 8 }, claim));
     assert.equal(await prisma.subscription.count(), 1);
     assert.equal(await prisma.paymentEvent.count(), 1);
-    assert.ok(results.includes('ok'));
-    // BUG(#135 non-goal): the loser surfaces Prisma's P2002 as a generic error
-    // (a 500 over HTTP) instead of a defined PAYMENT_ALREADY_USED.
+    // The owner always gets success: the winner and every idempotent racer.
+    assert.deepEqual(results, Array(8).fill('ok'));
+    assert.equal(calls.getTransaction, 1, 'verification runs once per hash');
+  } finally {
+    verification.setTransactionReader(prev);
+  }
+});
+
+test('concurrent claim by another user is always 409 and never verifies twice (#59)', { skip: skipReason() }, async () => {
+  const owner = await makeUser(prisma);
+  const other = await makeUser(prisma);
+  const { reader, calls } = countingTransfer(owner.walletAddress);
+  const prev = verification.setTransactionReader(reader);
+  try {
+    const hash = 'a1'.repeat(32);
+    const claim = (u: typeof owner) => code(recordPayment({ userId: u.id, walletAddress: u.walletAddress, type: 'DAILY_PASS' as const, txHash: hash }));
+    const results = await Promise.all([claim(owner), claim(other), claim(owner), claim(other), claim(other)]);
+    assert.equal(await prisma.subscription.count(), 1);
+    assert.equal(await prisma.paymentEvent.count(), 1);
+    assert.equal(results[0], 'ok');
+    assert.equal(results[2], 'ok');
+    for (const r of [results[1], results[3], results[4]]) assert.equal(r, 'PAYMENT_ALREADY_USED');
+    assert.equal(calls.getTransaction, 1, 'racers reuse the first result');
+  } finally {
+    verification.setTransactionReader(prev);
+  }
+});
+
+test('a losing racer does not leave a LIMIT_REACHED row (#59)', { skip: skipReason() }, async () => {
+  const user = await makeUser(prisma);
+  await prisma.spendingAllowance.create({
+    data: { userId: user.id, dailyLimit: 0, perTraceLimit: 0 },
+  });
+  const { reader } = countingTransfer(user.walletAddress);
+  const prev = verification.setTransactionReader(reader);
+  try {
+    const hash = 'b2'.repeat(32);
+    const results = await Promise.all(
+      Array.from({ length: 4 }, () => code(recordPayment({ userId: user.id, walletAddress: user.walletAddress, type: 'DAILY_PASS' as const, txHash: hash }))),
+    );
+    assert.deepEqual(results, Array(4).fill('ALLOWANCE_DAILY_LIMIT'));
+    assert.equal(await prisma.subscription.count(), 1, 'exactly one LIMIT_REACHED marker');
+    assert.equal(await prisma.subscription.count({ where: { status: 'LIMIT_REACHED' } }), 1);
+    assert.equal(await prisma.paymentEvent.count(), 0);
   } finally {
     verification.setTransactionReader(prev);
   }

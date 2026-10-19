@@ -5,6 +5,7 @@ import {
   SubscriptionStatus,
   SubscriptionType,
 } from '@prisma/client';
+import type { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { logger } from '../lib/logger';
 import { config } from '../config';
@@ -14,6 +15,7 @@ import { verifyUsdcTransfer } from './payment-verification.service';
 import { AppError } from '../middlewares/error.middleware';
 import type { SubscriptionAccess } from '../types';
 import { summarizeProvenance } from '../lib/llm/provenance';
+import { withAdvisoryLockWait } from '../lib/advisory-lock';
 import dayjs from 'dayjs';
 import { notifyUser } from '../lib/socket-auth';
 
@@ -78,6 +80,41 @@ function isUniqueViolation(err: unknown): boolean {
   return (err as { code?: unknown } | null)?.code === 'P2002';
 }
 
+/** How long a request waits for the current claimant of a txHash. */
+const CLAIM_WAIT_MS = 30_000;
+/** Interactive-transaction budget: it covers one RPC verification plus writes. */
+const CLAIM_TX_TIMEOUT_MS = 60_000;
+
+/** The advisory-lock key that serializes claims for one transaction hash. */
+export function paymentClaimLockKey(txHash: string): string {
+  return `payment:claim:${txHash.toLowerCase()}`;
+}
+
+/**
+ * Resolves a hash that is already recorded: its owner gets the subscription it
+ * bought (idempotent success), anyone else gets 409. Never reveals whose hash
+ * it is beyond the comparison with the caller's user id.
+ */
+async function existingClaimResult(
+  db: Prisma.TransactionClient | typeof prisma,
+  txHash: string,
+  userId: string,
+): Promise<any> {
+  const existing = await db.paymentEvent.findUnique({ where: { txHash } });
+  if (!existing) return null;
+  if (existing.userId === userId) {
+    const sub = await db.subscription.findFirst({ where: { txHash } });
+    if (sub) return sub;
+  }
+  throw new AppError(409, 'PAYMENT_ALREADY_USED', 'This payment has already been used');
+}
+
+export interface ClaimResult {
+  subscription: any;
+  transfer: { amount: bigint; ledger: number; from: string } | null;
+  replay: boolean;
+}
+
 export async function recordPayment(params: {
   userId:        string;
   walletAddress: string;
@@ -96,85 +133,111 @@ export async function recordPayment(params: {
   }
 
   // Idempotency: a hash is consumed once. Re-submitting your own hash returns
-  // the subscription it already bought; anyone else's hash is rejected.
-  const existing = await prisma.paymentEvent.findUnique({ where: { txHash } });
-  if (existing) {
-    if (existing.userId === userId) {
-      const sub = await prisma.subscription.findFirst({ where: { txHash } });
-      if (sub) return sub;
-    }
-    throw new AppError(409, 'PAYMENT_ALREADY_USED', 'This payment has already been used');
-  }
+  // the subscription it already bought; anyone else's hash is rejected. This
+  // read is only an optimization: the authoritative check happens under the
+  // per-hash lock below, after any in-flight claimant has finished.
+  const early = await existingClaimResult(prisma, txHash, userId);
+  if (early) return early;
 
-  const transfer = await verifyUsdcTransfer({
-    txHash,
-    token:     CONTRACTS.usdc,
-    from:      walletAddress,
-    to:        PAYMENTS_RECIPIENT,
-    minAmount: DAILY_PASS_PRICE_RAW,
-    subId,
-    subIdKind,
-  });
-  const amount = toDisplayUsdc(transfer.amount);
-
-  await enforceSpendingAllowance(userId, amount, type);
-
-  const expiresAt = dayjs().add(24, 'hour').toDate();
-
-  let subscription;
+  // #59: serialize every claim for this hash. Verification runs at most once
+  // at a time, racers wait and then reuse the winner's result instead of each
+  // paying for an RPC read, and the unique index remains as defence in depth.
+  // The lock is a transaction-scoped Postgres advisory lock, so it is safe
+  // across instances and is released by the server if this process dies.
+  let claim: { acquired: true; value: ClaimResult } | { acquired: false };
   try {
-    subscription = await prisma.$transaction(async (tx) => {
-      const created = await tx.subscription.create({
-        data: {
-          userId,
-          traceId:   traceId ?? null,
-          type:      type as SubscriptionType,
-          status:    SubscriptionStatus.ACTIVE,
-          amountPaid: amount,
-          currency:  SettlementCurrency.USDC,
+    claim = await withAdvisoryLockWait<ClaimResult>(
+      paymentClaimLockKey(txHash),
+      async (tx) => {
+        // A racer that waited may now see the committed winner.
+        const existing = await existingClaimResult(tx, txHash, userId);
+        if (existing) return { subscription: existing, transfer: null, replay: true };
+
+        // Cheap checks before the RPC call: the approval read and, as a lower
+        // bound, the price floor. The verified amount is re-checked below.
+        const allowance = await enforceSpendingAllowance(userId, type, tx);
+        allowance.evaluate(toDisplayUsdc(DAILY_PASS_PRICE_RAW));
+
+        const transfer = await verifyUsdcTransfer({
           txHash,
-          expiresAt,
-        },
-      });
+          token:     CONTRACTS.usdc,
+          from:      walletAddress,
+          to:        PAYMENTS_RECIPIENT,
+          minAmount: DAILY_PASS_PRICE_RAW,
+          subId,
+          subIdKind,
+        });
+        const amount = toDisplayUsdc(transfer.amount);
 
-      // Unique on txHash: a concurrent request with the same hash fails here.
-      await tx.paymentEvent.create({
-        data: {
-          userId,
-          traceId:     traceId ?? null,
-          txHash,
-          type:        type as PaymentEventType,
-          amount,
-          amountRaw:   transfer.amount.toString(),
-          fromAddress: transfer.from,
-          currency:    SettlementCurrency.USDC,
-          status:      PaymentEventStatus.CONFIRMED,
-          confirmedAt: new Date(),
-          metadata:    { subscriptionId: created.id, ledger: transfer.ledger } as any,
-        },
-      });
+        // The verified amount is what counts against the allowance.
+        allowance.evaluate(amount);
 
-      await tx.spendingAllowance.updateMany({
-        where: { userId, isActive: true },
-        data: { spentToday: { increment: amount } },
-      });
+        const expiresAt = dayjs().add(24, 'hour').toDate();
 
-      return created;
-    });
+        const created = await tx.subscription.create({
+          data: {
+            userId,
+            traceId:   traceId ?? null,
+            type:      type as SubscriptionType,
+            status:    SubscriptionStatus.ACTIVE,
+            amountPaid: amount,
+            currency:  SettlementCurrency.USDC,
+            txHash,
+            expiresAt,
+          },
+        });
+
+        // Unique on txHash: a concurrent request with the same hash would fail
+        // here, but the advisory lock above already serialized them.
+        await tx.paymentEvent.create({
+          data: {
+            userId,
+            traceId:     traceId ?? null,
+            txHash,
+            type:        type as PaymentEventType,
+            amount,
+            amountRaw:   transfer.amount.toString(),
+            fromAddress: transfer.from,
+            currency:    SettlementCurrency.USDC,
+            status:      PaymentEventStatus.CONFIRMED,
+            confirmedAt: new Date(),
+            metadata:    { subscriptionId: created.id, ledger: transfer.ledger } as any,
+          },
+        });
+
+        await tx.spendingAllowance.updateMany({
+          where: { userId, isActive: true },
+          data: { spentToday: { increment: amount } },
+        });
+
+        return { subscription: created, transfer, replay: false };
+      },
+      { waitMs: CLAIM_WAIT_MS, timeoutMs: CLAIM_TX_TIMEOUT_MS },
+    );
   } catch (err) {
-    // #123: a concurrent duplicate with the same txHash loses the unique race
-    // on PaymentEvent.txHash (P2002). Resolve it like the pre-check above
-    // instead of surfacing a 500, with or without an Idempotency-Key.
+    // The claim transaction rolled back. Only now may the LIMIT_REACHED row be
+    // written, so a losing racer never leaves one behind.
+    if (err instanceof AllowanceLimitError) {
+      await recordLimitReached(err);
+    }
     if (isUniqueViolation(err)) {
-      const winner = await prisma.paymentEvent.findUnique({ where: { txHash } });
-      if (winner?.userId === userId) {
-        const sub = await prisma.subscription.findFirst({ where: { txHash } });
-        if (sub) return sub;
-      }
+      const winner = await existingClaimResult(prisma, txHash, userId);
+      if (winner) return winner;
       throw new AppError(409, 'PAYMENT_ALREADY_USED', 'This payment has already been used');
     }
     throw err;
   }
+
+  if (!claim.acquired) {
+    // The holder did not finish in time. Re-read once: it may have committed
+    // just after the deadline. Never fall through to a second verification.
+    const late = await existingClaimResult(prisma, txHash, userId);
+    if (late) return late;
+    throw new AppError(409, 'PAYMENT_CLAIM_IN_PROGRESS', 'This payment is being processed; retry shortly');
+  }
+
+  const { subscription, transfer, replay } = claim.value;
+  if (replay || !transfer) return subscription;
 
   logger.info({ subscriptionId: subscription.id, type, userId, amountRaw: transfer.amount.toString() }, 'Subscription created');
   // Only after the transaction committed: a rolled-back payment must not be announced.
@@ -321,40 +384,107 @@ export async function getSpendingAllowance(userId: string): Promise<any> {
   return prisma.spendingAllowance.findUnique({ where: { userId } });
 }
 
+/**
+ * A refused purchase. The LIMIT_REACHED row is written by the caller after the
+ * claim transaction has rolled back, so only the user who actually won the
+ * claim can leave one behind (never a losing racer) and the row survives the
+ * rollback that the refusal causes.
+ */
+class AllowanceLimitError extends AppError {
+  constructor(
+    code: 'ALLOWANCE_PER_TRACE_LIMIT' | 'ALLOWANCE_DAILY_LIMIT',
+    message: string,
+    public readonly limitRow: {
+      userId: string;
+      type: SubscriptionType;
+      amountPaid: number;
+      currency: SettlementCurrency;
+    } | null,
+  ) {
+    super(402, code, message);
+    this.name = 'AllowanceLimitError';
+  }
+}
+
+export interface AllowanceDecision {
+  /** Throws an AllowanceLimitError when `amount` exceeds the approval. */
+  evaluate(amount: number): void;
+}
+
+/**
+ * Reads the spending approval inside the claim transaction. The approval is
+ * evaluated only after the on-chain amount is known, but the read itself is
+ * cheap and runs before any RPC call. A daily reset is applied inside the same
+ * transaction, so it commits only together with the purchase it belongs to.
+ *
+ * #59: this function no longer writes LIMIT_REACHED itself. The caller writes
+ * that row only after winning the per-hash claim and after the transaction
+ * rolls back, so concurrent losers cannot create duplicate rows.
+ */
 async function enforceSpendingAllowance(
   userId: string,
-  amount: number,
   type: 'PER_TRACE' | 'DAILY_PASS',
-): Promise<void> {
-  const allowance = await prisma.spendingAllowance.findUnique({ where: { userId } });
-  if (!allowance?.isActive) return;
+  tx: Prisma.TransactionClient,
+): Promise<AllowanceDecision> {
+  const allowance = await tx.spendingAllowance.findUnique({ where: { userId } });
+  if (!allowance?.isActive) return { evaluate: () => undefined };
 
   const resetNeeded = dayjs(allowance.lastResetAt).isBefore(dayjs().startOf('day'));
   const effectiveSpentToday = resetNeeded ? 0 : allowance.spentToday;
 
   if (resetNeeded) {
-    await prisma.spendingAllowance.update({
+    await tx.spendingAllowance.update({
       where: { userId },
       data: { spentToday: 0, lastResetAt: new Date() },
     });
   }
 
-  if (type === 'PER_TRACE' && amount > allowance.perTraceLimit) {
-    throw new AppError(402, 'ALLOWANCE_PER_TRACE_LIMIT', 'Payment exceeds per-trace spending approval');
-  }
+  const currency = (allowance.currency as SettlementCurrency) || SettlementCurrency.USDC;
+  return {
+    evaluate(amount: number): void {
+      if (type === 'PER_TRACE' && amount > allowance.perTraceLimit) {
+        throw new AllowanceLimitError(
+          'ALLOWANCE_PER_TRACE_LIMIT',
+          'Payment exceeds per-trace spending approval',
+          null,
+        );
+      }
+      if (effectiveSpentToday + amount > allowance.dailyLimit) {
+        throw new AllowanceLimitError(
+          'ALLOWANCE_DAILY_LIMIT',
+          'Payment exceeds daily spending approval',
+          { userId, type: type as SubscriptionType, amountPaid: amount, currency },
+        );
+      }
+    },
+  };
+}
 
-  if (effectiveSpentToday + amount > allowance.dailyLimit) {
-    await prisma.subscription.create({
-      data: {
-        userId,
-        type: type as SubscriptionType,
+/**
+ * Persists the LIMIT_REACHED marker for a refused purchase. The row is written
+ * outside the claim transaction (so it survives the rollback that the refusal
+ * causes) and deduplicated per user, amount and UTC day, so a burst of
+ * concurrent refusals leaves one marker rather than one per request.
+ */
+async function recordLimitReached(err: AllowanceLimitError): Promise<void> {
+  if (!err.limitRow) return;
+  try {
+    const existing = await prisma.subscription.findFirst({
+      where: {
+        userId: err.limitRow.userId,
         status: SubscriptionStatus.LIMIT_REACHED,
-        amountPaid: amount,
-        currency: (allowance.currency as SettlementCurrency) || SettlementCurrency.USDC,
-        txHash: null,
+        amountPaid: err.limitRow.amountPaid,
+        createdAt: { gte: dayjs().startOf('day').toDate() },
       },
+      select: { id: true },
     });
-    throw new AppError(402, 'ALLOWANCE_DAILY_LIMIT', 'Payment exceeds daily spending approval');
+    if (existing) return;
+    await prisma.subscription.create({
+      data: { ...err.limitRow, status: SubscriptionStatus.LIMIT_REACHED, txHash: null },
+    });
+  } catch (writeErr) {
+    // Never mask the 402 the caller is about to return.
+    logger.warn({ err: writeErr, userId: err.limitRow.userId }, 'Could not record LIMIT_REACHED subscription');
   }
 }
 
