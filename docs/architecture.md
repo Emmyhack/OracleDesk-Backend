@@ -74,6 +74,18 @@ All submissions are tracked in `chain_submissions` (`tx_hash`, `op_class`, `min_
 - **Trace Publication**: Trace publication is idempotent by `trace_hash`. On `ExpiredError`, it links the previous attempt and marks the queue row `READY` for immediate resubmission.
 - **Market Creation**: Rebuilds only after a definitive `EXPIRED` decision, and never after `UNKNOWN`.
 
+### Channel accounts (#37)
+
+To allow concurrent writes by autonomous agent workers without sequence collisions, the backend maintains a pool of channel accounts (`src/services/stellar/channels.ts`):
+
+- **Lease Coordination**: Channel accounts are leased across processes using Redis exclusive keys (`channel:lease:<public_key>`, `SET NX PX` with a Lua compare-and-delete release). Round-robin acquisition with jittered backoff distributes load.
+- **Signer Composition**: A leased channel serves as the transaction source account (signing the outer transaction envelope with `basicNodeSigner(channelKeypair)`). Privileged contract invocations require invocation authentication signed by the agent key (`AGENT_SECRET_KEY`).
+- **Simulated Auth Verification**: Before signing, auth entries from simulation are decoded: `needsNonInvokerSigningBy()` must return strictly the agent's public key (or empty); credentials must be address credentials for the agent; and the root invocation must match the expected method without unexpected sub-invocations.
+- **Expiration and Re-simulation**: Auth entries are signed with an expiration ledger derived from the transaction deadline (`authExpirationLedger` from #42). The transaction is re-simulated after signing auth entries to account for signature verification footprint before the channel signs the envelope.
+- **Lease Retention**: The channel account remains leased until the transaction leaves `PENDING` (confirming `LANDED`, `FAILED`, `EXPIRED`, or `UNKNOWN`), preventing sequence skew from lagging RPC nodes.
+- **Balance Monitoring**: A periodic background monitor inspects on-chain XLM balances via RPC, automatically removing channels below `CHANNEL_MIN_BALANCE_XLM` (default: 5 XLM) from rotation and emitting warnings with public keys only.
+- **Dry-run and Fallback**: In `dry-run` or when no channels are configured (`CHANNEL_SECRET_KEYS` empty), `write()` uses the agent account as source and skips leasing completely.
+
 ## Market creation (ADR 0001)
 
 `market-chain.service.ts` turns a generated proposal into an on-chain market:

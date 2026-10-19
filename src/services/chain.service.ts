@@ -35,18 +35,23 @@ import {
   type AgentScope,
 } from './agent-controls.service';
 
-export { ArchivedEntryError };
-
-import { scValToNative } from '@stellar/stellar-sdk';
+import { Keypair, scValToNative } from '@stellar/stellar-sdk';
 import { prisma } from '../lib/prisma';
 import { getFeeOracle, type OperationClass } from './stellar/fees';
-import { timeoutFor, decideExpiry, ExpiredError, type ExpiryDecision } from './stellar/timebounds';
+import { timeoutFor, decideExpiry, ExpiredError, type ExpiryDecision, authExpirationLedger } from './stellar/timebounds';
 import {
   getTransactionReader,
   getTransactionSender,
   type TransactionReader,
   type TransactionSender,
 } from './stellar/tx-inspect';
+import {
+  getChannelPool,
+  channelSigner,
+  verifyChannelAuthEntries,
+  type LeasedChannel,
+  type Signer,
+} from './stellar/channels';
 
 export { ExpiredError };
 
@@ -150,7 +155,7 @@ async function write<T>(
   contract: 'treasury' | 'reasoningRegistry',
   method: string,
   args: Record<string, unknown>,
-  call: (options?: { fee?: bigint }) => Promise<AssembledTransaction<unknown>>,
+  call: (options?: { fee?: bigint; timeoutInSeconds?: number }, signer?: Signer) => Promise<AssembledTransaction<unknown>>,
   signal?: AbortSignal,
 ): Promise<WriteResult<T>> {
   const seenVersion = await assertAgentActive(scope);
@@ -174,7 +179,7 @@ async function submitWrite<T>(
   contract: 'treasury' | 'reasoningRegistry',
   method: string,
   args: Record<string, unknown>,
-  call: (options?: { fee?: bigint; timeoutInSeconds?: number }) => Promise<AssembledTransaction<unknown>>,
+  call: (options?: { fee?: bigint; timeoutInSeconds?: number }, signer?: Signer) => Promise<AssembledTransaction<unknown>>,
   signal?: AbortSignal,
 ): Promise<WriteResult<T>> {
   const oracle = getFeeOracle();
@@ -182,86 +187,122 @@ async function submitWrite<T>(
   const inclusionFee = await oracle.pickInclusionFee(opClass);
   const timeoutInSeconds = timeoutFor(opClass);
 
-  let tx: AssembledTransaction<unknown>;
+  let leasedChannel: LeasedChannel | null = null;
+  let signer: Signer | undefined = undefined;
+
+  if (config.CHAIN_EXECUTION_MODE === 'live') {
+    const pool = getChannelPool();
+    if (pool.size > 0) {
+      leasedChannel = await pool.acquire();
+      const agentKeypair = Keypair.fromSecret(config.AGENT_SECRET_KEY);
+      signer = channelSigner(leasedChannel.channel.keypair, agentKeypair);
+    }
+  }
+
   try {
-    tx = await call({ fee: inclusionFee, timeoutInSeconds });
-  } catch (err) {
-    throw new ChainError(`${method} could not be built`, contractErrorName(contract, err), {
-      method,
-      cause: err instanceof Error ? err.message : String(err),
-    });
-  }
-  const simulated = simulatedValue<T>(contract, method, tx);
-
-  // A pause that landed while the transaction was being built stops here.
-  await assertAgentActiveLocked(scope, seenVersion);
-
-  const minResourceFee = BigInt((tx.simulation as any)?.minResourceFee ?? '0');
-  const expectedTotal = inclusionFee + minResourceFee;
-
-  if (minResourceFee > policy.budget) {
-    if (config.CHAIN_EXECUTION_MODE === 'dry-run') {
-      logger.warn(
-        { opClass, minResourceFee: minResourceFee.toString(), budget: policy.budget.toString() },
-        'Fee budget exceeded (dry-run)',
-      );
-    } else {
-      throw new ChainError(
-        `Resource fee ${minResourceFee.toString()} exceeds budget ${policy.budget.toString()} for ${opClass}`,
-        'FEE_BUDGET_EXCEEDED',
-        {
-          opClass,
-          minResourceFee: minResourceFee.toString(),
-          budget: policy.budget.toString(),
-          simulatedResources: tx.simulation,
-        },
-        'FEE_BUDGET_EXCEEDED',
-      );
-    }
-  }
-
-  const rawBuiltFee = (tx as any)?.built?.fee;
-  if (rawBuiltFee !== undefined && rawBuiltFee !== null) {
-    const builtFee = BigInt(rawBuiltFee);
-    if (builtFee !== expectedTotal) {
-      logger.warn(
-        { opClass, builtFee: builtFee.toString(), expectedTotal: expectedTotal.toString() },
-        'Built fee differs from inclusion fee + minResourceFee',
-      );
-    }
-  }
-
-  const rawMaxTime = (tx as any)?.built?.timeBounds?.maxTime;
-  const maxTime = rawMaxTime !== undefined
-    ? BigInt(rawMaxTime)
-    : BigInt(Math.floor(Date.now() / 1000) + timeoutInSeconds);
-  const minTime = 0n;
-
-  const feeDetails: FeeDetails = {
-    opClass,
-    inclusionFee,
-    resourceFee: minResourceFee,
-    totalFee: expectedTotal,
-  };
-
-  if (config.CHAIN_EXECUTION_MODE === 'dry-run') {
-    logger.info(
-      {
+    let tx: AssembledTransaction<unknown>;
+    try {
+      tx = await call({ fee: inclusionFee, timeoutInSeconds }, signer);
+    } catch (err) {
+      throw new ChainError(`${method} could not be built`, contractErrorName(contract, err), {
         method,
-        args: printable(args),
-        simulated: printable(simulated),
-        timeoutInSeconds,
-        minTime: minTime.toString(),
-        maxTime: maxTime.toString(),
-      },
-      'dry-run: simulated, not submitted',
-    );
-    return { mode: 'dry-run', method, value: simulated, txHash: null, fee: feeDetails };
-  }
+        cause: err instanceof Error ? err.message : String(err),
+      });
+    }
+    const simulated = simulatedValue<T>(contract, method, tx);
 
-  if (typeof (tx as any).sign === 'function') {
-    await (tx as any).sign();
-  }
+    // A pause that landed while the transaction was being built stops here.
+    await assertAgentActiveLocked(scope, seenVersion);
+
+    const minResourceFee = BigInt((tx.simulation as any)?.minResourceFee ?? '0');
+    const expectedTotal = inclusionFee + minResourceFee;
+
+    if (minResourceFee > policy.budget) {
+      if (config.CHAIN_EXECUTION_MODE === 'dry-run') {
+        logger.warn(
+          { opClass, minResourceFee: minResourceFee.toString(), budget: policy.budget.toString() },
+          'Fee budget exceeded (dry-run)',
+        );
+      } else {
+        throw new ChainError(
+          `Resource fee ${minResourceFee.toString()} exceeds budget ${policy.budget.toString()} for ${opClass}`,
+          'FEE_BUDGET_EXCEEDED',
+          {
+            opClass,
+            minResourceFee: minResourceFee.toString(),
+            budget: policy.budget.toString(),
+            simulatedResources: tx.simulation,
+          },
+          'FEE_BUDGET_EXCEEDED',
+        );
+      }
+    }
+
+    const rawBuiltFee = (tx as any)?.built?.fee;
+    if (rawBuiltFee !== undefined && rawBuiltFee !== null) {
+      const builtFee = BigInt(rawBuiltFee);
+      if (builtFee !== expectedTotal) {
+        logger.warn(
+          { opClass, builtFee: builtFee.toString(), expectedTotal: expectedTotal.toString() },
+          'Built fee differs from inclusion fee + minResourceFee',
+        );
+      }
+    }
+
+    const rawMaxTime = (tx as any)?.built?.timeBounds?.maxTime;
+    const maxTime = rawMaxTime !== undefined
+      ? BigInt(rawMaxTime)
+      : BigInt(Math.floor(Date.now() / 1000) + timeoutInSeconds);
+    const minTime = 0n;
+
+    let authExpLedger: number | null = null;
+    if (leasedChannel) {
+      const agentPub = Keypair.fromSecret(config.AGENT_SECRET_KEY).publicKey();
+      verifyChannelAuthEntries(tx, agentPub, method);
+
+      const simLatestLedger = Number((tx.simulation as any)?.latestLedger ?? 0);
+      const simCloseTime = Number((tx.simulation as any)?.latestLedgerCloseTime ?? Math.floor(Date.now() / 1000));
+      authExpLedger = authExpirationLedger({
+        latestLedger: simLatestLedger,
+        latestLedgerCloseTime: simCloseTime,
+        maxTime: Number(maxTime),
+      });
+
+      if (typeof (tx as any).signAuthEntries === 'function') {
+        await (tx as any).signAuthEntries({ expirationLedger: authExpLedger });
+      }
+
+      // Re-simulate after signing auth entries (#37)
+      if (typeof (tx as any).simulate === 'function') {
+        await (tx as any).simulate();
+      }
+    }
+
+    const feeDetails: FeeDetails = {
+      opClass,
+      inclusionFee,
+      resourceFee: minResourceFee,
+      totalFee: expectedTotal,
+    };
+
+    if (config.CHAIN_EXECUTION_MODE === 'dry-run') {
+      logger.info(
+        {
+          method,
+          args: printable(args),
+          simulated: printable(simulated),
+          timeoutInSeconds,
+          minTime: minTime.toString(),
+          maxTime: maxTime.toString(),
+        },
+        'dry-run: simulated, not submitted',
+      );
+      return { mode: 'dry-run', method, value: simulated, txHash: null, fee: feeDetails };
+    }
+
+    if (typeof (tx as any).sign === 'function') {
+      await (tx as any).sign();
+    }
 
   let txHash: string | null = null;
   try {
@@ -499,6 +540,12 @@ async function submitWrite<T>(
   const value = simulatedValueFromSent<T>(contract, method, (confirmedTx as any)?.returnValue ?? simulated);
   logger.info({ method, txHash: finalHash }, 'submitted and confirmed');
   return { mode: 'live', method, value, txHash: finalHash, fee: liveFeeDetails };
+  } finally {
+    if (leasedChannel) {
+      await leasedChannel.release();
+    }
+  }
+}
 
 function simulatedValueFromSent<T>(contract: ContractKey, method: string, result: unknown): T {
   if (result && typeof result === 'object' && 'isOk' in result) {
@@ -623,18 +670,18 @@ export interface CreateMarketArgs {
 }
 
 export const agentCreateMarket = (args: CreateMarketArgs, signal?: AbortSignal) =>
-  write<bigint>('MARKET_MAKER', 'market_create', 'treasury', 'agent_create_market', { ...args }, async (opts) =>
-    agentClients.treasury().agent_create_market(args, opts as any), signal,
+  write<bigint>('MARKET_MAKER', 'market_create', 'treasury', 'agent_create_market', { ...args }, async (opts, signer) =>
+    agentClients.treasury(signer).agent_create_market(args, opts as any), signal,
   );
 
 export const agentBuy = (args: { market_id: bigint; outcome: Outcome; collateral_in: bigint; min_shares_out: bigint }, signal?: AbortSignal) =>
-  write<bigint>('TRADER', 'trade', 'treasury', 'agent_buy', args, async (opts) =>
-    agentClients.treasury().agent_buy(args, opts as any), signal,
+  write<bigint>('TRADER', 'trade', 'treasury', 'agent_buy', args, async (opts, signer) =>
+    agentClients.treasury(signer).agent_buy(args, opts as any), signal,
   );
 
 export const agentSell = (args: { market_id: bigint; outcome: Outcome; collateral_out: bigint; max_shares_in: bigint }, signal?: AbortSignal) =>
-  write<bigint>('TRADER', 'trade', 'treasury', 'agent_sell', args, async (opts) =>
-    agentClients.treasury().agent_sell(args, opts as any), signal,
+  write<bigint>('TRADER', 'trade', 'treasury', 'agent_sell', args, async (opts, signer) =>
+    agentClients.treasury(signer).agent_sell(args, opts as any), signal,
   );
 
 export const publishTrace = (args: {
@@ -644,6 +691,6 @@ export const publishTrace = (args: {
   trace_hash: Buffer;
   ipfs_cid: string;
 }, signal?: AbortSignal, scope: AgentScope = agentScopeForTraceAction(args.action)) =>
-  write<bigint>(scope, 'trace_publish', 'reasoningRegistry', 'publish_trace', args, async (opts) =>
-    agentClients.reasoningRegistry().publish_trace(args, opts as any), signal,
+  write<bigint>(scope, 'trace_publish', 'reasoningRegistry', 'publish_trace', args, async (opts, signer) =>
+    agentClients.reasoningRegistry(signer).publish_trace(args, opts as any), signal,
   );

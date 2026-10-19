@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import crypto from 'crypto';
 import os from 'os';
 import dotenv from 'dotenv';
@@ -147,6 +148,13 @@ const envSchema = z
     TIMEOUT_MAINTENANCE_SECONDS: z.string().default('30').transform(Number).pipe(z.number().int().min(10).max(120)),
     AUTH_EXPIRY_MARGIN_LEDGERS: z.string().default('12').transform(Number).pipe(z.number().int().min(2).max(100)),
     MAX_REBUILD_COUNT: z.string().default('2').transform(Number).pipe(z.number().int().min(0).max(10)),
+
+    // ── Channel Accounts (#37) ────────────────────────────────────────────
+    CHANNEL_SECRET_KEYS: optionalString,
+    CHANNELS_SECRETS_FILE: optionalString,
+    CHANNEL_MIN_BALANCE_XLM: z.string().default('5').transform(Number).pipe(z.number().positive()),
+    CHANNEL_ACQUIRE_TIMEOUT_MS: z.string().default('5000').transform(Number).pipe(z.number().int().positive()),
+    CHANNEL_LEASE_MS: z.string().default('60000').transform(Number).pipe(z.number().int().positive()),
 
     TRUST_INBOUND_REQUEST_ID: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
     INDEXER_ENABLED: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
@@ -356,6 +364,72 @@ const envSchema = z
           path: ['STELLAR_NETWORK_PASSPHRASE'],
           message: 'live mode is testnet-only; use the testnet passphrase',
         });
+      }
+    }
+
+    // ── Channel Accounts validation (#37) ──
+    const channelKeys: string[] = [];
+    if (env.CHANNEL_SECRET_KEYS) {
+      for (const k of env.CHANNEL_SECRET_KEYS.split(',')) {
+        const trimmed = k.trim();
+        if (trimmed) channelKeys.push(trimmed);
+      }
+    }
+    if (env.CHANNELS_SECRETS_FILE && fs.existsSync(env.CHANNELS_SECRETS_FILE)) {
+      try {
+        const content = fs.readFileSync(env.CHANNELS_SECRETS_FILE, 'utf-8');
+        for (const line of content.split('\n')) {
+          const trimmed = line.trim();
+          if (trimmed && !trimmed.startsWith('#') && StrKey.isValidEd25519SecretSeed(trimmed)) {
+            channelKeys.push(trimmed);
+          }
+        }
+      } catch {
+        ctx.addIssue({ code: 'custom', path: ['CHANNELS_SECRETS_FILE'], message: 'could not read channels secrets file' });
+      }
+    }
+
+    if (channelKeys.length > 0) {
+      if (env.CHAIN_EXECUTION_MODE === 'live' && env.STELLAR_NETWORK_PASSPHRASE !== Networks.TESTNET) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['CHANNEL_SECRET_KEYS'],
+          message: 'channel accounts are testnet-only',
+        });
+      }
+      const seenChannels = new Set<string>();
+      for (const key of channelKeys) {
+        if (!StrKey.isValidEd25519SecretSeed(key)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['CHANNEL_SECRET_KEYS'],
+            message: 'contains invalid Stellar secret seed',
+          });
+          continue;
+        }
+        if (seenChannels.has(key)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['CHANNEL_SECRET_KEYS'],
+            message: 'duplicate channel secret key configured',
+          });
+        }
+        seenChannels.add(key);
+
+        if (env.AGENT_SECRET_KEY && key === env.AGENT_SECRET_KEY) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['CHANNEL_SECRET_KEYS'],
+            message: 'channel secret key must not equal AGENT_SECRET_KEY',
+          });
+        }
+        if (env.AUTH_SIGNING_SECRET && key === env.AUTH_SIGNING_SECRET) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['CHANNEL_SECRET_KEYS'],
+            message: 'channel secret key must not equal AUTH_SIGNING_SECRET',
+          });
+        }
       }
     }
     if (env.FEE_POLICY_JSON) {
