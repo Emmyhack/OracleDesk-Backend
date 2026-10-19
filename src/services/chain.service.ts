@@ -35,13 +35,39 @@ import {
   type AgentScope,
 } from './agent-controls.service';
 
-export { ArchivedEntryError };
+import { Keypair, scValToNative } from '@stellar/stellar-sdk';
+import { prisma } from '../lib/prisma';
+import { getFeeOracle, type OperationClass } from './stellar/fees';
+import { timeoutFor, decideExpiry, ExpiredError, type ExpiryDecision, authExpirationLedger } from './stellar/timebounds';
+import {
+  getTransactionReader,
+  getTransactionSender,
+  type TransactionReader,
+  type TransactionSender,
+} from './stellar/tx-inspect';
+import {
+  getChannelPool,
+  channelSigner,
+  verifyChannelAuthEntries,
+  type LeasedChannel,
+  type Signer,
+} from './stellar/channels';
+
+export { ExpiredError };
 
 type ContractKey = 'marketCore' | 'treasury' | 'resolver' | 'reasoningRegistry';
 
+export interface FeeDetails {
+  opClass: OperationClass;
+  inclusionFee: bigint;
+  resourceFee: bigint;
+  totalFee: bigint;
+  feeCharged?: bigint;
+}
+
 export type WriteResult<T> =
-  | { mode: 'dry-run'; method: string; value: T; txHash: null }
-  | { mode: 'live'; method: string; value: T; txHash: string | null };
+  | { mode: 'dry-run'; method: string; value: T; txHash: null; fee?: FeeDetails }
+  | { mode: 'live'; method: string; value: T; txHash: string | null; fee?: FeeDetails };
 
 export const Outcomes = {
   Yes: { tag: 'Yes', values: undefined } as Outcome,
@@ -125,15 +151,16 @@ async function read<T>(
  */
 async function write<T>(
   scope: AgentScope,
+  opClass: OperationClass,
   contract: 'treasury' | 'reasoningRegistry',
   method: string,
   args: Record<string, unknown>,
-  call: () => Promise<AssembledTransaction<unknown>>,
+  call: (options?: { fee?: bigint; timeoutInSeconds?: number }, signer?: Signer) => Promise<AssembledTransaction<unknown>>,
   signal?: AbortSignal,
 ): Promise<WriteResult<T>> {
   const seenVersion = await assertAgentActive(scope);
   try {
-    const result = await submitWrite<T>(scope, seenVersion, contract, method, args, call, signal);
+    const result = await submitWrite<T>(scope, seenVersion, opClass, contract, method, args, call, signal);
     await recordChainWriteOutcome(scope, true, null);
     return result;
   } catch (err) {
@@ -148,30 +175,134 @@ async function write<T>(
 async function submitWrite<T>(
   scope: AgentScope,
   seenVersion: number,
+  opClass: OperationClass,
   contract: 'treasury' | 'reasoningRegistry',
   method: string,
   args: Record<string, unknown>,
-  call: () => Promise<AssembledTransaction<unknown>>,
+  call: (options?: { fee?: bigint; timeoutInSeconds?: number }, signer?: Signer) => Promise<AssembledTransaction<unknown>>,
   signal?: AbortSignal,
 ): Promise<WriteResult<T>> {
-  let tx: AssembledTransaction<unknown>;
+  const oracle = getFeeOracle();
+  const policy = oracle.getPolicies()[opClass];
+  const inclusionFee = await oracle.pickInclusionFee(opClass);
+  const timeoutInSeconds = timeoutFor(opClass);
+
+  let leasedChannel: LeasedChannel | null = null;
+  let signer: Signer | undefined = undefined;
+
+  if (config.CHAIN_EXECUTION_MODE === 'live') {
+    const pool = getChannelPool();
+    if (pool.size > 0) {
+      leasedChannel = await pool.acquire();
+      const agentKeypair = Keypair.fromSecret(config.AGENT_SECRET_KEY);
+      signer = channelSigner(leasedChannel.channel.keypair, agentKeypair);
+    }
+  }
+
   try {
-    tx = await call();
-  } catch (err) {
-    throw new ChainError(`${method} could not be built`, contractErrorName(contract, err), {
-      method,
-      cause: err instanceof Error ? err.message : String(err),
-    });
-  }
-  const simulated = simulatedValue<T>(contract, method, tx);
+    let tx: AssembledTransaction<unknown>;
+    try {
+      tx = await call({ fee: inclusionFee, timeoutInSeconds }, signer);
+    } catch (err) {
+      throw new ChainError(`${method} could not be built`, contractErrorName(contract, err), {
+        method,
+        cause: err instanceof Error ? err.message : String(err),
+      });
+    }
+    const simulated = simulatedValue<T>(contract, method, tx);
 
-  // A pause that landed while the transaction was being built stops here.
-  await assertAgentActiveLocked(scope, seenVersion);
+    // A pause that landed while the transaction was being built stops here.
+    await assertAgentActiveLocked(scope, seenVersion);
 
-  if (config.CHAIN_EXECUTION_MODE === 'dry-run') {
-    logger.info({ method, args: printable(args), simulated: printable(simulated) }, 'dry-run: simulated, not submitted');
-    return { mode: 'dry-run', method, value: simulated, txHash: null };
-  }
+    const minResourceFee = BigInt((tx.simulation as any)?.minResourceFee ?? '0');
+    const expectedTotal = inclusionFee + minResourceFee;
+
+    if (minResourceFee > policy.budget) {
+      if (config.CHAIN_EXECUTION_MODE === 'dry-run') {
+        logger.warn(
+          { opClass, minResourceFee: minResourceFee.toString(), budget: policy.budget.toString() },
+          'Fee budget exceeded (dry-run)',
+        );
+      } else {
+        throw new ChainError(
+          `Resource fee ${minResourceFee.toString()} exceeds budget ${policy.budget.toString()} for ${opClass}`,
+          'FEE_BUDGET_EXCEEDED',
+          {
+            opClass,
+            minResourceFee: minResourceFee.toString(),
+            budget: policy.budget.toString(),
+            simulatedResources: tx.simulation,
+          },
+          'FEE_BUDGET_EXCEEDED',
+        );
+      }
+    }
+
+    const rawBuiltFee = (tx as any)?.built?.fee;
+    if (rawBuiltFee !== undefined && rawBuiltFee !== null) {
+      const builtFee = BigInt(rawBuiltFee);
+      if (builtFee !== expectedTotal) {
+        logger.warn(
+          { opClass, builtFee: builtFee.toString(), expectedTotal: expectedTotal.toString() },
+          'Built fee differs from inclusion fee + minResourceFee',
+        );
+      }
+    }
+
+    const rawMaxTime = (tx as any)?.built?.timeBounds?.maxTime;
+    const maxTime = rawMaxTime !== undefined
+      ? BigInt(rawMaxTime)
+      : BigInt(Math.floor(Date.now() / 1000) + timeoutInSeconds);
+    const minTime = 0n;
+
+    let authExpLedger: number | null = null;
+    if (leasedChannel) {
+      const agentPub = Keypair.fromSecret(config.AGENT_SECRET_KEY).publicKey();
+      verifyChannelAuthEntries(tx, agentPub, method);
+
+      const simLatestLedger = Number((tx.simulation as any)?.latestLedger ?? 0);
+      const simCloseTime = Number((tx.simulation as any)?.latestLedgerCloseTime ?? Math.floor(Date.now() / 1000));
+      authExpLedger = authExpirationLedger({
+        latestLedger: simLatestLedger,
+        latestLedgerCloseTime: simCloseTime,
+        maxTime: Number(maxTime),
+      });
+
+      if (typeof (tx as any).signAuthEntries === 'function') {
+        await (tx as any).signAuthEntries({ expirationLedger: authExpLedger });
+      }
+
+      // Re-simulate after signing auth entries (#37)
+      if (typeof (tx as any).simulate === 'function') {
+        await (tx as any).simulate();
+      }
+    }
+
+    const feeDetails: FeeDetails = {
+      opClass,
+      inclusionFee,
+      resourceFee: minResourceFee,
+      totalFee: expectedTotal,
+    };
+
+    if (config.CHAIN_EXECUTION_MODE === 'dry-run') {
+      logger.info(
+        {
+          method,
+          args: printable(args),
+          simulated: printable(simulated),
+          timeoutInSeconds,
+          minTime: minTime.toString(),
+          maxTime: maxTime.toString(),
+        },
+        'dry-run: simulated, not submitted',
+      );
+      return { mode: 'dry-run', method, value: simulated, txHash: null, fee: feeDetails };
+    }
+
+    if (typeof (tx as any).sign === 'function') {
+      await (tx as any).sign();
+    }
 
   let txHash: string | null = null;
   try {
@@ -181,12 +312,21 @@ async function submitWrite<T>(
     }
   } catch {}
 
+  const sender = getTransactionSender();
+  const reader = getTransactionReader();
+
+  let sendRes: any;
   try {
-    const sent = await withTimeout('rpc-write', async () => tx.signAndSend(), { signal });
-    const value = simulatedValueFromSent<T>(contract, method, sent.result);
-    const finalHash = sent.sendTransactionResponse?.hash ?? txHash;
-    logger.info({ method, txHash: finalHash }, 'submitted');
-    return { mode: 'live', method, value, txHash: finalHash };
+    sendRes = await withTimeout(
+      'rpc-write',
+      async () => {
+        if (typeof sender.sendTransaction === 'function') {
+          return sender.sendTransaction((tx as any).built ?? tx);
+        }
+        return (tx as any).send?.() ?? (tx as any).signAndSend?.();
+      },
+      { signal },
+    );
   } catch (err: any) {
     if (err instanceof TimeoutError || err?.code === 'UPSTREAM_TIMEOUT') {
       throw new ChainError(
@@ -200,6 +340,210 @@ async function submitWrite<T>(
       method,
       cause: err instanceof Error ? err.message : String(err),
     });
+  }
+
+  const finalHash = sendRes?.sendTransactionResponse?.hash ?? sendRes?.hash ?? txHash;
+  if (!finalHash) {
+    throw new ChainError(`${method} no transaction hash returned from send`, null, { method });
+  }
+
+  const submittedLedger = sendRes?.latestLedger ?? (tx.simulation as any)?.latestLedger;
+  const submittedAtCloseTime = sendRes?.latestLedgerCloseTime !== undefined
+    ? BigInt(sendRes.latestLedgerCloseTime)
+    : undefined;
+
+  if (sendRes?.latestLedgerCloseTime) {
+    const hostSec = Math.floor(Date.now() / 1000);
+    if (Math.abs(hostSec - Number(sendRes.latestLedgerCloseTime)) > 30) {
+      logger.warn(
+        { hostTime: hostSec, ledgerCloseTime: Number(sendRes.latestLedgerCloseTime) },
+        'Host clock differs from ledger close time by > 30s',
+      );
+    }
+  }
+
+  const attemptId = (args as any)?.attemptId ?? null;
+  const pollIntervalMs = 2000;
+  const maxPollTimeoutMs = (timeoutInSeconds + 30) * 1000;
+  const pollStart = Date.now();
+  let confirmedTx: any = null;
+  let decision: ExpiryDecision = 'PENDING';
+
+  while (Date.now() - pollStart < maxPollTimeoutMs) {
+    if (signal?.aborted) {
+      throw new ChainError(
+        `${method} poll aborted`,
+        null,
+        { outcome: 'unknown', txHash: finalHash },
+        'CHAIN_SUBMISSION_TIMEOUT',
+      );
+    }
+
+    let txStatusRes: any;
+    try {
+      txStatusRes = await reader.getTransaction(finalHash);
+    } catch (err: any) {
+      logger.warn({ err: err?.message, txHash: finalHash }, 'getTransaction poll error; retrying');
+    }
+
+    if (txStatusRes) {
+      const latestLedgerCloseTime = Number(txStatusRes.latestLedgerCloseTime ?? Math.floor(Date.now() / 1000));
+      const oldestLedgerCloseTime = txStatusRes.oldestLedgerCloseTime !== undefined ? Number(txStatusRes.oldestLedgerCloseTime) : undefined;
+
+      decision = decideExpiry({
+        status: txStatusRes.status,
+        latestLedgerCloseTime,
+        maxTime: Number(maxTime),
+        submittedAtCloseTime: submittedAtCloseTime !== undefined ? Number(submittedAtCloseTime) : undefined,
+        oldestLedgerCloseTime,
+      });
+
+      if (decision === 'LANDED' || decision === 'FAILED') {
+        confirmedTx = txStatusRes;
+        break;
+      }
+
+      if (decision === 'EXPIRED') {
+        await prisma.chainSubmission.upsert({
+          where: { txHash: finalHash },
+          create: {
+            txHash: finalHash,
+            opClass,
+            minTime,
+            maxTime,
+            authExpirationLedger: (tx as any).authExpirationLedger ?? null,
+            submittedLedger: submittedLedger ? Number(submittedLedger) : null,
+            submittedAtCloseTime,
+            decision: 'EXPIRED',
+            attemptId,
+          },
+          update: { decision: 'EXPIRED' },
+        }).catch(() => undefined);
+
+        throw new ExpiredError(`Transaction ${finalHash} expired without inclusion`, attemptId, finalHash);
+      }
+
+      if (decision === 'UNKNOWN') {
+        await prisma.chainSubmission.upsert({
+          where: { txHash: finalHash },
+          create: {
+            txHash: finalHash,
+            opClass,
+            minTime,
+            maxTime,
+            authExpirationLedger: (tx as any).authExpirationLedger ?? null,
+            submittedLedger: submittedLedger ? Number(submittedLedger) : null,
+            submittedAtCloseTime,
+            decision: 'UNKNOWN',
+            attemptId,
+          },
+          update: { decision: 'UNKNOWN' },
+        }).catch(() => undefined);
+
+        throw new ChainError(
+          `Transaction ${finalHash} outcome is unknown (beyond RPC retention window)`,
+          null,
+          { outcome: 'unknown', txHash: finalHash },
+          'CHAIN_TX_UNKNOWN',
+        );
+      }
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+
+  if (decision === 'PENDING') {
+    await prisma.chainSubmission.upsert({
+      where: { txHash: finalHash },
+      create: {
+        txHash: finalHash,
+        opClass,
+        minTime,
+        maxTime,
+        authExpirationLedger: (tx as any).authExpirationLedger ?? null,
+        submittedLedger: submittedLedger ? Number(submittedLedger) : null,
+        submittedAtCloseTime,
+        decision: 'PENDING',
+        attemptId,
+      },
+      update: { decision: 'PENDING' },
+    }).catch(() => undefined);
+
+    throw new ChainError(
+      `${method} submission timed out while still PENDING`,
+      null,
+      { outcome: 'unknown', txHash: finalHash },
+      'CHAIN_SUBMISSION_TIMEOUT',
+    );
+  }
+
+  if (decision === 'FAILED') {
+    await prisma.chainSubmission.upsert({
+      where: { txHash: finalHash },
+      create: {
+        txHash: finalHash,
+        opClass,
+        minTime,
+        maxTime,
+        authExpirationLedger: (tx as any).authExpirationLedger ?? null,
+        submittedLedger: submittedLedger ? Number(submittedLedger) : null,
+        submittedAtCloseTime,
+        decision: 'FAILED',
+        attemptId,
+      },
+      update: { decision: 'FAILED' },
+    }).catch(() => undefined);
+
+    const errName = contractErrorName(contract, confirmedTx);
+    throw new ChainError(`${method} failed on-chain: ${errName ?? 'Unknown error'}`, errName, { method, txHash: finalHash });
+  }
+
+  // Record LANDED submission
+  await prisma.chainSubmission.upsert({
+    where: { txHash: finalHash },
+    create: {
+      txHash: finalHash,
+      opClass,
+      minTime,
+      maxTime,
+      authExpirationLedger: (tx as any).authExpirationLedger ?? null,
+      submittedLedger: submittedLedger ? Number(submittedLedger) : null,
+      submittedAtCloseTime,
+      decision: 'LANDED',
+      attemptId,
+    },
+    update: { decision: 'LANDED' },
+  }).catch(() => undefined);
+
+  const feeChargedRaw = (confirmedTx as any)?.feeCharged ?? (sendRes as any)?.feeCharged;
+  const feeCharged = feeChargedRaw !== undefined ? BigInt(feeChargedRaw) : expectedTotal;
+  const liveFeeDetails: FeeDetails = {
+    ...feeDetails,
+    feeCharged,
+  };
+
+  await prisma.chainFee.upsert({
+    where: { txHash: finalHash },
+    create: {
+      txHash: finalHash,
+      opClass,
+      inclusionFee,
+      resourceFee: minResourceFee,
+      totalFee: expectedTotal,
+      feeCharged,
+    },
+    update: {
+      feeCharged,
+    },
+  }).catch((err: any) => logger.warn({ err: err?.message, txHash: finalHash }, 'Failed to record chain fee'));
+
+  const value = simulatedValueFromSent<T>(contract, method, (confirmedTx as any)?.returnValue ?? simulated);
+  logger.info({ method, txHash: finalHash }, 'submitted and confirmed');
+  return { mode: 'live', method, value, txHash: finalHash, fee: liveFeeDetails };
+  } finally {
+    if (leasedChannel) {
+      await leasedChannel.release();
+    }
   }
 }
 
@@ -326,15 +670,19 @@ export interface CreateMarketArgs {
 }
 
 export const agentCreateMarket = (args: CreateMarketArgs, signal?: AbortSignal) =>
-  write<bigint>('MARKET_MAKER', 'treasury', 'agent_create_market', { ...args }, async () =>
-    agentClients.treasury().agent_create_market(args), signal,
+  write<bigint>('MARKET_MAKER', 'market_create', 'treasury', 'agent_create_market', { ...args }, async (opts, signer) =>
+    agentClients.treasury(signer).agent_create_market(args, opts as any), signal,
   );
 
 export const agentBuy = (args: { market_id: bigint; outcome: Outcome; collateral_in: bigint; min_shares_out: bigint }, signal?: AbortSignal) =>
-  write<bigint>('TRADER', 'treasury', 'agent_buy', args, async () => agentClients.treasury().agent_buy(args), signal);
+  write<bigint>('TRADER', 'trade', 'treasury', 'agent_buy', args, async (opts, signer) =>
+    agentClients.treasury(signer).agent_buy(args, opts as any), signal,
+  );
 
 export const agentSell = (args: { market_id: bigint; outcome: Outcome; collateral_out: bigint; max_shares_in: bigint }, signal?: AbortSignal) =>
-  write<bigint>('TRADER', 'treasury', 'agent_sell', args, async () => agentClients.treasury().agent_sell(args), signal);
+  write<bigint>('TRADER', 'trade', 'treasury', 'agent_sell', args, async (opts, signer) =>
+    agentClients.treasury(signer).agent_sell(args, opts as any), signal,
+  );
 
 export const publishTrace = (args: {
   agent: string;
@@ -343,6 +691,6 @@ export const publishTrace = (args: {
   trace_hash: Buffer;
   ipfs_cid: string;
 }, signal?: AbortSignal, scope: AgentScope = agentScopeForTraceAction(args.action)) =>
-  write<bigint>(scope, 'reasoningRegistry', 'publish_trace', args, async () =>
-    agentClients.reasoningRegistry().publish_trace(args), signal,
+  write<bigint>(scope, 'trace_publish', 'reasoningRegistry', 'publish_trace', args, async (opts, signer) =>
+    agentClients.reasoningRegistry(signer).publish_trace(args, opts as any), signal,
   );

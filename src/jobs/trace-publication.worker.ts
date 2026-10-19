@@ -23,7 +23,7 @@ import { logger } from '../lib/logger';
 import { config } from '../config';
 import { AppError } from '../middlewares/error.middleware';
 import { pinJson } from '../services/ipfs.service';
-import { publishTrace } from '../services/chain.service';
+import { publishTrace, ExpiredError } from '../services/chain.service';
 import { ChainError } from '../services/stellar/errors';
 import { AgentPausedError } from '../services/agent-controls.service';
 import { agentSigner } from '../services/stellar/clients';
@@ -331,6 +331,18 @@ async function handleError(row: PublicationRow, err: unknown, ctx: Ctx): Promise
     await update(ctx, row.id, { nextAttemptAt: after(ctx.now, PAUSED_RECHECK_MS) });
     logger.info({ traceId: row.traceId }, 'Trace publication deferred: agent paused');
     return row.status;
+  }
+  if (err instanceof ExpiredError) {
+    const attempts = row.attempts + 1;
+    await update(ctx, row.id, {
+      status: S.READY,
+      attempts,
+      submittedTxHash: err.txHash ?? null,
+      lastError: 'CHAIN_TX_EXPIRED',
+      nextAttemptAt: after(ctx.now, backoffMs(attempts)),
+    });
+    logger.info({ traceId: row.traceId, attempts, prevTxHash: err.txHash }, 'Trace publication expired; will rebuild and resubmit');
+    return S.READY;
   }
   const contractError = err instanceof ChainError ? err.contractError : null;
   const message = contractError ?? (err instanceof Error ? err.message : String(err));

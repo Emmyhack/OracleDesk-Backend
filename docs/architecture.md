@@ -24,6 +24,68 @@ Express 5 with helmet, hpp, an env CORS allowlist, rate limits (global, `/auth/*
 
 The contracts repo's `agents/stellar/adapter.ts` covers similar ground, but its dry-run doesn't simulate and it lacks `agent_sell`, so this service mirrors its method names instead of depending on it. The intended long-term split is that the agents package owns signing and this repo stays the API, indexer and LLM pipeline (see [contract-requests.md](contract-requests.md)).
 
+### Dynamic inclusion fees and resource budgets (#39)
+
+Stellar Soroban fees follow a two-part model:
+1. **Inclusion fee**: Classic Stellar transaction bid that prioritises the transaction in the ledger queue. The fee oracle (`src/services/stellar/fees.ts`) queries RPC `getFeeStats` with single-flight caching, selects the configured percentile for the operation class (`market_create`, `trade`, `trace_publish`, `maintenance`), and clamps it between the class `floor` and `cap`. If stats are missing, stale, or RPC fails, it falls back to the last good stats within `FEE_STATS_MAX_AGE_MS` or to the class floor.
+2. **Resource fee**: Soroban execution and storage fee computed during simulation (`tx.simulation.minResourceFee`). The transaction envelope's built fee equals `inclusionFee + minResourceFee`.
+
+**Operation Class Policies and Budgets**:
+- `market_create`: percentile `p90`, floor 0.01 XLM (100,000 stroops), cap 0.5 XLM (5,000,000 stroops), resource budget 5 XLM (50,000,000 stroops).
+- `trade`: percentile `p80`, floor 0.001 XLM (10,000 stroops), cap 0.2 XLM (2,000,000 stroops), resource budget 2.5 XLM (25,000,000 stroops).
+- `trace_publish`: percentile `p50`, floor 0.001 XLM (10,000 stroops), cap 0.1 XLM (1,000,000 stroops), resource budget 1.5 XLM (15,000,000 stroops).
+- `maintenance`: percentile `p50`, floor 0.001 XLM (10,000 stroops), cap 0.1 XLM (1,000,000 stroops), resource budget 1.5 XLM (15,000,000 stroops).
+
+Overrides can be provided at boot via `FEE_POLICY_JSON`.
+
+**Budget Enforcement and Calibration**:
+Before any live transaction is signed, `minResourceFee` is checked against the class budget. If it exceeds the budget, execution halts immediately with `FEE_BUDGET_EXCEEDED` (carrying simulation details and no secrets). In dry-run mode, the breach is logged as a warning and simulation continues.
+To calibrate budgets for production:
+1. Run cycles in dry-run mode (`CHAIN_EXECUTION_MODE=dry-run`).
+2. Search application logs for `dry-run: simulated, not submitted` and inspect the recorded `simulated.fee` and `minResourceFee` across operation classes.
+3. Set each class budget in `FEE_POLICY_JSON` to ~1.3x–1.5x the observed peak simulation fee to accommodate ledger state growth and contract rent variations without risking unbounded agent spend.
+Confirmed transactions record fee accounting in `chain_fees`, exposed via `GET /admin/fees` with daily p50/p95 charged quantiles and oracle health snapshots.
+
+### Transaction lifetime (#42)
+
+Every transaction built by `chain.service.ts` carries explicit timebounds (`minTime = 0`, `maxTime = submissionTime + timeoutInSeconds`) passed through generated binding options (`MethodOptions.timeoutInSeconds`).
+
+**Per-class Timeouts**:
+- `market_create`: `TIMEOUT_MARKET_CREATE_SECONDS` (default: 60 s, range: 15–300 s)
+- `trade`: `TIMEOUT_TRADE_SECONDS` (default: 30 s, range: 10–120 s)
+- `trace_publish`: `TIMEOUT_TRACE_PUBLISH_SECONDS` (default: 45 s, range: 10–180 s)
+- `maintenance`: `TIMEOUT_MAINTENANCE_SECONDS` (default: 30 s, range: 10–120 s)
+
+**Auth Entry Expiration**:
+`authExpirationLedger` is derived strictly from the transaction deadline: `latestLedger + ceil(timeoutInSeconds / 5) + AUTH_EXPIRY_MARGIN_LEDGERS` (default margin: 12 ledgers). An auth entry never expires before its enclosing transaction, nor outlives it by more than the margin.
+
+**Explicit Polling and Expiry Determination**:
+Instead of relying on SDK internal polling, `chain.service.ts` submits the transaction via `sendTransaction` and polls `getTransaction` every 2 seconds. The pure function `decideExpiry()` decides the state using Stellar ledger close time from the RPC response (never the local host clock):
+- `LANDED`: RPC status `SUCCESS`. Returns unwrapped execution value.
+- `FAILED`: RPC status `FAILED`. Throws typed `ChainError`.
+- `EXPIRED`: RPC status `NOT_FOUND`, latest ledger close time is strictly past `maxTime + skew` (skew: 10 s), and the submission is within the RPC retention window. Throws `ExpiredError` (code `CHAIN_TX_EXPIRED`) carrying `attemptId` and `txHash`.
+- `UNKNOWN`: RPC status `NOT_FOUND` where submission is older than the RPC retention window (`oldestLedgerCloseTime`). Non-inclusion cannot be proven. Throws `ChainError` with code `CHAIN_TX_UNKNOWN`, preserving the transaction hash.
+- `PENDING`: Transaction not yet included, but ledger time has not definitively passed `maxTime + skew`. If the poll loop reaches its local cap while still `PENDING` or `UNKNOWN`, it reports an ambiguous timeout (`CHAIN_SUBMISSION_TIMEOUT`) preserving `txHash`, never a failure or expiry.
+
+All submissions are tracked in `chain_submissions` (`tx_hash`, `op_class`, `min_time`, `max_time`, `auth_expiration_ledger`, `submitted_ledger`, `submitted_at_close_time`, `decision`, `rebuild_count`, `attempt_id`).
+
+**Safe Rebuild Rules**:
+- **Trades**: An expired trade catches `ExpiredError`. If `rebuildCount < MAX_REBUILD_COUNT`, the caller re-runs `quoteBuy` to obtain the fresh on-chain price and verifies that the edge still exceeds `MIN_EDGE_THRESHOLD` (8%). If edge degraded, the trade cancels with `INSUFFICIENT_EDGE`. If edge still holds, it resubmits with incremented `rebuildCount`, linking the old attempt.
+- **Trace Publication**: Trace publication is idempotent by `trace_hash`. On `ExpiredError`, it links the previous attempt and marks the queue row `READY` for immediate resubmission.
+- **Market Creation**: Rebuilds only after a definitive `EXPIRED` decision, and never after `UNKNOWN`.
+
+### Channel accounts (#37)
+
+To allow concurrent writes by autonomous agent workers without sequence collisions, the backend maintains a pool of channel accounts (`src/services/stellar/channels.ts`):
+
+- **Lease Coordination**: Channel accounts are leased across processes using Redis exclusive keys (`channel:lease:<public_key>`, `SET NX PX` with a Lua compare-and-delete release). Round-robin acquisition with jittered backoff distributes load.
+- **Signer Composition**: A leased channel serves as the transaction source account (signing the outer transaction envelope with `basicNodeSigner(channelKeypair)`). Privileged contract invocations require invocation authentication signed by the agent key (`AGENT_SECRET_KEY`).
+- **Simulated Auth Verification**: Before signing, auth entries from simulation are decoded: `needsNonInvokerSigningBy()` must return strictly the agent's public key (or empty); credentials must be address credentials for the agent; and the root invocation must match the expected method without unexpected sub-invocations.
+- **Expiration and Re-simulation**: Auth entries are signed with an expiration ledger derived from the transaction deadline (`authExpirationLedger` from #42). The transaction is re-simulated after signing auth entries to account for signature verification footprint before the channel signs the envelope.
+- **Lease Retention**: The channel account remains leased until the transaction leaves `PENDING` (confirming `LANDED`, `FAILED`, `EXPIRED`, or `UNKNOWN`), preventing sequence skew from lagging RPC nodes.
+- **Balance Monitoring**: A periodic background monitor inspects on-chain XLM balances via RPC, automatically removing channels below `CHANNEL_MIN_BALANCE_XLM` (default: 5 XLM) from rotation and emitting warnings with public keys only.
+- **Dry-run and Fallback**: In `dry-run` or when no channels are configured (`CHANNEL_SECRET_KEYS` empty), `write()` uses the agent account as source and skips leasing completely.
+
 ## Market creation (ADR 0001)
 
 `market-chain.service.ts` turns a generated proposal into an on-chain market:
@@ -33,6 +95,22 @@ The contracts repo's `agents/stellar/adapter.ts` covers similar ground, but its 
 3. Store the full spec and its hash next to the market, so anyone can later reveal it to `resolver.register_signer_spec`.
 4. Pin the canonical question JSON; `question_hash` is the sha256 of those exact bytes and `meta_uri` is `ipfs://<cid>`.
 5. Call `treasury.agent_create_market`. In live mode the returned id becomes `onChainMarketId` and the market goes `ACTIVE`; in dry-run it stays `PENDING`.
+
+### Idempotent market creation across ambiguous outcomes (#41)
+
+Because market creation locks treasury capital (`seed_amount`), duplicate creations spend capital twice. `market-chain.service.ts` wraps creation in an idempotent protocol:
+
+1. **Question Document Hash Invariant**: The question document pinned to IPFS embeds `backendMarketId: market.id`. If a proposal already has a stored `questionHash`, re-pinning must produce the exact same sha256 hash or creation aborts (`QUESTION_HASH_MISMATCH`).
+2. **Atomic Claim & Fencing**: An attempt record is created in `market_creation_attempts` with `INSERT ... ON CONFLICT DO NOTHING` followed by `SELECT ... FOR UPDATE`. Stale or retried attempts increment the `attempts` counter with a fencing check, preventing split-brain execution across slow or resumed workers.
+3. **Discovery Before Submission**: Before calling the treasury, the backend checks if the market already exists on-chain:
+   - Queries RPC `getTransaction` if a `txHash` is stored on the attempt.
+   - Searches indexed `MarketCreated` events in `chain_events` matching `question_hash` where `creator` is the treasury contract.
+   - Executes a bounded backwards scan of on-chain markets (`marketCount` downwards up to 50 markets).
+   Every candidate is confirmed by reading `get_market` and validating that `question_hash`, `resolution_hash`, and `creator === treasury` match. If found, it links immediately without submitting.
+4. **Pre-Submission Count**: Before submitting, the current on-chain `market_count` is recorded with the attempt.
+5. **Handling Ambiguous Outcomes**: Any error after `sendTransaction` marks the attempt as `UNKNOWN`, records `txHash`, and immediately triggers discovery. A retry is permitted only when `decideExpiry` returns `EXPIRED`.
+6. **Atomic Linking**: Linking updates both `markets` (`onChainMarketId`, `status: ACTIVE`) and `market_creation_attempts` (`status: LANDED`) in one transaction. A unique constraint violation on `onChainMarketId` logs `CREATION_ID_CONFLICT` and never overwrites existing markets.
+7. **Periodic Reconciliation**: A sweep in the ingestion cron periodically inspects unresolved attempts (`UNKNOWN` or `EXPIRED`) and links any landed markets.
 
 Backend categories are mapped to the contract enum by `toContractCategory()`.
 
