@@ -13,6 +13,7 @@ import {
 } from '../lib/llm-schema';
 import { logger } from "../lib/logger";
 import type {
+  AggregatedSignal,
   MarketProposal,
   AggregatedSignals,
   WeightedSignal,
@@ -37,6 +38,7 @@ import {
   type QuestionResolutionBlock,
 } from './resolvability.service';
 import { config } from '../config';
+import { now as clockNow } from '../lib/clock';
 import { extractQuestionDates, dayDiff } from '../lib/question-dates';
 import { extractEntities, sharedEntities, uniqueEntities } from './dedup-entities';
 import { getEmbeddingProvider, getVectorIndex, normalizeQuestion, type Neighbour } from './embeddings.service';
@@ -54,6 +56,8 @@ const MACRO_LIMIT = 4;
 interface PromptSignals {
   sent: SanitizedSignal[];
   quarantined: SanitizedSignal[];
+  /** Citable id (n1, f1, m1…) → the aggregated signal it was built from, store id included (#73). */
+  sources: Record<string, AggregatedSignal>;
 }
 
 /**
@@ -62,17 +66,23 @@ interface PromptSignals {
  */
 function selectPromptSignals(signals: AggregatedSignals): PromptSignals {
   const quarantined: SanitizedSignal[] = [];
-  const pick = (group: SanitizedSignal[], prefix: string, limit: number): SanitizedSignal[] => {
-    const parts = partitionSignals(group.map((s) => sanitizeSignal(s)));
+  const sources: Record<string, AggregatedSignal> = {};
+  const pick = (group: AggregatedSignal[], prefix: string, limit: number): SanitizedSignal[] => {
+    const sanitized = group.map((s) => sanitizeSignal(s));
+    const parts = partitionSignals(sanitized);
     quarantined.push(...parts.quarantined);
-    return parts.clean.slice(0, limit).map((s, i) => ({ ...s, id: `${prefix}${i + 1}` }));
+    return parts.clean.slice(0, limit).map((s, i) => {
+      const id = `${prefix}${i + 1}`;
+      sources[id] = group[sanitized.indexOf(s)];
+      return { ...s, id };
+    });
   };
   const sent = [
     ...pick(signals.news, 'n', NEWS_LIMIT),
     ...pick(signals.fed, 'f', FED_LIMIT),
     ...pick(signals.macro, 'm', MACRO_LIMIT),
   ];
-  return { sent, quarantined };
+  return { sent, quarantined, sources };
 }
 
 const hashSignal = (s: SanitizedSignal) => sha256Hex(canonicalJson(s));
@@ -95,6 +105,8 @@ export interface MarketPrompts {
   /** Signals shown to the model, with their citable ids. */
   sent: SanitizedSignal[];
   quarantined: SanitizedSignal[];
+  /** Citable id → aggregated signal (with its store id), for trace provenance. */
+  sources: Record<string, AggregatedSignal>;
 }
 
 /**
@@ -110,7 +122,7 @@ export function buildMarketPrompts(
   now: Date,
   opts: { nonceSeed?: string } = {},
 ): MarketPrompts {
-  const { sent, quarantined } = selectPromptSignals(signals);
+  const { sent, quarantined, sources } = selectPromptSignals(signals);
   const nonce = (label: string) =>
     opts.nonceSeed === undefined ? undefined : sha256Hex(`${opts.nonceSeed}:${label}`).slice(0, 12);
 
@@ -133,13 +145,15 @@ export function buildMarketPrompts(
     shownCount: sent.length,
     signalsBlock: renderUntrustedBlock(sent, 'untrusted_signals', nonce('untrusted_signals')),
   });
-  return { system, user, sent, quarantined };
+  return { system, user, sent, quarantined, sources };
 }
 
 export interface GeneratedProposal {
   proposal: MarketProposal;
   /** Who produced the proposal (#66); stored in Market.generationProvenance. */
   provenance: LlmProvenance;
+  /** The signals the proposal cites in grounding_signal_ids, as aggregated (#73). */
+  groundingSignals: AggregatedSignal[];
 }
 
 /**
@@ -161,7 +175,7 @@ export async function generateMarketQuestion(
     orderBy: { createdAt: 'desc' },
     take:   50,
   });
-  const { system, user, sent, quarantined } = buildMarketPrompts(signals, existingMarkets, new Date());
+  const { system, user, sent, quarantined, sources } = buildMarketPrompts(signals, existingMarkets, clockNow());
 
   if (quarantined.length > 0) {
     await logAgentAction('MARKET_MAKER', 'WARN', 'SIGNALS_QUARANTINED', null, {
@@ -213,7 +227,7 @@ export async function generateMarketQuestion(
 
   const proposal = parseProposal(value);
 
-  const verdict = checkProposal(proposal, sent, new Date());
+  const verdict = checkProposal(proposal, sent, clockNow());
   if (!verdict.ok) {
     const cited = new Set(proposal.grounding_signal_ids);
     await logAgentAction('MARKET_MAKER', 'WARN', 'PROPOSAL_REJECTED', null, {
@@ -227,7 +241,10 @@ export async function generateMarketQuestion(
       reasons: verdict.reasons,
     });
   }
-  return { proposal, provenance };
+  const groundingSignals = proposal.grounding_signal_ids
+    .map((id) => sources[id])
+    .filter((s): s is AggregatedSignal => Boolean(s));
+  return { proposal, provenance, groundingSignals };
 }
 
 /**

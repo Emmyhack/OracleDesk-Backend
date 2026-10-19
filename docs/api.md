@@ -421,10 +421,22 @@ was simulated, not submitted.
   "traceHash": "64-hex",
   "onChainTraceId": "3",
   "publishTxHash": "…",
-  "previewSources": [{ "source": "FRED", "weight": 0.9, "signal": "…" }],
+  "previewSources": [{ "source": "NEWSAPI", "publisher": "Reuters", "signal": "…" }],
   "market": { "question": "…", "category": "CRYPTO", "settlementCurrency": "USDC" },
   "createdAt": "…"
 }
+```
+
+`previewSources` names the source, publisher and headline only (#73). Traces
+created before #73 carry `{ source, weight, signal }` instead. The full trace
+(paid) lists `sourcesUsed`; entries written since #73 also carry the evidence's
+`signalId`, `url`, `publisher` and `publishedAt`, and `weight` is its relevance
+score. Treat all four as optional when reading older traces:
+
+```json
+{ "source": "NEWSAPI", "weight": 0.8812, "signal": "Federal Reserve holds rates steady…",
+  "signalId": "uuid", "url": "https://reuters.com/markets/…", "publisher": "Reuters",
+  "publishedAt": "2026-10-18T09:00:00.000Z" }
 ```
 
 `traceHash` is the sha256 of the exact bytes pinned to IPFS (renamed from

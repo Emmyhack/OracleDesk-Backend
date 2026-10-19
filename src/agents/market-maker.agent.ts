@@ -9,7 +9,7 @@ import {
 import { seedPolicyRecord } from '../services/seed-policy.service';
 import { toDisplayUsdc } from '../lib/amounts';
 import { prisma } from '../lib/prisma';
-import { generateReasoningTrace } from '../services/reasoning.service';
+import { evidenceFromSignals, generateReasoningTrace } from '../services/reasoning.service';
 import { createMarketOnChain, planMarketCreation } from '../services/market-chain.service';
 import { planPriceMarket } from '../services/price-resolution.service';
 import type { ResolutionSpecJson } from '../lib/resolution-spec';
@@ -88,8 +88,9 @@ export async function runMarketMakerCycle(
     // Step 2: Generate market proposal via the LLM
     let proposal;
     let proposalProvenance;
+    let groundingSignals;
     try {
-      ({ proposal, provenance: proposalProvenance } = await generateMarketQuestion(signals, genCtx));
+      ({ proposal, provenance: proposalProvenance, groundingSignals } = await generateMarketQuestion(signals, genCtx));
     } catch (err) {
       if (err instanceof LlmBudgetExceeded) {
         // One agent log per day, not one per 15-minute cycle.
@@ -195,7 +196,7 @@ export async function runMarketMakerCycle(
       ...proposal,
       initial_yes_probability: decision.pAdj,
       minimum_liquidity_usdc:  toDisplayUsdc(decision.seedRaw),
-    }, undefined, resolutionDetails);
+    }, proposalProvenance, resolutionDetails);
     const market = await prisma.market.update({ where: { id: created.id }, data: { seedPolicy: seedPolicy as object } });
     logger.info({ marketId: market.id, category: market.category }, 'Market Maker Agent: market created in DB');
 
@@ -220,18 +221,18 @@ export async function runMarketMakerCycle(
       marketId:            market.id,
       agentType:           'MARKET_MAKER',
       decisionType:        'MARKET_CREATION',
-      sourcesUsed:         signals.news.slice(0, 3).map(s => ({
-        source:   s.source,
-        weight:   0.7,
-        signal:   s.title,
-        rawValue: proposal.initial_yes_probability,
-      })),
+      // The evidence the proposal cites (#73), each with its signal id and link;
+      // the top news items when it cited none we can resolve.
+      sourcesUsed:         evidenceFromSignals(groundingSignals.length > 0 ? groundingSignals : signals.news.slice(0, 3)),
       probabilityEstimate: proposal.initial_yes_probability,
       marketProbability:   decision.pAdj,
       edge:                proposal.initial_yes_probability - decision.pAdj,
       confidenceInterval:  proposal.confidence_interval,
       seedPolicy,
-    }, { purpose: priority === 'admin' ? 'admin_trace_hedge' : 'trace_hedge', priority });
+    }, { purpose: priority === 'admin' ? 'admin_trace_hedge' : 'trace_hedge', priority }, {
+      // Who proposed the market comes first in the trace's provenance (#66).
+      upstreamProvenance: [proposalProvenance],
+    });
 
     signal.throwIfAborted();
 

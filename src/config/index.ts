@@ -357,6 +357,13 @@ const envSchema = z
     // ── Data sources ──────────────────────────────────────────────────────
     NEWSAPI_KEY: optionalString,
     FRED_API_KEY: optionalString,
+    // ── Signal store (#73) ────────────────────────────────────────────────
+    // A source is re-fetched once its last successful fetch is older than this.
+    SIGNAL_REFRESH_MINUTES: z.string().default('15').transform(Number)
+      .pipe(z.number().int().min(1).max(24 * 60)),
+    // Raw provider payloads are deleted after this many days.
+    SIGNAL_RAW_RETENTION_DAYS: z.string().default('7').transform(Number)
+      .pipe(z.number().int().min(1).max(365)),
 
     // ── Resilience & Timeouts ─────────────────────────────────────────────
     TIMEOUT_RPC_READ_MS: z.string().default('8000').transform(Number),

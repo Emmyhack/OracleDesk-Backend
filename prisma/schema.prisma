@@ -445,6 +445,8 @@ model ReasoningTrace {
   @@index([traceHash])
   @@index([createdAt])
   @@index([marketId, createdAt])
+  /// Retention (#73) keeps signals cited by a trace: `sourcesUsed @> [{"signalId": …}]`.
+  @@index([sourcesUsed(ops: JsonbPathOps)], type: Gin)
   @@map("reasoning_traces")
 }
 
@@ -561,6 +563,74 @@ model SignalCache {
 
   @@index([source, expiresAt])
   @@map("signal_cache")
+}
+
+/// Normalised evidence with a stable identity (#73). One row per article URL
+/// (or FRED observation), however often it is fetched; syndicated copies share
+/// a clusterId. Trace payloads cite rows by id. Replaces SignalCache, which is
+/// no longer written and is dropped in a follow-up migration.
+model Signal {
+  id                 String          @id @default(uuid())
+  /// NEWSAPI | FRED | GDELT
+  source             String
+  /// sha256 of the canonical URL, or of FRED:<series>:<observation date>.
+  dedupKey           String          @unique
+  externalId         String?
+  url                String?
+  publisher          String?
+  title              String
+  summary            String?
+  publishedAt        DateTime        @db.Timestamptz(3)
+  firstSeenAt        DateTime        @default(now()) @db.Timestamptz(3)
+  lastSeenAt         DateTime        @default(now()) @db.Timestamptz(3)
+  seenCount          Int             @default(1)
+  category           MarketCategory?
+  categoryConfidence Float?
+  /// Id of the oldest signal in this near-duplicate cluster (its own id when it started one).
+  clusterId          String?
+  /// FRED observation value.
+  numericValue       Float?
+  /// 64-bit SimHash of title + summary prefix, signed.
+  simhash            BigInt?
+
+  @@index([publishedAt])
+  @@index([clusterId])
+  @@index([source, lastSeenAt])
+  @@index([category, publishedAt])
+  @@map("signals")
+}
+
+/// One provider call (#73): when, how long, outcome and item counts.
+model SignalFetch {
+  id                 String   @id @default(uuid())
+  source             String
+  /// sha256 of the canonical request with credentials removed.
+  requestFingerprint String
+  startedAt          DateTime @default(now()) @db.Timestamptz(3)
+  durationMs         Int
+  /// ok | error | timeout | skipped_no_key
+  status             String
+  itemCount          Int      @default(0)
+  /// Provider items dropped before storage (no URL, unparseable date, missing value).
+  rejectedCount      Int      @default(0)
+  error              String?
+  rawPayloadId       String?
+
+  @@index([source, startedAt])
+  @@index([startedAt])
+  @@map("signal_fetches")
+}
+
+/// Provider response as received, credentials stripped, kept for
+/// SIGNAL_RAW_RETENTION_DAYS (#73).
+model SignalRawPayload {
+  id        String   @id @default(uuid())
+  source    String
+  payload   Json
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([createdAt])
+  @@map("signal_raw_payloads")
 }
 
 /// Ledger cursor for the Stellar event indexer, one row per network.

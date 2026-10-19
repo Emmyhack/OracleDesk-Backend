@@ -215,6 +215,37 @@ event deadline ──► source publishes ──► close_time ──► attesta
 - If only the close time is off and the deadline is unambiguous, it is clamped into `[max(earliestClose, now + 1 day), latestClose]` (`PROPOSAL_EXPIRY_REPAIRED`); otherwise the proposal is rejected (`PROPOSAL_UNRESOLVABLE`, with reason codes). Repair happens before `pinJson`, so the pinned document carries the final `closeTime`. The resolution hash does not cover close time and is unaffected.
 - The resolution block is stored in `Market.resolutionDetails` and pinned in question document v2 (see `docs/api.md`).
 
+## Signal store (#73)
+
+Every market and trade is justified by signals (NewsAPI articles, FRED observations, GDELT events). They are stored as normalised rows with stable identities, so a pinned trace can be audited against the exact evidence long after the fetch. `src/services/ingestion.service.ts` fetches; `signal-normalize.ts` holds the pure rules; `signal-store.service.ts` holds the store (`prismaSignalStore`, and `MemorySignalStore` for tests).
+
+| Table | Role |
+|---|---|
+| `signals` | One row per article or observation. `dedupKey` is unique: sha256 of the canonical URL, or of `FRED:<series>:<observation date>`. Keeps `url`, `publisher`, `publishedAt`, `firstSeenAt` / `lastSeenAt` / `seenCount`, `category` + `categoryConfidence`, `clusterId`, `numericValue` (FRED) and a 64-bit `simhash`. Title and summary are stored already sanitised (#70). |
+| `signal_fetches` | One row per provider call: request fingerprint (credentials removed), status `ok` / `error` / `timeout` / `skipped_no_key`, duration, item and rejected counts. |
+| `signal_raw_payloads` | The provider response with credential-named keys stripped, kept `SIGNAL_RAW_RETENTION_DAYS` (default 7). |
+
+`signal_cache` is no longer written and is dropped in a follow-up migration.
+
+**Identity.** The canonical URL lowercases scheme and host, drops `www.`, the fragment and tracking parameters (`utm_*`, `fbclid`, `gclid`, `ref`), and sorts the remaining parameters. NewsAPI `[Removed]` placeholders and articles without a URL are dropped; GDELT `seendate` (`YYYYMMDDTHHMMSSZ`) is parsed as UTC and an unparseable date is rejected, never stored as "now"; FRED `"."` (missing) observations are skipped. Rejections are counted in `signal_fetches.rejectedCount`. FRED's `api_key` is sent in `params` (the request URL is unchanged), so it can be stripped from every stored echo; no stored row contains a key (`tests/ingestion.test.ts`).
+
+**Writes.** One `INSERT … ON CONFLICT ("dedupKey") DO UPDATE SET "lastSeenAt" = …, "seenCount" = "seenCount" + 1` per 100 rows via `$queryRaw`, safe across replicas. There is no per-row Prisma upsert.
+
+**Near-duplicates.** Syndicated copies have different URLs, so they are different rows that share a `clusterId`. A new signal is compared with signals of the same category published in the last 48 h: SimHash Hamming distance ≤ 3, or Jaccard ≥ 0.6 over 5-word shingles of `title + first 200 chars of summary`, makes it a near-duplicate. Including the summary keeps templated headlines ("Stocks rise as …") apart. Cluster assignment is not atomic across replicas, so it is made idempotent: a signal always joins the oldest matching cluster (earliest `firstSeenAt`, then smallest id), and only rows without a `clusterId` are updated. FRED observations never cluster.
+
+**Reads.** A source is fetched only when its last `ok` fetch is older than `SIGNAL_REFRESH_MINUTES` (default 15); otherwise the agents read the store. `aggregateSignals()` takes signals last seen in the past 24 h and returns one representative per cluster (highest source weight, then newest; for FRED, the latest observation per series), each with `signalId`, `url`, `publisher` and `clusterSize`, sorted by
+
+```
+relevanceScore = sourceWeight × recencyDecay × log2(1 + clusterSize)
+recencyDecay   = 0.5 ^ (ageHours / 12)
+```
+
+`sourceWeight` is `SOURCE_WEIGHTS` (NEWSAPI 0.7, GDELT 0.6, FRED 0.9). Age is measured from `publishedAt`, except for FRED, whose observation date is the start of the reporting period: it ages from `lastSeenAt`. Syndication raises a story's score only logarithmically.
+
+**Traces.** `sourcesUsed` entries carry `signalId`, `url`, `publisher` and `publishedAt` (built by `evidenceFromSignals`), and their `weight` is the relevance score instead of a constant. The market maker records the signals its proposal cited in `grounding_signal_ids`. The free `previewSources` keep only `{source, publisher, signal}`. Traces written before #73 have no `signalId`; readers treat these fields as optional, and pinned payloads are never rewritten.
+
+**Retention.** Nightly at 03:41 (`startMonitorCron`): raw payloads older than `SIGNAL_RAW_RETENTION_DAYS`, fetch rows older than 30 days, and signals last seen more than 30 days ago that no trace cites. "Cited" is `reasoning_traces."sourcesUsed" @> '[{"signalId": …}]'`, served by a GIN `jsonb_path_ops` index on `sourcesUsed` (chosen over a `trace_signals` join table: the containment probe is an index lookup and needs no second write path). Deletes run in batches of 1 000.
+
 ## Reasoning traces
 
 A trace is canonicalised once (sorted keys, same rules as `agents/core/trace.ts`), pinned byte for byte with Pinata's `pinFileToIPFS`, and `trace_hash` is the sha256 of those bytes. It is published to reasoning-registry once its market is on-chain. `POST /traces/verify` re-fetches the bytes by the on-chain CID and compares them with the on-chain hash, like `x402/trace-verification.ts`.

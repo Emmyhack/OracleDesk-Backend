@@ -33,12 +33,26 @@ export interface WeightedSignal extends Record<string, unknown> {
   weight: number;
   signal: string;
   rawValue?: number;
+  /** Signal-store row the evidence came from (#73). Absent on traces written before it. */
+  signalId?: string;
+  url?: string;
+  publisher?: string | null;
+  publishedAt?: string;
+}
+
+/** One cluster representative from the signal store (#73). */
+export interface AggregatedSignal extends SanitizedSignal {
+  /** signals.id; stable, unlike `id`, which the prompt builder reassigns (n1, f1…). */
+  signalId: string;
+  publisher: string | null;
+  /** Distinct signals (outlets) in the near-duplicate cluster. */
+  clusterSize: number;
 }
 
 export interface AggregatedSignals {
-  news: SanitizedSignal[];
-  fed: SanitizedSignal[];
-  macro: SanitizedSignal[];
+  news: AggregatedSignal[];
+  fed: AggregatedSignal[];
+  macro: AggregatedSignal[];
   aggregatedAt: Date;
   signalCount: number;
 }
@@ -130,6 +144,13 @@ export interface TraceInput {
   correlation?: { pairs: CorrelationPair[]; method: 'snapshot' | 'matrix'; snapshotId: string | null };
   /** Seed policy record for market-creation traces (#82). */
   seedPolicy?: Record<string, unknown>;
+  /**
+   * Per-model forecasts, weights and input digests behind probabilityEstimate
+   * (#75). When present, confidenceInterval is the ensemble's and is used as given.
+   */
+  forecast?: Record<string, unknown>;
+  /** Treasury-aware sizing: Kelly/correlation/final sizes, binding constraint, budget snapshot (#76). */
+  sizing?: Record<string, unknown>;
 }
 
 export interface TraceVerification {
