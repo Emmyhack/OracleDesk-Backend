@@ -1,10 +1,14 @@
 import { Router } from 'express';
 import {
+  createIntent,
+  getIntent,
   getMyPaymentEvents,
   getMySpendingAllowance,
   getTrace,
   listTraces,
+  preauthorizeAccess,
   setSpendingAllowance,
+  submitIntent,
   unlockTrace,
   verifyTrace,
 } from '../controllers/trace.controller';
@@ -17,7 +21,11 @@ const router = Router();
 router.get('/',             listTraces);
 router.get('/access/allowance', requireAuth, getMySpendingAllowance);
 router.put('/access/allowance', requireAuth, idempotent(), setSpendingAllowance);
+router.post('/access/preauthorize', requireAuth, preauthorizeAccess);
 router.get('/payments', requireAuth, getMyPaymentEvents);
+router.post('/payment-intents', requireAuth, createIntent);
+router.get('/payment-intents/:id', requireAuth, getIntent);
+router.post('/payment-intents/:id/submit', requireAuth, submitIntent);
 router.get('/:id', optionalAuth, getTrace);   // Preview without a token, full trace with a daily pass
 
 // Protected

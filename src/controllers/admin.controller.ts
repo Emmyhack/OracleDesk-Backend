@@ -28,6 +28,16 @@ import { getLlmUsage } from '../lib/llm-budget';
 import { getCronStatus } from '../cron/registry';
 import { AppError } from '../middlewares/error.middleware';
 import {
+  ADMIN_ROLES,
+  grantAdminRole,
+  isAdminAddress,
+  isAdminRole,
+  listAdminAudit,
+  listAdmins,
+  listRoles,
+  revokeAdminRole,
+} from '../services/admin-rbac.service';
+import {
   acknowledge,
   buildGuardianTx,
   listDisputes,
@@ -334,6 +344,48 @@ export async function getChainFeesReport(req: Request, res: Response): Promise<v
   });
 }
 
+
+/** GET /admin/admins — current role assignments. */
+export async function getAdmins(_req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await listAdmins());
+}
+
+/** GET /admin/roles — the fixed catalogue and its permissions. */
+export async function getAdminRoles(_req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await listRoles());
+}
+
+/** POST /admin/admins/grant — grant or change a role (step-up protected). */
+export async function postGrantAdmin(req: Request, res: Response): Promise<void> {
+  const { walletAddress, roleName } = (req.body ?? {}) as {
+    walletAddress?: unknown;
+    roleName?: unknown;
+  };
+  if (!isAdminAddress(walletAddress)) {
+    throw new AppError(400, 'VALIDATION_ERROR', 'walletAddress must be a Stellar G… address');
+  }
+  if (!isAdminRole(roleName)) {
+    throw new AppError(400, 'VALIDATION_ERROR', `roleName must be one of: ${ADMIN_ROLES.join(', ')}`);
+  }
+  await grantAdminRole({ walletAddress, roleName, actor: actor(req) });
+  sendSuccess(res, { walletAddress, roleName });
+}
+
+/** POST /admin/admins/revoke — remove every role from an address (step-up). */
+export async function postRevokeAdmin(req: Request, res: Response): Promise<void> {
+  const { walletAddress } = (req.body ?? {}) as { walletAddress?: unknown };
+  if (!isAdminAddress(walletAddress)) {
+    throw new AppError(400, 'VALIDATION_ERROR', 'walletAddress must be a Stellar G… address');
+  }
+  await revokeAdminRole({ walletAddress, actor: actor(req) });
+  sendSuccess(res, { revoked: true });
+}
+
+/** GET /admin/audit — append-only admin action trail. */
+export async function getAdminAudit(req: Request, res: Response): Promise<void> {
+  const { page, limit, skip } = parsePagination(req.query as any);
+  const { rows, total } = await listAdminAudit(limit, skip);
+  sendSuccess(res, rows, 200, buildPaginationMeta(page, limit, total) as any);
 // ─── Dispute monitor (#92) ───────────────────────────────────────────────
 
 const disputeIdSchema = z.object({ id: z.string().uuid('id must be a dispute review UUID') });

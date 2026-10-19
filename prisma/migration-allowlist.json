@@ -34,6 +34,36 @@
     "approvedBy": "pending maintainer review on the PR that adds this migration"
   },
   {
+    "migration": "20261019110000_admin_rbac",
+    "rules": [
+      "require-concurrent-index-creation"
+    ],
+    "reason": "admin_roles/admin_permissions are fixed tiny catalogue tables and admin_role_assignments is one row per admin; CREATE INDEX CONCURRENTLY cannot run inside Prisma's migration transaction and lock_timeout = 5s bounds the wait.",
+    "approvedBy": "pending maintainer review on the PR that adds this migration"
+  },
+  {
+    "migration": "20261019120000_allowance_accounting",
+    "rules": [
+      "adding-not-nullable-field"
+    ],
+    "reason": "spending_allowances is one row per subscriber; the new NUMERIC columns are added with non-null defaults, which is safe for existing rows and cannot run concurrently inside Prisma's migration transaction.",
+    "approvedBy": "pending maintainer review on the PR that adds this migration"
+  },
+  {
+    "migration": "20261019130000_pass_windows",
+    "rules": [
+      "require-concurrent-index-creation"
+    ],
+    "reason": "subscriptions has one row per purchased pass; the composite endsAt index is built in the same transaction as the window backfill and CREATE INDEX CONCURRENTLY is not allowed there; lock_timeout = 5s bounds the wait.",
+    "approvedBy": "pending maintainer review on the PR that adds this migration"
+  },
+  {
+    "migration": "20261019140000_payment_intents",
+    "rules": [
+      "require-concurrent-index-creation",
+      "adding-not-nullable-field"
+    ],
+    "reason": "payment_intents is a new table, so its indexes are created on empty data while the table is still invisible; the NUMERIC and enum columns are added with defaults on the new table only. CREATE INDEX CONCURRENTLY cannot run in Prisma's migration transaction.",
     "migration": "20261019020000_signal_store",
     "rules": [
       "require-concurrent-index-creation"

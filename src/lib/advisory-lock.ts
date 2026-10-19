@@ -28,6 +28,44 @@ export async function withAdvisoryLock<T>(
   );
 }
 
+/**
+ * Takes several advisory locks in one transaction. Keys are sorted before
+ * acquisition so two callers requesting the same set can never deadlock.
+ */
+export async function withAdvisoryLocks<T>(
+  keys: string[],
+  fn: (tx: Prisma.TransactionClient) => Promise<T>,
+  opts: { timeoutMs?: number; maxWaitMs?: number } = {},
+): Promise<{ acquired: true; value: T } | { acquired: false }> {
+  const ordered = [...new Set(keys)].sort();
+  return prisma.$transaction(
+    async (tx) => {
+      for (const key of ordered) {
+        const rows = await tx.$queryRaw<Array<{ locked: boolean }>>`SELECT pg_try_advisory_xact_lock(hashtext(${key})) AS locked`;
+        if (!rows[0]?.locked) return { acquired: false as const };
+      }
+      return { acquired: true as const, value: await fn(tx) };
+    },
+    { timeout: opts.timeoutMs ?? 10 * 60_000, maxWait: opts.maxWaitMs ?? 5_000 },
+  );
+}
+
+/** Like withAdvisoryLockWait, for a set of keys acquired atomically. */
+export async function withAdvisoryLocksWait<T>(
+  keys: string[],
+  fn: (tx: Prisma.TransactionClient) => Promise<T>,
+  opts: { waitMs?: number; pollMs?: number; timeoutMs?: number; maxWaitMs?: number } = {},
+): Promise<{ acquired: true; value: T } | { acquired: false }> {
+  const deadline = Date.now() + (opts.waitMs ?? 30_000);
+  const pollMs = opts.pollMs ?? 50;
+  for (;;) {
+    const result = await withAdvisoryLocks(keys, fn, { timeoutMs: opts.timeoutMs, maxWaitMs: opts.maxWaitMs });
+    if (result.acquired) return result;
+    if (Date.now() >= deadline) return { acquired: false };
+    await sleep(pollMs);
+  }
+}
+
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /**

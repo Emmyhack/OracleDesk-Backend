@@ -145,10 +145,18 @@ test('concurrent claim by another user is always 409 and never verifies twice (#
   }
 });
 
-test('a losing racer does not leave a LIMIT_REACHED row (#59)', { skip: skipReason() }, async () => {
+test('an over-allowance payment is granted and flagged, never refused or dropped (#53)', { skip: skipReason() }, async () => {
   const user = await makeUser(prisma);
+  // 1 base unit of daily and per-trace approval: the pass price overflows it.
   await prisma.spendingAllowance.create({
-    data: { userId: user.id, dailyLimit: 0, perTraceLimit: 0 },
+    data: {
+      userId: user.id,
+      dailyLimit: 0.0000001,
+      perTraceLimit: 0.0000001,
+      dailyLimitRaw: '1',
+      perTraceLimitRaw: '1',
+      windowStartedAt: new Date(),
+    },
   });
   const { reader } = countingTransfer(user.walletAddress);
   const prev = verification.setTransactionReader(reader);
@@ -157,10 +165,14 @@ test('a losing racer does not leave a LIMIT_REACHED row (#59)', { skip: skipReas
     const results = await Promise.all(
       Array.from({ length: 4 }, () => code(recordPayment({ userId: user.id, walletAddress: user.walletAddress, type: 'DAILY_PASS' as const, txHash: hash }))),
     );
-    assert.deepEqual(results, Array(4).fill('ALLOWANCE_DAILY_LIMIT'));
-    assert.equal(await prisma.subscription.count(), 1, 'exactly one LIMIT_REACHED marker');
-    assert.equal(await prisma.subscription.count({ where: { status: 'LIMIT_REACHED' } }), 1);
-    assert.equal(await prisma.paymentEvent.count(), 0);
+    assert.deepEqual(results, Array(4).fill('ok'));
+    assert.equal(await prisma.subscription.count(), 1);
+    assert.equal(await prisma.subscription.count({ where: { status: 'ACTIVE' } }), 1);
+    const event = await prisma.paymentEvent.findFirstOrThrow();
+    assert.equal(event.allowanceOverage, true);
+    assert.equal(event.allowanceOverageRaw?.toString(), (PRICE - 1n).toString());
+    const allowance = await prisma.spendingAllowance.findUniqueOrThrow({ where: { userId: user.id } });
+    assert.equal(allowance.overageRaw.toString(), (PRICE - 1n).toString());
   } finally {
     verification.setTransactionReader(prev);
   }
