@@ -22,5 +22,15 @@
     ],
     "reason": "#78 requires the chain_events expression index inside the migration. Prisma runs migrations in a transaction, where CREATE INDEX CONCURRENTLY is not allowed; the index is partial (eventName = 'Trade') and chain_events is append-only, so the short ACCESS EXCLUSIVE-free SHARE lock only delays the indexer's inserts.",
     "approvedBy": "pending maintainer review on the PR"
+  },
+  {
+    "migration": "20261019010000_user_identity_subid",
+    "rules": [
+      "require-concurrent-index-creation",
+      "require-concurrent-index-deletion",
+      "adding-not-nullable-field"
+    ],
+    "reason": "users is a small table (one row per subscriber). The unique identityKey index and the SET NOT NULL must run in the same transaction as the walletAddress backfill, so the column cannot be observed null or non-unique; CREATE INDEX CONCURRENTLY and DROP INDEX CONCURRENTLY are not allowed inside Prisma's migration transaction, and lock_timeout = 5s bounds the ACCESS EXCLUSIVE wait.",
+    "approvedBy": "pending maintainer review on the PR that adds this migration"
   }
 ]

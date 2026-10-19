@@ -138,6 +138,8 @@ export async function unlockTrace(req: Request, res: Response): Promise<void> {
     traceId:       undefined,
     type:          parsed.data.type,
     txHash:        parsed.data.txHash,
+    subId:         req.user.subId ?? null,
+    subIdKind:     req.user.subIdKind ?? null,
   });
 
   const trace = await getTracWithAccessControl(traceId, req.user.userId).catch(() => null);
@@ -161,10 +163,21 @@ export async function setSpendingAllowance(req: Request, res: Response): Promise
     return;
   }
 
-  // Ensure the user record exists before creating the FK-linked spending allowance
+  // Ensure the user record exists before creating the FK-linked spending
+  // allowance. Key on the user id: walletAddress is no longer unique (#46),
+  // several sub-users share one pooled base account.
+  const identityKey = req.user.subId != null
+    ? `${req.user.walletAddress}#${req.user.subIdKind === 'MUXED' ? 'muxed' : 'memo'}:${req.user.subId}`
+    : req.user.walletAddress;
   await prisma.user.upsert({
-    where:  { walletAddress: req.user.walletAddress },
-    create: { id: req.user.userId, walletAddress: req.user.walletAddress },
+    where:  { id: req.user.userId },
+    create: {
+      id:            req.user.userId,
+      walletAddress: req.user.walletAddress,
+      subId:         req.user.subId ?? null,
+      subIdKind:     req.user.subIdKind ?? null,
+      identityKey,
+    },
     update: {},
   });
 

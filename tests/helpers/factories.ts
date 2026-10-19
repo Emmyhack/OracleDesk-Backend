@@ -6,8 +6,9 @@ let n = 0;
 const next = () => ++n;
 
 export async function makeUser(prisma: PrismaClient, overrides: { walletAddress?: string } = {}) {
+  const walletAddress = overrides.walletAddress ?? Keypair.random().publicKey();
   return prisma.user.create({
-    data: { walletAddress: overrides.walletAddress ?? Keypair.random().publicKey() },
+    data: { walletAddress, identityKey: walletAddress },
   });
 }
 
