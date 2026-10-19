@@ -853,3 +853,17 @@ model ReconcileRun {
 
   @@map("reconcile_runs")
 }
+
+/// On-chain fees recorded per transaction (#39).
+model ChainFee {
+  txHash       String   @id @map("tx_hash")
+  opClass      String   @map("op_class")
+  inclusionFee BigInt   @map("inclusion_fee")
+  resourceFee  BigInt   @map("resource_fee")
+  totalFee     BigInt   @map("total_fee")
+  feeCharged   BigInt?  @map("fee_charged")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([opClass, createdAt])
+  @@map("chain_fees")
+}

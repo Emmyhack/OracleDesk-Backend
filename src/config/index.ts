@@ -135,6 +135,11 @@ const envSchema = z
     AGENT_FAILURE_THRESHOLD: z.string().default('5').transform(Number),
     AGENT_FAILURE_WINDOW_MS: z.string().default('1800000').transform(Number),
 
+    // ── Fee policies (#39) ───────────────────────────────────────────────
+    FEE_POLICY_JSON: optionalString,
+    FEE_STATS_CACHE_MS: z.string().default('10000').transform(Number).pipe(z.number().int().positive()),
+    FEE_STATS_MAX_AGE_MS: z.string().default('60000').transform(Number).pipe(z.number().int().positive()),
+
     TRUST_INBOUND_REQUEST_ID: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
     INDEXER_ENABLED: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
     INDEXER_POLL_MS: z.string().default('5000').transform(Number),
@@ -343,6 +348,43 @@ const envSchema = z
           path: ['STELLAR_NETWORK_PASSPHRASE'],
           message: 'live mode is testnet-only; use the testnet passphrase',
         });
+      }
+    }
+    if (env.FEE_POLICY_JSON) {
+      try {
+        const parsed = JSON.parse(env.FEE_POLICY_JSON);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          ctx.addIssue({ code: 'custom', path: ['FEE_POLICY_JSON'], message: 'must be a JSON object' });
+        } else {
+          const validClasses = ['market_create', 'trade', 'trace_publish', 'maintenance'];
+          const validPercentiles = ['p10', 'p20', 'p30', 'p40', 'p50', 'p60', 'p70', 'p80', 'p90', 'p95', 'p99', 'min', 'mode', 'max'];
+          for (const [k, v] of Object.entries(parsed)) {
+            if (!validClasses.includes(k)) {
+              ctx.addIssue({ code: 'custom', path: ['FEE_POLICY_JSON', k], message: `unknown operation class: ${k}` });
+            } else if (v && typeof v === 'object' && !Array.isArray(v)) {
+              const pol = v as any;
+              if (pol.percentile && !validPercentiles.includes(pol.percentile)) {
+                ctx.addIssue({ code: 'custom', path: ['FEE_POLICY_JSON', k, 'percentile'], message: `invalid percentile: ${pol.percentile}` });
+              }
+              if (pol.floor !== undefined && (!/^\d+$/.test(String(pol.floor)) || BigInt(pol.floor) < 0n)) {
+                ctx.addIssue({ code: 'custom', path: ['FEE_POLICY_JSON', k, 'floor'], message: 'floor must be a non-negative integer' });
+              }
+              if (pol.cap !== undefined && (!/^\d+$/.test(String(pol.cap)) || BigInt(pol.cap) < 0n)) {
+                ctx.addIssue({ code: 'custom', path: ['FEE_POLICY_JSON', k, 'cap'], message: 'cap must be a non-negative integer' });
+              }
+              if (pol.budget !== undefined && (!/^\d+$/.test(String(pol.budget)) || BigInt(pol.budget) < 0n)) {
+                ctx.addIssue({ code: 'custom', path: ['FEE_POLICY_JSON', k, 'budget'], message: 'budget must be a non-negative integer' });
+              }
+              if (pol.floor !== undefined && pol.cap !== undefined && BigInt(pol.floor) > BigInt(pol.cap)) {
+                ctx.addIssue({ code: 'custom', path: ['FEE_POLICY_JSON', k], message: 'floor cannot exceed cap' });
+              }
+            } else {
+              ctx.addIssue({ code: 'custom', path: ['FEE_POLICY_JSON', k], message: 'must be an object' });
+            }
+          }
+        }
+      } catch {
+        ctx.addIssue({ code: 'custom', path: ['FEE_POLICY_JSON'], message: 'must be valid JSON' });
       }
     }
   });

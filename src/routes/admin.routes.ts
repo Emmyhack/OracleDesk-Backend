@@ -9,6 +9,7 @@ import {
   getAgentControls,
   getReconciliationRun,
   getSystemStatus,
+  getChainFeesReport,
   pauseAgentControl,
   resumeAgentControl,
   getTraceAuditSummary,
@@ -40,6 +41,7 @@ router.get('/agents/controls', getAgentControls);
 router.post('/agents/:agent/pause', pauseAgentControl);
 router.post('/agents/:agent/resume', resumeAgentControl);
 router.get('/status', getSystemStatus);
+router.get('/fees', getChainFeesReport);
 router.get('/disputes', listDisputes);
 router.post('/disputes/:id/ack', ackDispute);
 router.post('/disputes/:id/cancel-tx', cancelDisputeTx);

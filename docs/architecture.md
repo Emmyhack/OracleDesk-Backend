@@ -24,6 +24,28 @@ Express 5 with helmet, hpp, an env CORS allowlist, rate limits (global, `/auth/*
 
 The contracts repo's `agents/stellar/adapter.ts` covers similar ground, but its dry-run doesn't simulate and it lacks `agent_sell`, so this service mirrors its method names instead of depending on it. The intended long-term split is that the agents package owns signing and this repo stays the API, indexer and LLM pipeline (see [contract-requests.md](contract-requests.md)).
 
+### Dynamic inclusion fees and resource budgets (#39)
+
+Stellar Soroban fees follow a two-part model:
+1. **Inclusion fee**: Classic Stellar transaction bid that prioritises the transaction in the ledger queue. The fee oracle (`src/services/stellar/fees.ts`) queries RPC `getFeeStats` with single-flight caching, selects the configured percentile for the operation class (`market_create`, `trade`, `trace_publish`, `maintenance`), and clamps it between the class `floor` and `cap`. If stats are missing, stale, or RPC fails, it falls back to the last good stats within `FEE_STATS_MAX_AGE_MS` or to the class floor.
+2. **Resource fee**: Soroban execution and storage fee computed during simulation (`tx.simulation.minResourceFee`). The transaction envelope's built fee equals `inclusionFee + minResourceFee`.
+
+**Operation Class Policies and Budgets**:
+- `market_create`: percentile `p90`, floor 0.01 XLM (100,000 stroops), cap 0.5 XLM (5,000,000 stroops), resource budget 5 XLM (50,000,000 stroops).
+- `trade`: percentile `p80`, floor 0.001 XLM (10,000 stroops), cap 0.2 XLM (2,000,000 stroops), resource budget 2.5 XLM (25,000,000 stroops).
+- `trace_publish`: percentile `p50`, floor 0.001 XLM (10,000 stroops), cap 0.1 XLM (1,000,000 stroops), resource budget 1.5 XLM (15,000,000 stroops).
+- `maintenance`: percentile `p50`, floor 0.001 XLM (10,000 stroops), cap 0.1 XLM (1,000,000 stroops), resource budget 1.5 XLM (15,000,000 stroops).
+
+Overrides can be provided at boot via `FEE_POLICY_JSON`.
+
+**Budget Enforcement and Calibration**:
+Before any live transaction is signed, `minResourceFee` is checked against the class budget. If it exceeds the budget, execution halts immediately with `FEE_BUDGET_EXCEEDED` (carrying simulation details and no secrets). In dry-run mode, the breach is logged as a warning and simulation continues.
+To calibrate budgets for production:
+1. Run cycles in dry-run mode (`CHAIN_EXECUTION_MODE=dry-run`).
+2. Search application logs for `dry-run: simulated, not submitted` and inspect the recorded `simulated.fee` and `minResourceFee` across operation classes.
+3. Set each class budget in `FEE_POLICY_JSON` to ~1.3x–1.5x the observed peak simulation fee to accommodate ledger state growth and contract rent variations without risking unbounded agent spend.
+Confirmed transactions record fee accounting in `chain_fees`, exposed via `GET /admin/fees` with daily p50/p95 charged quantiles and oracle health snapshots.
+
 ## Market creation (ADR 0001)
 
 `market-chain.service.ts` turns a generated proposal into an on-chain market:
