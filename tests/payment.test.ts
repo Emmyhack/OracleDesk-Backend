@@ -372,12 +372,20 @@ test('recordPayment: grants a pass once per hash and never without verification'
   const subs: any[] = [];
 
   (prisma.paymentEvent.findUnique as any) = async ({ where }: any) => used.get(where.txHash) ?? null;
-  (prisma.subscription.findFirst as any) = async ({ where }: any) => subs.find((s) => s.txHash === where.txHash) ?? null;
+  (prisma.subscription.findFirst as any) = async ({ where }: any) =>
+    subs.find((s) => (where.txHash === undefined || s.txHash === where.txHash)) ?? null;
   (prisma.spendingAllowance.findUnique as any) = async () => null;
   (prisma.$transaction as any) = async (fn: any) => fn({
-    subscription: { create: async ({ data }: any) => { const s = { id: `sub-${subs.length}`, ...data }; subs.push(s); return s; } },
-    paymentEvent: { create: async ({ data }: any) => { used.set(data.txHash, { userId: data.userId }); return data; } },
-    spendingAllowance: { updateMany: async () => ({ count: 0 }) },
+    $queryRaw: async () => [{ locked: true }],
+    paymentEvent: {
+      findUnique: async ({ where }: any) => used.get(where.txHash) ?? null,
+      create: async ({ data }: any) => { used.set(data.txHash, { userId: data.userId }); return data; },
+    },
+    subscription: {
+      findFirst: async ({ where }: any) => subs.find((s) => (where.txHash === undefined || s.txHash === where.txHash)) ?? null,
+      create: async ({ data }: any) => { const s = { id: `sub-${subs.length}`, ...data }; subs.push(s); return s; },
+    },
+    spendingAllowance: { findUnique: async () => null, updateMany: async () => ({ count: 0 }) },
   });
 
   const env = transferEnvelope({ passphrase: config.STELLAR_NETWORK_PASSPHRASE, contract: CONTRACTS.usdc, from: user, to: PAYMENTS_RECIPIENT, amount: PRICE });

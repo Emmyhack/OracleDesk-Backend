@@ -50,7 +50,7 @@ test('defaults to dry-run on testnet, and generates dev-only ephemeral secrets',
   const c = loadConfig({ DATABASE_URL: 'x' });
   assert.equal(c.CHAIN_EXECUTION_MODE, 'dry-run');
   assert.equal(c.STELLAR_NETWORK_PASSPHRASE, 'Test SDF Network ; September 2015');
-  assert.deepEqual(c.ephemeralSecrets.sort(), ['AUTH_SIGNING_SECRET', 'JWT_SECRET']);
+  assert.deepEqual(c.ephemeralSecrets.sort(), ['AUTH_SIGNING_SECRET', 'ENTITLEMENT_SIGNING_KEY', 'JWT_SECRET']);
 });
 
 test('SEP-45 and signing-key rotation settings are validated (#47/#48)', async () => {
