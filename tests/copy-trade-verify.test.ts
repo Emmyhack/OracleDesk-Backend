@@ -86,7 +86,7 @@ function feeBumpEnvelope(innerEnv: xdr.TransactionEnvelope, feeSource: string) {
   const feeAccount = new Account(feeSource, '1');
   const innerTx = TransactionBuilder.fromXDR(innerEnv.toXDR('base64'), Networks.TESTNET);
   const feeBump = TransactionBuilder.buildFeeBumpTransaction(
-    feeSource,
+    feeAccount,
     '200',
     innerTx as any,
     Networks.TESTNET,
