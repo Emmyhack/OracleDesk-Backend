@@ -15,7 +15,7 @@ import {
   getTraceAuditSummary,
   getTreasury,
   getTreasuryOperation,
-  listDisputes,
+  getDisputes,
   listReconciliationRuns,
   listTreasuryOperations,
   recordTreasuryOperation,
@@ -42,7 +42,7 @@ router.post('/agents/:agent/pause', pauseAgentControl);
 router.post('/agents/:agent/resume', resumeAgentControl);
 router.get('/status', getSystemStatus);
 router.get('/fees', getChainFeesReport);
-router.get('/disputes', listDisputes);
+router.get('/disputes', getDisputes);
 router.post('/disputes/:id/ack', ackDispute);
 router.post('/disputes/:id/cancel-tx', cancelDisputeTx);
 router.post('/disputes/:id/void-tx', voidDisputeTx);

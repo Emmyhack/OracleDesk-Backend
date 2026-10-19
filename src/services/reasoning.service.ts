@@ -8,10 +8,12 @@ import { renderUntrustedBlock, sanitizeSignal } from './llm-guard.service';
 import { logger } from '../lib/logger';
 import { Prisma } from '@prisma/client';
 import type {
+  AggregatedSignal,
   TraceInput,
   WeightedSignal,
   ConfidenceInterval,
 } from '../types';
+import { now as clockNow } from '../lib/clock';
 import { AppError } from '../middlewares/error.middleware';
 
 // The hedge-condition schema lives in src/lib/llm-schema.ts; re-exported here.
@@ -22,7 +24,8 @@ export { traceReasoningSchema };
  *
  * Flow:
  * 1. Compute edge  (agent prob − market prob)
- * 2. Compute 90% confidence interval via jackknife sampling
+ * 2. 90% confidence interval: the forecaster's own interval when the input
+ *    carries a forecast (#75), otherwise jackknife over the sources
  * 3. Call Claude/Gemini to generate hedge conditions and reasoning narrative
  * 4. Record provenance (#66): who produced the market proposal (when the
  *    caller passes it) and the hedge conditions, as `tracePayload.provenance`.
@@ -36,7 +39,11 @@ export async function generateReasoningTrace(
   opts: { upstreamProvenance?: ProvenanceEntry[] } = {},
 ) {
   const edge = calculateEdge(input.probabilityEstimate, input.marketProbability);
-  const ci   = calculateConfidenceInterval(input.sourcesUsed, input.probabilityEstimate);
+  // A forecast-driven decision (#75) already has a calibrated interval; the
+  // jackknife over sourcesUsed would only echo the signals' rawValues.
+  const ci   = input.forecast
+    ? input.confidenceInterval
+    : calculateConfidenceInterval(input.sourcesUsed, input.probabilityEstimate);
 
   const hedgeConditions = await generateHedgeConditions(input, edge, ci, ctx);
 
@@ -57,13 +64,21 @@ export async function generateReasoningTrace(
     betSizeUsdc:         input.betSizeUsdc,
     correlation:         input.correlation,
     seedPolicy:          input.seedPolicy,
+    forecast:            input.forecast,
+    sizing:              input.sizing,
     hedgeConditions:     hedgeConditions.conditions,
     provenance,
     agentWallet:         input.agentWallet,
-    timestamp:           new Date().toISOString(),
+    timestamp:           clockNow().toISOString(),
   };
 
-  const previewSources = input.sourcesUsed.slice(0, 2);
+  // The free preview names the source and headline only; links and ids are
+  // part of the paid trace (#73).
+  const previewSources = input.sourcesUsed.slice(0, 2).map((s) => ({
+    source: s.source,
+    publisher: s.publisher ?? null,
+    signal: s.signal,
+  }));
 
   const trace = await prisma.reasoningTrace.create({
     data: {
@@ -88,6 +103,24 @@ export async function generateReasoningTrace(
 
   logger.info({ traceId: trace.id, edge, marketId: input.marketId }, 'Reasoning trace generated');
   return { trace, tracePayload: { ...tracePayload, traceId: trace.id } };
+}
+
+/**
+ * Trace evidence from store-backed signals (#73): each entry carries the
+ * signal's id, link, publisher and publication time, and its weight is the
+ * aggregator's relevance score. Readers must treat these fields as optional:
+ * traces written before the signal store have only {source, weight, signal}.
+ */
+export function evidenceFromSignals(signals: AggregatedSignal[]): WeightedSignal[] {
+  return signals.map((s) => ({
+    source: s.source,
+    weight: s.relevanceScore,
+    signal: s.title,
+    ...(s.signalId ? { signalId: s.signalId } : {}),
+    ...(s.url ? { url: s.url } : {}),
+    publisher: s.publisher ?? null,
+    publishedAt: s.publishedAt,
+  }));
 }
 
 /**

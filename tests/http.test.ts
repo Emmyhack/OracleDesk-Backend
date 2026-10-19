@@ -104,3 +104,60 @@ test('admin reconciliation routes require an admin (#83)', async () => {
     }
   });
 });
+
+test('GET /portfolio derives capital from the treasury and serialises raw amounts as decimal strings (#76)', async () => {
+  const { prisma } = await import('../src/lib/prisma');
+  const { setChainOverrides } = await import('../src/services/chain.service');
+  const USDC = 10_000_000n;
+  const orig = {
+    positions: prisma.position.findMany, agg: prisma.trade.aggregate,
+    report: prisma.transparencyReport.findFirst, snap: prisma.correlationSnapshot.findFirst,
+  };
+  (prisma.position.findMany as any) = async ({ where }: any) =>
+    where.status === 'OPEN' ? [{ size: 25, pnl: 0, costBasisRaw: '250000000', realisedPnlRaw: '0', unrealisedPnlRaw: '0', market: { id: 'm1', category: 'FED' } }] : [];
+  (prisma.trade.aggregate as any) = async () => ({ _sum: { builderFee: 0 } });
+  (prisma.transparencyReport.findFirst as any) = async () => null;
+  (prisma.correlationSnapshot.findFirst as any) = async () => null;
+  const prev = setChainOverrides({
+    treasuryAvailableCapital: async () => 800n * USDC + 5n,
+    treasuryRiskConfig: async () => ({ agent: 'G', collateral: 'C', market_core: 'M', max_trade: 50n * USDC, max_market: 100n * USDC, max_daily: 200n * USDC }),
+    treasuryDailyUsage: async () => ({ amount: 15n * USDC, day_start: 1_792_310_400n }),
+  });
+  try {
+    await withServer(async (base) => {
+      const ok = await (await fetch(`${base}/api/v1/portfolio`)).json();
+      assert.equal(ok.ok, true);
+      assert.deepEqual(ok.data.treasury, {
+        availableRaw: '8000000005',
+        maxTradeRaw: '500000000',
+        maxMarketRaw: '1000000000',
+        maxDailyRaw: '2000000000',
+        dailyUsedRaw: '150000000',
+        dailyRemainingRaw: '1850000000',
+        dailyResetsAt: new Date((1_792_310_400 + 86_400) * 1000).toISOString(),
+      });
+      assert.equal(ok.data.availableCapitalRaw, '8000000005');
+      assert.equal(ok.data.availableCapital, 800);
+      assert.equal(ok.data.deployedCapital, 25);
+      assert.equal(ok.data.totalUsdc, 825);
+      assert.equal(ok.data.correlationRisk.isOverExposed, false);
+    });
+
+    setChainOverrides({ treasuryAvailableCapital: async () => { throw new Error('rpc down'); } });
+    await withServer(async (base) => {
+      const down = await (await fetch(`${base}/api/v1/portfolio`)).json();
+      assert.equal(down.ok, true);
+      assert.equal(down.data.treasury, null);
+      assert.equal(down.data.availableCapitalRaw, null);
+      assert.equal(down.data.totalUsdc, null);
+      assert.equal(down.data.availableCapital, null);
+      assert.equal(down.data.deployedCapital, 25, 'database fields are still returned');
+    });
+  } finally {
+    setChainOverrides(prev);
+    (prisma.position.findMany as any) = orig.positions;
+    (prisma.trade.aggregate as any) = orig.agg;
+    (prisma.transparencyReport.findFirst as any) = orig.report;
+    (prisma.correlationSnapshot.findFirst as any) = orig.snap;
+  }
+});

@@ -19,7 +19,7 @@ import { config } from '../config';
 import { AppError } from '../middlewares/error.middleware';
 import { logger } from './logger';
 import { getRedis } from './redis';
-import { sleep } from './resilience';
+import { nowMs, sleep as clockSleep } from './clock';
 import {
   MemoryGuardStore,
   RedisGuardStore,
@@ -165,10 +165,10 @@ export function resetLocalLlmLimiter(): void {
   lastStoreWarnAt = 0;
 }
 
-let waitFn: (ms: number, signal?: AbortSignal) => Promise<void> = sleep;
+let waitFn: (ms: number, signal?: AbortSignal) => Promise<void> = (ms, signal) => clockSleep(ms, signal);
 /** Test seam for the RATE_LIMITED wait. */
 export function setLlmWait(fn: typeof waitFn | null): void {
-  waitFn = fn ?? sleep;
+  waitFn = fn ?? ((ms, signal) => clockSleep(ms, signal));
 }
 
 // ─── acquire / record ─────────────────────────────────────────────────────────
@@ -181,7 +181,7 @@ export async function acquire(
 ): Promise<Lease> {
   const s = settings();
   const leaseId = randomUUID();
-  const started = Date.now();
+  const started = nowMs();
   let local = false;
   let active: LlmGuardStore = getLlmGuardStore();
 
@@ -222,7 +222,7 @@ export async function acquire(
     }
     // RATE_LIMITED: wait for a token, with jitter, for at most maxWaitMs.
     const wait = res.retryAfterMs + Math.floor(Math.random() * Math.min(250, res.retryAfterMs + 1));
-    if (Date.now() - started + wait > s.maxWaitMs) {
+    if (nowMs() - started + wait > s.maxWaitMs) {
       throw new AppError(429, 'LLM_RATE_LIMITED', `LLM rate limit for ${provider} not available within ${s.maxWaitMs}ms`, {
         provider,
         retryAfterMs: res.retryAfterMs,

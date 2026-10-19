@@ -32,5 +32,13 @@
     ],
     "reason": "users is a small table (one row per subscriber). The unique identityKey index and the SET NOT NULL must run in the same transaction as the walletAddress backfill, so the column cannot be observed null or non-unique; CREATE INDEX CONCURRENTLY and DROP INDEX CONCURRENTLY are not allowed inside Prisma's migration transaction, and lock_timeout = 5s bounds the ACCESS EXCLUSIVE wait.",
     "approvedBy": "pending maintainer review on the PR that adds this migration"
+  },
+  {
+    "migration": "20261019020000_signal_store",
+    "rules": [
+      "require-concurrent-index-creation"
+    ],
+    "reason": "The signals, signal_fetches and signal_raw_payloads indexes are created on new, empty tables. The reasoning_traces GIN index cannot use CREATE INDEX CONCURRENTLY inside Prisma's migration transaction; reasoning_traces is append-mostly and lock_timeout = 5s bounds the wait.",
+    "approvedBy": "pending maintainer review on the PR that adds this migration"
   }
 ]

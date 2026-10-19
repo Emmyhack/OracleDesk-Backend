@@ -6,6 +6,7 @@
  * store the full spec next to the market (so anyone can reveal it to
  * resolver.register_signer_spec later) and pass the hash on-chain.
  */
+import { now as clockNow } from '../lib/clock';
 import type { Market } from '@prisma/client';
 import { config } from '../config';
 import { prisma } from '../lib/prisma';
@@ -172,7 +173,7 @@ export async function readSeedBudget(now: Date) {
  * Decides the seed and opening price for a proposal before anything is
  * pinned or written. A budget read failure fails closed: no seed, no market.
  */
-export async function planMarketCreation(input: SeedPlanInput, now: Date = new Date()): Promise<SeedDecision> {
+export async function planMarketCreation(input: SeedPlanInput, now: Date = clockNow()): Promise<SeedDecision> {
   let read;
   try {
     read = await readSeedBudget(now);
@@ -209,8 +210,7 @@ export async function createMarketOnChain(
 ): Promise<WriteResult<bigint>> {
   const resolutionHashBytes = resolutionHash(spec);
   const resolutionHashHex = resolutionHashBytes.toString('hex');
-  const pinned = await pinJson(questionDocument(market, resolutionHashHex, spec), `oracledesk-market-${market.id}`);
-  const doc = questionDocument(market, resolutionHashHex);
+  const doc = questionDocument(market, resolutionHashHex, spec);
   const pinned = await pinJson(doc, `oracledesk-market-${market.id}`);
 
   // Abort if a re-pinned question document produces a hash different from stored (#41)

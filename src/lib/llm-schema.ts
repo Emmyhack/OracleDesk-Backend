@@ -12,6 +12,7 @@
  * future) are `postValidate` functions whose message is fed back to the model
  * in the repair turn.
  */
+import { nowMs } from './clock';
 import { SchemaType } from '@google/generative-ai';
 import { z } from 'zod';
 
@@ -180,7 +181,7 @@ export function confidenceIntervalError(
  * check in the guard (it must reject, not repair); here the expiry only has to
  * be in the future.
  */
-export function marketProposalPostValidate(p: MarketProposalWire, nowSeconds = Math.floor(Date.now() / 1000)): string | null {
+export function marketProposalPostValidate(p: MarketProposalWire, nowSeconds = Math.floor(nowMs() / 1000)): string | null {
   const ci = confidenceIntervalError(p);
   if (ci) return ci;
   if (p.expiry_timestamp <= nowSeconds) {

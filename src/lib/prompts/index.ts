@@ -7,6 +7,7 @@
  * enforces that against tests/fixtures/prompts.snapshot.json.
  */
 import type { PromptDef } from './define';
+import { forecastV1 } from './forecast.v1';
 import { hedgeConditionsV1 } from './hedge-conditions.v1';
 import { marketProposalV1 } from './market-proposal.v1';
 
@@ -14,14 +15,16 @@ export type { PromptDef } from './define';
 export { definePrompt } from './define';
 export type { MarketProposalVars } from './market-proposal.v1';
 export type { HedgeConditionsVars } from './hedge-conditions.v1';
-export { hedgeConditionsV1, marketProposalV1 };
+export type { ForecastVars } from './forecast.v1';
+export { forecastV1, hedgeConditionsV1, marketProposalV1 };
 
-const ALL: ReadonlyArray<PromptDef<any>> = [marketProposalV1, hedgeConditionsV1];
+const ALL: ReadonlyArray<PromptDef<any>> = [marketProposalV1, hedgeConditionsV1, forecastV1];
 
 /** Current version per id. Bump when a new version file is added. */
 export const CURRENT_VERSION: Readonly<Record<string, number>> = {
   'market-proposal': 1,
   'hedge-conditions': 1,
+  forecast: 1,
 };
 
 export function listPrompts(): Array<{ id: string; version: number; contentHash: string }> {

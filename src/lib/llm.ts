@@ -15,6 +15,7 @@
  * (src/lib/llm-budget.ts).
  */
 import type { Content } from '@google/generative-ai';
+import type Anthropic from '@anthropic-ai/sdk';
 import { AppError } from '../middlewares/error.middleware';
 import { logger } from './logger';
 import { createRouter } from './llm/router';
@@ -55,6 +56,60 @@ export const llmRouter = createRouter(policies, {
 export type { LlmRequest, LlmResult, LlmTask };
 export { LlmError } from './llm/types';
 export { getAnthropicClient, setAnthropicClient, setGeminiModelFactory };
+
+// ─── Provider transport seams (#72) ───────────────────────────────────────────
+// Every Anthropic and Gemini request (router, structured output, repairs and
+// fallbacks) leaves through these two functions when a transport is set, so a
+// test can record and replay provider traffic without keys or a network.
+// Production never sets one: the SDK clients are used as before.
+
+/** One Anthropic Messages call, as sent and as answered. */
+export interface AnthropicTransport {
+  create(req: Anthropic.MessageCreateParamsNonStreaming, opts?: { signal?: AbortSignal }): Promise<Anthropic.Message>;
+}
+
+/** One Gemini generateContent call: the model parameters and the prompt (text or contents). */
+export interface GeminiTransport {
+  generate(req: {
+    model: string;
+    systemInstruction: string;
+    generationConfig: object;
+    prompt: unknown;
+  }, opts?: { signal?: AbortSignal }): Promise<{ text: string; usage?: { promptTokenCount?: number; candidatesTokenCount?: number } }>;
+}
+
+let anthropicTransport: AnthropicTransport | null = null;
+let geminiTransport: GeminiTransport | null = null;
+
+/** Routes Anthropic calls to `t`; null restores the SDK. Returns the previous transport. */
+export function setAnthropicTransport(t: AnthropicTransport | null): AnthropicTransport | null {
+  const prev = anthropicTransport;
+  anthropicTransport = t;
+  setAnthropicClient(t ? { messages: { create: (body: any, opts?: any) => t.create(body, { signal: opts?.signal }) } } : null);
+  return prev;
+}
+
+/** Routes Gemini calls to `t`; null restores the SDK. Returns the previous transport. */
+export function setGeminiTransport(t: GeminiTransport | null): GeminiTransport | null {
+  const prev = geminiTransport;
+  geminiTransport = t;
+  setGeminiModelFactory(
+    t
+      ? (params) => ({
+          async generateContent(prompt: unknown, opts?: { signal?: AbortSignal }) {
+            const r = await t.generate({
+              model: params.model,
+              systemInstruction: String((params as { systemInstruction?: unknown }).systemInstruction ?? ''),
+              generationConfig: (params.generationConfig ?? {}) as object,
+              prompt,
+            }, opts);
+            return { response: { text: () => r.text, usageMetadata: r.usage } };
+          },
+        })
+      : null,
+  );
+  return prev;
+}
 
 /** Complete a request and return the text plus provenance. */
 export async function completeLLM(req: LlmRequest): Promise<LlmResult> {

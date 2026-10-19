@@ -62,7 +62,7 @@ import {
   type Signer,
 } from './stellar/channels';
 
-export { ExpiredError };
+export { ExpiredError, ArchivedEntryError };
 
 type ContractKey = 'marketCore' | 'treasury' | 'resolver' | 'reasoningRegistry';
 
@@ -182,26 +182,30 @@ function extractSendResponse(err: unknown): rpc.Api.SendTransactionResponse | un
  * Every chain write goes through here (#79): the agent's control state is
  * checked before the transaction is built, re-checked under a share lock after
  * simulation (right before signing), and the outcome feeds the failure breaker.
- * Live failures are classified and retried by policy (#40); dry-run never
- * retries and never touches the network.
+ *
+ * Routing:
+ * - dry-run, and live writes through a leased channel account (#37), go
+ *   through `submitWrite`: fee from the oracle (#39), explicit timebounds and
+ *   expiry tracking (#42).
+ * - live writes from the agent account go through the sequence-locked
+ *   attempt (#36) with classified retries (#40), using the same fee and
+ *   timeout choice.
  */
 async function write<T>(
   scope: AgentScope,
-  contract: 'treasury' | 'reasoningRegistry' | 'resolver',
   opClass: OperationClass,
-  contract: 'treasury' | 'reasoningRegistry',
+  contract: WriteContract,
   method: string,
   args: Record<string, unknown>,
-  call: (options?: { fee?: bigint; timeoutInSeconds?: number }, signer?: Signer) => Promise<AssembledTransaction<unknown>>,
+  call: WriteCall,
   signal?: AbortSignal,
 ): Promise<WriteResult<T>> {
   const seenVersion = await assertAgentActive(scope);
   try {
-    const result =
-      config.CHAIN_EXECUTION_MODE === 'dry-run'
-        ? await dryRunWrite<T>(scope, seenVersion, contract, method, args, call)
-        : await liveWriteWithRetry<T>(scope, seenVersion, contract, method, args, call, signal);
-    const result = await submitWrite<T>(scope, seenVersion, opClass, contract, method, args, call, signal);
+    const viaAgentAccount = config.CHAIN_EXECUTION_MODE === 'live' && getChannelPool().size === 0;
+    const result = viaAgentAccount
+      ? await liveWriteWithRetry<T>(scope, seenVersion, opClass, contract, method, args, call, signal)
+      : await submitWrite<T>(scope, seenVersion, opClass, contract, method, args, call, signal);
     await recordChainWriteOutcome(scope, true, null);
     return result;
   } catch (err) {
@@ -213,18 +217,17 @@ async function write<T>(
   }
 }
 
-async function dryRunWrite<T>(
+type WriteContract = 'treasury' | 'reasoningRegistry' | 'resolver';
+type WriteCall = (options?: { fee?: bigint; timeoutInSeconds?: number }, signer?: Signer) => Promise<AssembledTransaction<unknown>>;
+
+async function submitWrite<T>(
   scope: AgentScope,
   seenVersion: number,
-  contract: ContractKey,
-  method: string,
-  args: Record<string, unknown>,
-  call: () => Promise<AssembledTransaction<unknown>>,
   opClass: OperationClass,
-  contract: 'treasury' | 'reasoningRegistry',
+  contract: WriteContract,
   method: string,
   args: Record<string, unknown>,
-  call: (options?: { fee?: bigint; timeoutInSeconds?: number }, signer?: Signer) => Promise<AssembledTransaction<unknown>>,
+  call: WriteCall,
   signal?: AbortSignal,
 ): Promise<WriteResult<T>> {
   const oracle = getFeeOracle();
@@ -243,46 +246,6 @@ async function dryRunWrite<T>(
       signer = channelSigner(leasedChannel.channel.keypair, agentKeypair);
     }
   }
-  const simulated = simulatedValue<T>(contract, method, tx);
-  await assertAgentActiveLocked(scope, seenVersion);
-  logger.info({ method, args: printable(args), simulated: printable(simulated) }, 'dry-run: simulated, not submitted');
-  return { mode: 'dry-run', method, value: simulated, txHash: null };
-}
-
-/** Retry loop for live writes (#40): only provably-not-applied failures retry. */
-async function liveWriteWithRetry<T>(
-  scope: AgentScope,
-  seenVersion: number,
-  contract: ContractKey,
-  method: string,
-  args: Record<string, unknown>,
-  call: () => Promise<AssembledTransaction<unknown>>,
-  signal?: AbortSignal,
-): Promise<WriteResult<T>> {
-  const opts = retryOptions();
-  const startedAt = Date.now();
-  let attempt = 0;
-  for (;;) {
-    try {
-      return await attemptWrite<T>(scope, seenVersion, contract, method, args, call, signal);
-    } catch (err) {
-      if (err instanceof AgentPausedError) throw err;
-      const failure: ClassifiedFailure =
-        err instanceof ChainWriteFailure ? err.failure : classifyFailure({ contract, err });
-      const { retry, delayMs } = retryDecision(failure, attempt, opts, Date.now() - startedAt);
-      if (!retry) {
-        throw new TransactionError(`${method} failed (${failure.class})`, failure, attempt + 1);
-      }
-      logger.warn(
-        {
-          method,
-          failureClass: failure.class,
-          txCode: failure.txCode,
-          opCode: failure.opCode,
-          attempt: attempt + 1,
-          delayMs,
-        },
-        'chain write retrying',
 
   try {
     let tx: AssembledTransaction<unknown>;
@@ -420,9 +383,11 @@ async function liveWriteWithRetry<T>(
         { outcome: 'unknown', txHash },
         'CHAIN_SUBMISSION_TIMEOUT',
       );
-      await sleep(delayMs, signal);
-      attempt++;
     }
+    throw new ChainError(`${method} submission failed`, contractErrorName(contract, err), {
+      method,
+      cause: err instanceof Error ? err.message : String(err),
+    });
   }
 
   const finalHash = sendRes?.sendTransactionResponse?.hash ?? sendRes?.hash ?? txHash;
@@ -630,13 +595,56 @@ async function liveWriteWithRetry<T>(
   }
 }
 
+/** Retry loop for live writes (#40): only provably-not-applied failures retry. */
+async function liveWriteWithRetry<T>(
+  scope: AgentScope,
+  seenVersion: number,
+  opClass: OperationClass,
+  contract: WriteContract,
+  method: string,
+  args: Record<string, unknown>,
+  call: WriteCall,
+  signal?: AbortSignal,
+): Promise<WriteResult<T>> {
+  const opts = retryOptions();
+  const startedAt = Date.now();
+  let attempt = 0;
+  for (;;) {
+    try {
+      return await attemptWrite<T>(scope, seenVersion, opClass, contract, method, args, call, signal);
+    } catch (err) {
+      if (err instanceof AgentPausedError) throw err;
+      const failure: ClassifiedFailure =
+        err instanceof ChainWriteFailure ? err.failure : classifyFailure({ contract, err });
+      const { retry, delayMs } = retryDecision(failure, attempt, opts, Date.now() - startedAt);
+      if (!retry) {
+        throw new TransactionError(`${method} failed (${failure.class})`, failure, attempt + 1);
+      }
+      logger.warn(
+        {
+          method,
+          failureClass: failure.class,
+          txCode: failure.txCode,
+          opCode: failure.opCode,
+          attempt: attempt + 1,
+          delayMs,
+        },
+        'chain write retrying',
+      );
+      await sleep(delayMs, signal);
+      attempt++;
+    }
+  }
+}
+
 async function attemptWrite<T>(
   scope: AgentScope,
   seenVersion: number,
-  contract: ContractKey,
+  opClass: OperationClass,
+  contract: WriteContract,
   method: string,
   args: Record<string, unknown>,
-  call: () => Promise<AssembledTransaction<unknown>>,
+  call: WriteCall,
   signal?: AbortSignal,
 ): Promise<WriteResult<T>> {
   // Live: build, simulate, sign and send inside the per-source-account critical
@@ -648,7 +656,7 @@ async function attemptWrite<T>(
     async (ctx) => {
       let tx: AssembledTransaction<unknown>;
       try {
-        tx = await call();
+        tx = await call({ fee: await getFeeOracle().pickInclusionFee(opClass), timeoutInSeconds: timeoutFor(opClass) });
       } catch (err) {
         throw new ChainError(`${method} could not be built`, contractErrorName(contract, err), {
           method,
@@ -718,6 +726,7 @@ async function attemptWrite<T>(
   );
 }
 
+
 function simulatedValueFromSent<T>(contract: ContractKey, method: string, result: unknown): T {
   if (result && typeof result === 'object' && 'isOk' in result) {
     const r = result as { isOk(): boolean; unwrap(): T };
@@ -740,10 +749,10 @@ export function printable(value: unknown): unknown {
 
 // ─── Reads ────────────────────────────────────────────────────────────────
 
-export const marketCount = (signal?: AbortSignal) =>
+const marketCountImpl = (signal?: AbortSignal) =>
   read<bigint>('marketCore', 'market_count', async () => (await readClients.marketCore()).market_count(), signal);
 
-export const getOnChainMarket = (marketId: bigint, signal?: AbortSignal) =>
+const getOnChainMarketImpl = (marketId: bigint, signal?: AbortSignal) =>
   read<OnChainMarket>('marketCore', 'get_market', async () => readClients.marketCore().get_market({ market_id: marketId }), signal);
 
 /**
@@ -765,20 +774,20 @@ export async function getOnChainMarketWithLedger(
   return { market: value, ledger };
 }
 
-export const getPrice = (marketId: bigint, outcome: Outcome, signal?: AbortSignal) =>
+const getPriceImpl = (marketId: bigint, outcome: Outcome, signal?: AbortSignal) =>
   read<number>('marketCore', 'get_price', async () => readClients.marketCore().get_price({ market_id: marketId, outcome }), signal);
 
-export const quoteBuy = (marketId: bigint, outcome: Outcome, collateralIn: bigint, signal?: AbortSignal) =>
+const quoteBuyImpl = (marketId: bigint, outcome: Outcome, collateralIn: bigint, signal?: AbortSignal) =>
   read<bigint>('marketCore', 'quote_buy', async () =>
     readClients.marketCore().quote_buy({ market_id: marketId, outcome, collateral_in: collateralIn }), signal,
   );
 
-export const quoteSell = (marketId: bigint, outcome: Outcome, collateralOut: bigint, signal?: AbortSignal) =>
+const quoteSellImpl = (marketId: bigint, outcome: Outcome, collateralOut: bigint, signal?: AbortSignal) =>
   read<bigint>('marketCore', 'quote_sell', async () =>
     readClients.marketCore().quote_sell({ market_id: marketId, outcome, collateral_out: collateralOut }), signal,
   );
 
-export const getPosition = (marketId: bigint, holder: string, signal?: AbortSignal) =>
+const getPositionImpl = (marketId: bigint, holder: string, signal?: AbortSignal) =>
   read<Position>('marketCore', 'get_position', async () =>
     readClients.marketCore().get_position({ market_id: marketId, holder }), signal,
   );
@@ -816,16 +825,20 @@ export const marketTraceAt = (marketId: bigint, index: bigint, signal?: AbortSig
 export const resolverState = (marketId: bigint, signal?: AbortSignal) =>
   read<ResolutionState>('resolver', 'state', async () => readClients.resolver().state({ market_id: marketId }), signal);
 
-export const treasuryAvailableCapital = (signal?: AbortSignal) =>
+const treasuryAvailableCapitalImpl = (signal?: AbortSignal) =>
   read<bigint>('treasury', 'available_capital', async () => readClients.treasury().available_capital(), signal);
 
-export const treasuryConfig = () =>
-  read<RiskConfig>('treasury', 'get_config', async () => readClients.treasury().get_config());
+const treasuryRiskConfigImpl = (signal?: AbortSignal) =>
+  read<RiskConfig>('treasury', 'get_config', async () => readClients.treasury().get_config(), signal);
 
-export const treasuryDailyUsage = () =>
-  read<DailyUsage>('treasury', 'daily_usage', async () => readClients.treasury().daily_usage());
+/** @deprecated use treasuryRiskConfig */
+export const treasuryConfig = (signal?: AbortSignal) => treasuryRiskConfig(signal);
 
-export const marketCoreConfig = () =>
+/** The view already applies the contract's rolling-window rollover (rolled_daily_usage). */
+const treasuryDailyUsageImpl = (signal?: AbortSignal) =>
+  read<DailyUsage>('treasury', 'daily_usage', async () => readClients.treasury().daily_usage(), signal);
+
+const marketCoreConfigImpl = () =>
   read<MarketCoreConfig>('marketCore', 'get_config', async () => readClients.marketCore().get_config());
 
 // ─── Writes (through the treasury) ───────────────────────────────────────────
@@ -840,7 +853,7 @@ export interface CreateMarketArgs {
   initial_yes_bps: number;
 }
 
-export const agentCreateMarket = (args: CreateMarketArgs, signal?: AbortSignal) =>
+const agentCreateMarketImpl = (args: CreateMarketArgs, signal?: AbortSignal) =>
   write<bigint>('MARKET_MAKER', 'market_create', 'treasury', 'agent_create_market', { ...args }, async (opts, signer) =>
     agentClients.treasury(signer).agent_create_market(args, opts as any), signal,
   );
@@ -852,22 +865,23 @@ export type AgentBuyArgs = { market_id: bigint; outcome: Outcome; collateral_in:
  * attempt (#40) re-quotes `min_shares_out` against the live price instead of
  * reusing the first attempt's stale bound.
  */
-export const agentBuy = (args: AgentBuyArgs | (() => Promise<AgentBuyArgs>), signal?: AbortSignal) => {
+const agentBuyImpl = (
+  args: AgentBuyArgs | (() => Promise<AgentBuyArgs>),
+  signal?: AbortSignal,
+  /** Logged with the write and keyed into chain_submissions (#42). */
+  meta: { attemptId?: string; rebuildCount?: number } = {},
+) => {
   const resolver = typeof args === 'function' ? args : async () => args;
-  return write<bigint>('TRADER', 'treasury', 'agent_buy', typeof args === 'function' ? {} : args, async () =>
-    agentClients.treasury().agent_buy(await resolver()), signal);
+  return write<bigint>('TRADER', 'trade', 'treasury', 'agent_buy', { ...(typeof args === 'function' ? {} : args), ...meta }, async (opts, signer) =>
+    agentClients.treasury(signer).agent_buy(await resolver(), opts as any), signal);
 };
-export const agentBuy = (args: { market_id: bigint; outcome: Outcome; collateral_in: bigint; min_shares_out: bigint }, signal?: AbortSignal) =>
-  write<bigint>('TRADER', 'trade', 'treasury', 'agent_buy', args, async (opts, signer) =>
-    agentClients.treasury(signer).agent_buy(args, opts as any), signal,
-  );
 
-export const agentSell = (args: { market_id: bigint; outcome: Outcome; collateral_out: bigint; max_shares_in: bigint }, signal?: AbortSignal) =>
+const agentSellImpl = (args: { market_id: bigint; outcome: Outcome; collateral_out: bigint; max_shares_in: bigint }, signal?: AbortSignal) =>
   write<bigint>('TRADER', 'trade', 'treasury', 'agent_sell', args, async (opts, signer) =>
     agentClients.treasury(signer).agent_sell(args, opts as any), signal,
   );
 
-export const publishTrace = (args: {
+const publishTraceImpl = (args: {
   agent: string;
   market_id: bigint;
   action: string;
@@ -884,11 +898,63 @@ export const publishTrace = (args: {
 // close_time and finalises market-core.
 
 export const registerPriceSpec = (marketId: bigint, spec: PriceConfig, signal?: AbortSignal) =>
-  write<void>('MARKET_MAKER', 'resolver', 'register_price_spec', { market_id: marketId, spec }, async () =>
-    agentClients.resolver().register_price_spec({ market_id: marketId, spec }), signal,
+  write<void>('MARKET_MAKER', 'maintenance', 'resolver', 'register_price_spec', { market_id: marketId, spec }, async (opts) =>
+    agentClients.resolver().register_price_spec({ market_id: marketId, spec }, opts as any), signal,
   );
 
 export const resolvePrice = (marketId: bigint, signal?: AbortSignal) =>
-  write<Outcome>('MARKET_MAKER', 'resolver', 'resolve_price', { market_id: marketId }, async () =>
-    agentClients.resolver().resolve_price({ market_id: marketId }), signal,
+  write<Outcome>('MARKET_MAKER', 'maintenance', 'resolver', 'resolve_price', { market_id: marketId }, async (opts) =>
+    agentClients.resolver().resolve_price({ market_id: marketId }, opts as any), signal,
   );
+
+// ─── Test seam (#72) ─────────────────────────────────────────────────────────
+// Agent-cycle tests replace chain calls at this level instead of faking the
+// RPC (a fake RPC server is a separate piece of work). Production never sets
+// an override.
+
+const IMPLS = {
+  getPosition: getPositionImpl,
+  marketCoreConfig: marketCoreConfigImpl,
+  marketCount: marketCountImpl,
+  getOnChainMarket: getOnChainMarketImpl,
+  getPrice: getPriceImpl,
+  quoteBuy: quoteBuyImpl,
+  quoteSell: quoteSellImpl,
+  treasuryAvailableCapital: treasuryAvailableCapitalImpl,
+  treasuryRiskConfig: treasuryRiskConfigImpl,
+  treasuryDailyUsage: treasuryDailyUsageImpl,
+  agentCreateMarket: agentCreateMarketImpl,
+  agentBuy: agentBuyImpl,
+  agentSell: agentSellImpl,
+  publishTrace: publishTraceImpl,
+};
+
+export type ChainOverrides = Partial<typeof IMPLS>;
+
+let overrides: ChainOverrides = {};
+
+/** Replaces the named chain functions until reset. Pass null to clear all. Returns the previous overrides. */
+export function setChainOverrides(next: ChainOverrides | null): ChainOverrides {
+  const prev = overrides;
+  overrides = next ?? {};
+  return prev;
+}
+
+function overridable<K extends keyof typeof IMPLS>(name: K): (typeof IMPLS)[K] {
+  return ((...args: unknown[]) => ((overrides[name] ?? IMPLS[name]) as (...a: unknown[]) => unknown)(...args)) as (typeof IMPLS)[K];
+}
+
+export const marketCount = overridable('marketCount');
+export const getOnChainMarket = overridable('getOnChainMarket');
+export const getPrice = overridable('getPrice');
+export const quoteBuy = overridable('quoteBuy');
+export const quoteSell = overridable('quoteSell');
+export const treasuryAvailableCapital = overridable('treasuryAvailableCapital');
+export const treasuryRiskConfig = overridable('treasuryRiskConfig');
+export const treasuryDailyUsage = overridable('treasuryDailyUsage');
+export const agentCreateMarket = overridable('agentCreateMarket');
+export const agentBuy = overridable('agentBuy');
+export const agentSell = overridable('agentSell');
+export const publishTrace = overridable('publishTrace');
+export const marketCoreConfig = overridable('marketCoreConfig');
+export const getPosition = overridable('getPosition');

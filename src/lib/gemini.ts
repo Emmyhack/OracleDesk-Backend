@@ -9,7 +9,8 @@
 import { GoogleGenerativeAI, type Content, type ModelParams } from '@google/generative-ai';
 import { secret, secretEntry } from '../config/secrets';
 import { logger } from './logger';
-import { deadline, sleep, TimeoutError } from './resilience';
+import { deadline, TimeoutError } from './resilience';
+import { sleep } from './clock';
 import {
   DEFAULT_CALL_CONTEXT,
   withLease,

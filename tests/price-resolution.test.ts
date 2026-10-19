@@ -91,8 +91,8 @@ test('unsupported asset falls back to signer mode and logs PRICE_SPEC_FALLBACK',
   });
   assert.equal(plan.spec, null);
   assert.equal(plan.question, null);
-  assert.equal(logs.at(-1)?.action, 'PRICE_SPEC_FALLBACK');
-  assert.equal(logs.at(-1)?.data?.reason, 'FEED_UNSUPPORTED');
+  assert.equal(logs[logs.length - 1]?.action, 'PRICE_SPEC_FALLBACK');
+  assert.equal(logs[logs.length - 1]?.data?.reason, 'FEED_UNSUPPORTED');
 });
 
 test('stale feed at creation time blocks price mode', async () => {
@@ -104,11 +104,11 @@ test('stale feed at creation time blocks price mode', async () => {
     network: 'Test SDF Network ; September 2015',
     now: NOW,
     feed: FEED,
-    reader: reader({ lastPrice: async () => ({ price: 1n, timestamp: BigInt(Math.floor(NOW.getTime() / 1000) - 10_000)) }) }),
+    reader: reader({ lastPrice: async () => ({ price: 1n, timestamp: BigInt(Math.floor(NOW.getTime() / 1000) - 10_000) }) }),
   });
   assert.equal(plan.spec, null);
-  assert.equal(logs.at(-1)?.data?.reason, 'FEED_STALE');
-  assert.equal(logs.at(-1)?.action, 'PRICE_SPEC_FALLBACK');
+  assert.equal(logs[logs.length - 1]?.data?.reason, 'FEED_STALE');
+  assert.equal(logs[logs.length - 1]?.action, 'PRICE_SPEC_FALLBACK');
 });
 
 test('a registered, fresh feed produces a price spec and rendered question', async () => {
@@ -205,6 +205,6 @@ test('PriceUnavailable past the deadline escalates with PRICE_RESOLUTION_STUCK',
     }) as any,
   });
   assert.deepEqual(out.escalated, [6n]);
-  assert.equal(logs.at(-1)?.action, 'PRICE_RESOLUTION_STUCK');
-  assert.equal(logs.at(-1)?.level, 'ERROR');
+  assert.equal(logs[logs.length - 1]?.action, 'PRICE_RESOLUTION_STUCK');
+  assert.equal(logs[logs.length - 1]?.level, 'ERROR');
 });

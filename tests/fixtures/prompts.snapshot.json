@@ -1,5 +1,10 @@
 [
   {
+    "id": "forecast",
+    "version": 1,
+    "contentHash": "57843ac125c45d0f0ac350210bb316cf30f857dd01ff89ffd5cdbdeb9bef8910"
+  },
+  {
     "id": "hedge-conditions",
     "version": 1,
     "contentHash": "78a41bf35699ca54c26a792c705c4bc6c4015b45425548d088b8f72136d1c603"

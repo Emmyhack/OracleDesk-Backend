@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Keypair } from '@stellar/stellar-sdk';
+import { Account, Keypair } from '@stellar/stellar-sdk';
 import { setupTestEnv } from './helpers/env';
 import { FakeRedis, fakeRpc } from './helpers/fake-redis';
 
