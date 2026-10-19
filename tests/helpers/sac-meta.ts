@@ -36,8 +36,9 @@ function eventType(type: TransferEventInput['type']): xdr.ContractEventType {
   }
 }
 
-function eventContractId(contract: string): Buffer {
-  return StrKey.decodeContract(contract);
+// The runtime accepts the raw 32-byte hash; only the generated d.ts disagrees.
+function eventContractId(contract: string): xdr.ContractId {
+  return StrKey.decodeContract(contract) as unknown as xdr.ContractId;
 }
 
 /** Builds the legacy or CAP-67 data for a transfer event. */
