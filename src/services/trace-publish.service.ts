@@ -12,6 +12,7 @@ import { verifyTraceHash, sha256Hex } from '../utils/hash.util';
 import { Prisma } from '@prisma/client';
 import { fetchIpfsBytes } from './ipfs.service';
 import { getOnChainTrace, printable } from './chain.service';
+import { registerHandler, type ChainTransactionRow, type CompletionOutcome } from './stellar/outbox';
 import { processPublication } from '../jobs/trace-publication.worker';
 import type { TraceAction } from '../lib/trace-actions';
 import { fetchVerifiedBytes, pinJson } from './ipfs.service';
@@ -19,6 +20,34 @@ import { publishTrace } from './chain.service';
 import type { AgentScope } from './agent-controls.service';
 import { agentSigner } from './stellar/clients';
 import type { TraceVerification } from '../types';
+
+/**
+ * Completion handler for `trace.publish` outbox rows (#35): links the landed
+ * trace id even when the publication worker died between submitting and its
+ * own confirm step. Idempotent: guarded on onChainTraceId still being null,
+ * exactly like the indexer's TracePublished projection. Failures are left to
+ * the publication worker's own retry state machine.
+ */
+export async function handleTracePublishOutcome(row: ChainTransactionRow, outcome: CompletionOutcome): Promise<void> {
+  const traceId = row.refId;
+  if (!traceId || outcome.status !== 'SUCCESS') return;
+  const onChainTraceId = BigInt(String(outcome.value ?? '0'));
+  await prisma.reasoningTrace.updateMany({
+    where: { id: traceId, onChainTraceId: null },
+    data: {
+      onChainTraceId,
+      publishTxHash: outcome.txHash ?? null,
+      publishInnerTxHash: row.hash ?? outcome.txHash ?? null,
+      verified: true,
+    },
+  });
+  await prisma.tracePublication.updateMany({
+    where: { traceId, status: { in: ['AWAITING_MARKET', 'READY', 'SUBMITTED'] } },
+    data: { status: 'CONFIRMED', confirmedAt: new Date(), lastError: null },
+  });
+}
+
+registerHandler('trace.publish', handleTracePublishOutcome);
 
 /**
  * Records that a trace must be published (#131). The row is durable: if

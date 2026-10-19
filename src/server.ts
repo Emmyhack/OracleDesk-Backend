@@ -19,6 +19,7 @@ import { startTraceAuditCron } from './cron/trace-audit.cron';
 import { startTracePublicationCron } from './cron/trace-publication.cron';
 import { startEventListener } from './services/indexer.service';
 import { gateDecision, runSpecCompatGate } from './services/stellar/spec-compat';
+import { startOutboxWorker } from './services/stellar/outbox';
 import { closeRedis, getRedis, checkRedisPolicy } from './lib/redis';
 import { memoryEventBus, redisEventBus } from './lib/event-bus';
 import { startFanout, startLocalFanout } from './lib/fanout';
@@ -29,6 +30,7 @@ import { health } from './services/health.service';
 let stopEventListener: (() => void) | null = null;
 let stopFanout: (() => Promise<void>) | null = null;
 let stopSecretRefresh: (() => void) | null = null;
+let stopOutboxWorker: (() => void) | null = null;
 
 async function bootstrap(): Promise<void> {
   // 0. Resolve secrets (mounted files or the configured remote provider).
@@ -89,6 +91,11 @@ async function bootstrap(): Promise<void> {
   if (specCompat && gateDecision(specCompat, specCompat.mode) === 'refuse') {
     process.exit(1);
   }
+
+  // 1c. Transaction outbox recovery (#35): resolve whatever a previous process
+  // left in flight before the indexer and crons start issuing new writes, then
+  // keep recovering on an interval (one instance at a time via a Redis lock).
+  stopOutboxWorker = startOutboxWorker();
 
   // 2. Start HTTP server with Socket.io
   const server = http.createServer(app);
@@ -166,6 +173,8 @@ async function bootstrap(): Promise<void> {
     // Stop producing and consuming first, then close sockets and the HTTP
     // server (io.close also closes `server`), then the shared connections.
     if (stopEventListener) stopEventListener();
+    // In-flight outbox rows stay in the table and resolve on the next boot.
+    if (stopOutboxWorker) stopOutboxWorker();
     if (stopSecretRefresh) stopSecretRefresh();
     if (stopFanout) await stopFanout().catch(() => undefined);
     io.close(async () => {

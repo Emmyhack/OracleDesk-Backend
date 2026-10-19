@@ -1062,20 +1062,49 @@ model ReconcileRun {
 /// Transaction outbox: every live write persists its signed inner envelope here
 /// before submission, and a recovery worker polls and fee-bumps stuck rows
 /// (#38). The inner `hash` is the identity; fee-bump envelopes are extra.
+/// Outbox state machine (#35): BUILT → SIGNED → SUBMITTED → PENDING →
+/// SUCCESS | FAILED | EXPIRED. PENDING means submitted and handed to the
+/// recovery worker after the inline wait expired.
+enum ChainTxStatus {
+  BUILT
+  SIGNED
+  SUBMITTED
+  PENDING
+  SUCCESS
+  FAILED
+  EXPIRED
+}
+
+/// Transactional outbox (#35, #38): every live write persists its signed
+/// inner envelope and hash before submission, a recovery worker resolves
+/// non-terminal rows after a crash, and the fee-bump pass wraps stuck rows.
 model ChainTransaction {
   id String @id @default(uuid())
-  /// Domain object the write belongs to: 'trade' | 'market' | 'trace'.
+  /// Completion-handler key: market.create | trade.buy | trade.sell | trace.publish | <contract>.<method>.
   kind   String
+  /// Domain row the write belongs to (Market.id | Trade.id | PositionExit.id | ReasoningTrace.id).
   refId  String?
+  contract String?
+  method   String?
+  args     Json?
+  simulated Json?
+  /// Transaction source account (agent or leased channel).
+  source   String?
+  sequence String?
   /// Inner transaction hash (hex). The outbox identity and dedup key.
-  hash   String @unique
+  hash   String? @unique
   /// Signed inner envelope (base64 XDR), wrapped unchanged by a fee bump.
-  envelopeXdr String
-  /// PENDING | SUBMITTED | SUCCESS | FAILED | EXPIRED
-  status      String @default("PENDING")
+  envelopeXdr String?
+  status      ChainTxStatus @default(BUILT)
   submitLedger Int?
-  /// Inner transaction maxTime (unix seconds); a bump cannot extend it.
+  /// Timebounds (unix seconds); a bump cannot extend maxTime.
+  minTime      BigInt?
   maxTime      BigInt?
+  /// Ledger the transaction landed in.
+  ledger       Int?
+  resultXdr    String?
+  /// Native return value (printable form) once the write landed.
+  returnValue  Json?
   innerFee     String?
   resourceFee  String?
   /// Outer (fee-bump) hashes, in submission order.
@@ -1085,11 +1114,15 @@ model ChainTransaction {
   /// The hash that actually executed on chain (outer when bumped).
   landedHash   String?
   bumpAttempts Int @default(0)
+  attempts     Int @default(0)
   error        String?
+  /// When the completion handler ran for a terminal status.
+  handledAt    DateTime? @db.Timestamptz(3)
   createdAt    DateTime @default(now()) @db.Timestamptz(3)
   updatedAt    DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([status])
+  @@index([status, updatedAt])
   @@index([landedHash])
   @@index([kind, refId])
   @@map("chain_transactions")

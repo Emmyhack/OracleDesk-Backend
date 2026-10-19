@@ -48,6 +48,8 @@ async function setup(events = FIXTURES.map(toEventResponse)) {
       .slice(0, take);
   (prisma.chainEvent.update as any) = async ({ where, data }: any) => Object.assign(db.events.get(where.id), data);
   (prisma.indexerCursor.findUnique as any) = async () => (db.cursor === null ? null : { lastLedger: db.cursor });
+  // #35: each stored event checks the outbox for a matching in-flight row.
+  (prisma as any).chainTransaction = { findFirst: async () => null, findMany: async () => [], updateMany: async () => ({ count: 0 }), findUnique: async () => null };
   (prisma.indexerCursor.upsert as any) = async ({ update }: any) => { db.cursor = update.lastLedger; return {}; };
   const byChainId = (id: bigint) => [...db.markets.values()].find((m) => m.onChainMarketId === id) ?? null;
   (prisma.market.findUnique as any) = async ({ where }: any) => byChainId(where.onChainMarketId);

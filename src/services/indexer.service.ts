@@ -432,6 +432,13 @@ export async function backfillEvents(
         }
         if (await store(decoded, projectable && hasPublicEvent(decoded))) {
           stored++;
+          // #35: an indexed event proves its transaction landed. A matching
+          // non-terminal outbox row resolves now instead of on the next poll.
+          await import('./stellar/outbox')
+            .then((m) => m.recoverByTxHash(decoded.txHash))
+            .catch((err) =>
+              logger.warn({ err: err instanceof Error ? err.message : err, txHash: decoded.txHash }, 'Indexer: outbox recovery by txHash failed'),
+            );
           if (projectable) {
             await applySideEffects(decoded).catch((err) =>
               logger.error({ err, eventId: decoded.id }, 'Indexer side effect failed'),

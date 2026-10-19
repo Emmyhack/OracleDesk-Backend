@@ -23,7 +23,7 @@ import { logger } from '../lib/logger';
 import { config } from '../config';
 import { AppError } from '../middlewares/error.middleware';
 import { pinJson } from '../services/ipfs.service';
-import { publishTrace, ExpiredError } from '../services/chain.service';
+import { publishTrace, ExpiredError, ChainPendingError } from '../services/chain.service';
 import { ChainError } from '../services/stellar/errors';
 import { AgentPausedError } from '../services/agent-controls.service';
 import { agentSigner } from '../services/stellar/clients';
@@ -47,17 +47,20 @@ const MAX_STEPS = 6;
 
 export interface TracePublisher {
   agent(): string;
-  publish(args: {
-    market_id: bigint;
-    action: string;
-    trace_hash: Buffer;
-    ipfs_cid: string;
-  }): Promise<{ mode: 'dry-run' | 'live'; value: bigint; txHash: string | null }>;
+  publish(
+    args: {
+      market_id: bigint;
+      action: string;
+      trace_hash: Buffer;
+      ipfs_cid: string;
+    },
+    ref?: { kind: string; refId: string },
+  ): Promise<{ mode: 'dry-run' | 'live'; value: bigint; txHash: string | null }>;
 }
 
 export const defaultPublisher: TracePublisher = {
   agent: () => agentSigner().publicKey as string,
-  publish: (args) => publishTrace({ agent: agentSigner().publicKey as string, ...args }),
+  publish: (args, ref) => publishTrace({ agent: agentSigner().publicKey as string, ...args }, undefined, undefined, ref),
 };
 
 export interface PublicationRow {
@@ -279,12 +282,17 @@ async function advance(row: PublicationRow, ctx: Ctx): Promise<Advance> {
         const dup = await findOnChainDuplicate(ctx, trace.market.onChainMarketId, trace.traceHash);
         if (dup !== null) return confirm(ctx, row, dup, false);
       }
-      const result = await ctx.publisher.publish({
-        market_id: trace.market.onChainMarketId,
-        action: row.action,
-        trace_hash: Buffer.from(trace.traceHash, 'hex'),
-        ipfs_cid: trace.ipfsCid,
-      });
+      const result = await ctx.publisher.publish(
+        {
+          market_id: trace.market.onChainMarketId,
+          action: row.action,
+          trace_hash: Buffer.from(trace.traceHash, 'hex'),
+          ipfs_cid: trace.ipfsCid,
+        },
+        // #35: the trace.publish completion handler links onChainTraceId even
+        // when this worker dies before its own confirm step runs.
+        { kind: 'trace.publish', refId: row.traceId },
+      );
       if (result.mode === 'dry-run') {
         logger.info({ traceId: row.traceId, simulatedTraceId: String(result.value) }, 'dry-run: trace publish simulated, row stays READY');
         await update(ctx, row.id, { nextAttemptAt: after(ctx.now, DRY_RUN_RECHECK_MS) });
@@ -331,6 +339,19 @@ async function handleError(row: PublicationRow, err: unknown, ctx: Ctx): Promise
     await update(ctx, row.id, { nextAttemptAt: after(ctx.now, PAUSED_RECHECK_MS) });
     logger.info({ traceId: row.traceId }, 'Trace publication deferred: agent paused');
     return row.status;
+  }
+  // Submitted but unconfirmed within the inline wait (#35): the outbox worker
+  // and the trace.publish handler confirm it; this row re-checks chain state
+  // from SUBMITTED exactly as it does after an indexer-confirmation timeout.
+  if (err instanceof ChainPendingError) {
+    await update(ctx, row.id, {
+      status: S.SUBMITTED,
+      submittedTxHash: err.txHash ?? null,
+      nextAttemptAt: after(ctx.now, ctx.confirmTimeoutMs),
+      lastError: null,
+    });
+    logger.info({ traceId: row.traceId, txHash: err.txHash }, 'Trace publication submitted; awaiting outbox confirmation');
+    return S.SUBMITTED;
   }
   if (err instanceof ExpiredError) {
     const attempts = row.attempts + 1;

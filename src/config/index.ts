@@ -360,6 +360,15 @@ const envSchema = z
     // HMAC-SHA256 key for the X-OracleDesk-Signature header on generic webhooks.
     ALERT_WEBHOOK_SECRET: optionalString,
 
+    // ── Transaction outbox (#35) ──────────────────────────────────────────
+    // Recovery worker interval; it resolves non-terminal chain_transactions.
+    OUTBOX_POLL_MS: z.string().default('5000').transform(Number)
+      .pipe(z.number().int().min(250)),
+    // How long a live write waits inline for confirmation before returning
+    // CHAIN_PENDING and leaving resolution to the worker.
+    OUTBOX_INLINE_WAIT_MS: z.string().default('30000').transform(Number)
+      .pipe(z.number().int().min(1000)),
+
     // Spec compatibility gate (#34). Empty derives from the execution mode:
     // live → enforce (refuse to start on breaking spec/wasm drift), dry-run →
     // warn (log and keep running). off skips the check entirely.

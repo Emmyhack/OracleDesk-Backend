@@ -1,10 +1,16 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
 import { Keypair } from '@stellar/stellar-sdk';
 import { setupTestEnv } from './helpers/env';
 
 setupTestEnv();
+
+// The authed admin requests open the shared Redis connection; without closing
+// it this file never exits.
+after(async () => {
+  await (await import('../src/lib/redis')).closeRedis().catch(() => undefined);
+});
 const ADMIN = Keypair.random().publicKey();
 process.env.ADMIN_ADDRESSES = ADMIN; // read once when config loads
 
@@ -147,6 +153,25 @@ test('a chain write re-checks after simulation and aborts if paused in between',
   (config as any).AGENT_SECRET_KEY = agent.secret();
   const net = fakeRpc(100n);
   setSequenceDepsForTest({ redis: new FakeRedis() as any, rpc: net.rpc });
+  // #35: a live write persists an outbox row around build/sign/send.
+  const { prisma } = await import('../src/lib/prisma');
+  const outboxRows = new Map<string, any>();
+  let outboxN = 0;
+  (prisma as any).chainTransaction = {
+    create: async ({ data }: any) => { const row = { id: `ob${++outboxN}`, status: 'BUILT', handledAt: null, feeBumpHashes: [], ...data }; outboxRows.set(row.id, row); return { ...row }; },
+    updateMany: async ({ where, data }: any) => {
+      const row = outboxRows.get(where.id);
+      if (!row || (where.status?.in && !where.status.in.includes(row.status))) return { count: 0 };
+      Object.assign(row, data);
+      return { count: 1 };
+    },
+    findUnique: async ({ where }: any) => (outboxRows.has(where.id) ? { ...outboxRows.get(where.id) } : null),
+    findFirst: async () => null,
+    findMany: async () => [],
+    upsert: async () => ({}),
+  };
+  (prisma as any).chainSubmission = { upsert: async () => ({}) };
+  (prisma as any).chainFee = { upsert: async () => ({}) };
   let signed = 0;
   const built = new TransactionBuilder(new Account(agent.publicKey(), '100'), {
     fee: '100',
@@ -159,8 +184,17 @@ test('a chain write re-checks after simulation and aborts if paused in between',
     simulation: {},
     result: { isOk: () => true, unwrap: () => 5n },
     built,
-    signAndSend: async () => { signed++; return { result: 5n, sendTransactionResponse: { hash: 'ab'.repeat(32) } }; },
+    sign: async () => { signed++; },
   };
+  // The live path sends through the shared sender and polls the reader (#37/#42).
+  const { setTransactionSender, setTransactionReader } = await import('../src/services/stellar/tx-inspect');
+  const builtHash = built.hash().toString('hex');
+  const prevSender = setTransactionSender({
+    sendTransaction: async () => ({ status: 'PENDING', hash: builtHash, latestLedger: 100 }) as any,
+  });
+  const prevReader = setTransactionReader({
+    getTransaction: async () => ({ status: 'SUCCESS', ledger: 101 }) as any,
+  });
   let pauseDuringBuild = false;
   (clients.agentClients as any).treasury = () => ({
     agent_buy: async () => {
@@ -180,6 +214,8 @@ test('a chain write re-checks after simulation and aborts if paused in between',
     assert.equal(signed, 1, 'a paused write must never be signed');
   } finally {
     setSequenceDepsForTest(null);
+    setTransactionSender(prevSender);
+    setTransactionReader(prevReader);
   }
   (config as any).CHAIN_EXECUTION_MODE = 'dry-run';
   assert.equal(store.rows.get('TRADER')!.paused, true);

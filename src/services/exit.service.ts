@@ -35,7 +35,8 @@ import {
   getPosition,
   quoteSell,
 } from './chain.service';
-import { ChainError } from './stellar/errors';
+import { ChainError, ChainPendingError } from './stellar/errors';
+import { registerHandler, type ChainTransactionRow, type CompletionOutcome } from './stellar/outbox';
 import { AgentPausedError } from './agent-controls.service';
 
 /** Remaining shares at or below this are dust: the position counts as closed. */
@@ -154,6 +155,9 @@ type Failure = 'slippage' | 'insufficient' | 'closed' | 'paused' | 'agent-paused
 
 function classify(err: unknown): Failure {
   if (err instanceof AgentPausedError) return 'agent-paused';
+  // Submitted but unconfirmed within the inline wait (#35): the outbox worker
+  // resolves it; the exit stays SUBMITTED until then.
+  if (err instanceof ChainPendingError) return 'ambiguous';
   if (err instanceof ChainError) {
     switch (err.contractError) {
       case 'SlippageExceeded': return 'slippage';
@@ -203,11 +207,18 @@ async function recordFailure(
  * Applies a confirmed (or reconciled) sale to the position and the exit row in
  * one transaction. Cost basis is released pro rata; a full exit releases it all.
  */
+/**
+ * Applies a confirmed exit exactly once (#35): the CONFIRMED transition is a
+ * compare-and-set on the exit row's SUBMITTED status inside one transaction
+ * with the position update, so the trade.sell completion handler (inline or
+ * crash recovery) and exitPosition's direct path can both call it safely —
+ * whoever wins the CAS applies the position deltas, the loser reads back.
+ */
 async function applyConfirmedExit(
   position: LoadedPosition,
   exitId: string,
   p: { sold: bigint; collateralOut: bigint; txHash: string | null; reason: string; note?: string },
-): Promise<{ closed: boolean }> {
+): Promise<{ closed: boolean; applied: boolean }> {
   const sharesBefore = decimalToBigint(position.sharesRaw);
   const costBefore = position.costBasisRaw == null
     ? usdcFromNumber(position.trade?.amount ?? position.size)
@@ -219,40 +230,47 @@ async function applyConfirmedExit(
   const realisedPnlRaw = decimalToBigint(position.realisedPnlRaw) + (p.collateralOut - costSold);
   const effectivePrice = sold > 0n ? Math.min(1, Number(p.collateralOut) / Number(sold)) : null;
 
-  const exitUpdate = prisma.positionExit.update({
-    where: { id: exitId },
-    data: {
-      status: 'CONFIRMED',
-      sharesSoldRaw: bigintToDecimalString(sold),
-      collateralOutRaw: bigintToDecimalString(p.collateralOut),
-      effectivePrice,
-      txHash: p.txHash,
-      error: p.note ?? null,
-    },
+  const applied = await prisma.$transaction(async (tx) => {
+    const won = await tx.positionExit.updateMany({
+      where: { id: exitId, status: 'SUBMITTED' },
+      data: {
+        status: 'CONFIRMED',
+        sharesSoldRaw: bigintToDecimalString(sold),
+        collateralOutRaw: bigintToDecimalString(p.collateralOut),
+        effectivePrice,
+        txHash: p.txHash,
+        error: p.note ?? null,
+      },
+    });
+    if (won.count === 0) return false;
+    await tx.position.update({
+      where: { id: position.id },
+      data: {
+        sharesRaw: bigintToDecimalString(remaining),
+        costBasisRaw: bigintToDecimalString(costBefore - costSold),
+        realisedCollateralRaw: bigintToDecimalString(decimalToBigint(position.realisedCollateralRaw) + p.collateralOut),
+        realisedPnlRaw: bigintToDecimalString(realisedPnlRaw),
+        pnl: toDisplayUsdc(realisedPnlRaw),
+        ...(closed
+          ? {
+              status: p.reason === 'STOP_LOSS' ? 'STOP_LOSS' : 'CLOSED',
+              closedAt: new Date(),
+              closeReason: p.reason,
+              markValueRaw: '0',
+              liquidationValueRaw: '0',
+              unrealisedPnlRaw: '0',
+              ...(effectivePrice !== null ? { currentPrice: effectivePrice } : {}),
+            }
+          : {}),
+      } as any,
+    });
+    return true;
   });
-  const positionUpdate = prisma.position.update({
-    where: { id: position.id },
-    data: {
-      sharesRaw: bigintToDecimalString(remaining),
-      costBasisRaw: bigintToDecimalString(costBefore - costSold),
-      realisedCollateralRaw: bigintToDecimalString(decimalToBigint(position.realisedCollateralRaw) + p.collateralOut),
-      realisedPnlRaw: bigintToDecimalString(realisedPnlRaw),
-      pnl: toDisplayUsdc(realisedPnlRaw),
-      ...(closed
-        ? {
-            status: p.reason === 'STOP_LOSS' ? 'STOP_LOSS' : 'CLOSED',
-            closedAt: new Date(),
-            closeReason: p.reason,
-            markValueRaw: '0',
-            liquidationValueRaw: '0',
-            unrealisedPnlRaw: '0',
-            ...(effectivePrice !== null ? { currentPrice: effectivePrice } : {}),
-          }
-        : {}),
-    } as any,
-  });
-  await prisma.$transaction([exitUpdate, positionUpdate]);
-  return { closed };
+  if (!applied) {
+    const current = await prisma.position.findUnique({ where: { id: position.id }, select: { status: true } });
+    return { closed: current != null && current.status !== 'OPEN', applied: false };
+  }
+  return { closed, applied: true };
 }
 
 /** Fills sharesRaw / costBasisRaw for a pre-#78 row from the on-chain balance. */
@@ -404,12 +422,16 @@ export async function exitPosition(
     });
 
     try {
-      const result = await agentSell({
-        market_id: onChainMarketId,
-        outcome: outcomeValue(outcome),
-        collateral_out: plan.collateralOut,
-        max_shares_in: plan.maxSharesIn,
-      });
+      const result = await agentSell(
+        {
+          market_id: onChainMarketId,
+          outcome: outcomeValue(outcome),
+          collateral_out: plan.collateralOut,
+          max_shares_in: plan.maxSharesIn,
+        },
+        undefined,
+        { kind: 'trade.sell', refId: row.id },
+      );
       const sold = BigInt(result.value);
 
       if (result.mode === 'dry-run') {
@@ -424,6 +446,9 @@ export async function exitPosition(
         return { exitId: row.id, status: 'SIMULATED', sharesSoldRaw: sold, collateralOutRaw: plan.collateralOut, closed: false };
       }
 
+      // #35: the trade.sell completion handler may already have applied this
+      // before agentSell resolved; applyConfirmedExit's CAS makes the second
+      // call a read-back, so exactly one of the two applies the deltas.
       const { closed } = await applyConfirmedExit(position, row.id, {
         sold,
         collateralOut: plan.collateralOut,
@@ -480,3 +505,39 @@ export async function exitPosition(
     }
   }
 }
+
+/**
+ * Completion handler for `trade.sell` outbox rows (#35). It only applies an
+ * exit that is still SUBMITTED: the inline path reads the handler's result
+ * back, and a failure thrown to a live caller is marked handled upstream, so
+ * this effectively runs once per exit — inline on confirmation, or from the
+ * recovery worker after a crash or an ambiguous submission.
+ */
+export async function handleTradeSellOutcome(row: ChainTransactionRow, outcome: CompletionOutcome): Promise<void> {
+  const exitId = row.refId;
+  if (!exitId) return;
+  const exit = await prisma.positionExit.findUnique({ where: { id: exitId } });
+  if (!exit || exit.status !== 'SUBMITTED') return;
+
+  if (outcome.status !== 'SUCCESS') {
+    await prisma.positionExit.updateMany({
+      where: { id: exitId, status: 'SUBMITTED' },
+      data: {
+        status: 'FAILED',
+        error: outcome.status === 'EXPIRED' ? 'expired unsubmitted' : (outcome.error ?? 'failed on-chain'),
+      },
+    });
+    return;
+  }
+
+  const position = await loadPosition(exit.positionId);
+  if (!position) return;
+  await applyConfirmedExit(position, exitId, {
+    sold: BigInt(String(outcome.value ?? '0')),
+    collateralOut: decimalToBigint(exit.collateralOutRaw ?? '0'),
+    txHash: outcome.txHash ?? null,
+    reason: exit.reason,
+  });
+}
+
+registerHandler('trade.sell', handleTradeSellOutcome);

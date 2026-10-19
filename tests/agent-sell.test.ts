@@ -42,7 +42,15 @@ async function harness(opts: { shares?: bigint; held?: bigint; direction?: 'YES'
   (prisma.positionExit.update as any) = async ({ where, data }: any) => {
     const row = state.exits.find((e) => e.id === where.id); Object.assign(row, data); return row;
   };
-  (prisma.$transaction as any) = async (ops: Promise<unknown>[]) => Promise.all(ops);
+  // applyConfirmedExit's CONFIRMED transition is a CAS on SUBMITTED (#35).
+  (prisma.positionExit.updateMany as any) = async ({ where, data }: any) => {
+    const row = state.exits.find((e) => e.id === where.id && (where.status === undefined || e.status === where.status));
+    if (!row) return { count: 0 };
+    Object.assign(row, data);
+    return { count: 1 };
+  };
+  // Supports both the array form and the interactive callback form (#35).
+  (prisma.$transaction as any) = async (ops: any) => (typeof ops === 'function' ? ops(prisma) : Promise.all(ops));
   (prisma.agentLog.create as any) = async () => ({});
 
   (chain as any).getPosition = async () => (direction === 'YES' ? { yes: state.held, no: 0n } : { yes: 0n, no: state.held });

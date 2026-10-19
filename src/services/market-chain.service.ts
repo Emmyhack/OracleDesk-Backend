@@ -24,7 +24,8 @@ import {
   ExpiredError,
   type WriteResult,
 } from './chain.service';
-import { ChainError } from './stellar/errors';
+import { ChainError, ChainPendingError } from './stellar/errors';
+import { registerHandler, type ChainTransactionRow, type CompletionOutcome } from './stellar/outbox';
 import { MIN_SEED_RAW, initialYesBps, decideSeed, type SeedDecision, type SeedPolicyConfig } from './seed-policy.service';
 import { agentSigner } from './stellar/clients';
 import { pinJson } from './ipfs.service';
@@ -40,6 +41,44 @@ import {
 
 // The seed policy owns both (it must stay free of config and database imports).
 export { MIN_SEED_RAW, initialYesBps };
+
+/**
+ * Completion handler for `market.create` outbox rows (#35): links the landed
+ * on-chain market id to the database market, whether confirmation arrived
+ * inline or from the recovery worker after a crash. It never overwrites an
+ * existing, different onChainMarketId — that would re-point live positions.
+ */
+export async function handleMarketCreateOutcome(row: ChainTransactionRow, outcome: CompletionOutcome): Promise<void> {
+  const marketId = row.refId;
+  if (!marketId) return;
+
+  if (outcome.status !== 'SUCCESS') {
+    await writeAgentLog({
+      agentType: 'MARKET_MAKER',
+      level: 'ERROR',
+      action: 'MARKET_CREATION_FAILED',
+      marketId,
+      data: { outboxId: row.id, status: outcome.status, error: outcome.error ?? null, txHash: outcome.txHash ?? null },
+    }).catch(() => undefined);
+    return;
+  }
+
+  const onChainMarketId = BigInt(String(outcome.value ?? '0'));
+  const existing = await prisma.market.findUnique({ where: { id: marketId }, select: { onChainMarketId: true } });
+  if (!existing) return;
+  if (existing.onChainMarketId != null) {
+    if (existing.onChainMarketId !== onChainMarketId) {
+      logger.error(
+        { marketId, linked: existing.onChainMarketId.toString(), landed: onChainMarketId.toString(), outboxId: row.id },
+        'market.create landed a different on-chain id than the one already linked; leaving the link untouched',
+      );
+    }
+    return;
+  }
+  await linkLandedMarket(marketId, onChainMarketId, outcome.txHash ?? null);
+}
+
+registerHandler('market.create', handleMarketCreateOutcome);
 
 export function defaultResolutionSpec(): ResolutionSpecJson {
   const signers = config.RESOLUTION_SIGNERS.length > 0
@@ -309,16 +348,35 @@ export async function createMarketOnChain(
 
   let result: WriteResult<bigint>;
   try {
-    result = await agentCreateMarket({
-      question_hash: Buffer.from(pinned.hash, 'hex'),
-      resolution_hash: resolutionHashBytes,
-      meta_uri: `ipfs://${pinned.cid}`,
-      category: toContractCategoryValue(market.category),
-      close_time: BigInt(Math.floor(market.expiryTimestamp.getTime() / 1000)),
-      seed_amount: seed,
-      initial_yes_bps: openBps,
-    });
+    result = await agentCreateMarket(
+      {
+        question_hash: Buffer.from(pinned.hash, 'hex'),
+        resolution_hash: resolutionHashBytes,
+        meta_uri: `ipfs://${pinned.cid}`,
+        category: toContractCategoryValue(market.category),
+        close_time: BigInt(Math.floor(market.expiryTimestamp.getTime() / 1000)),
+        seed_amount: seed,
+        initial_yes_bps: openBps,
+      },
+      undefined,
+      { kind: 'market.create', refId: market.id },
+    );
   } catch (err: any) {
+    // Submitted but unconfirmed (#35): the outbox worker resolves the row and
+    // the market.create handler links the market. The market stays PENDING and
+    // the attempt keeps its SUBMITTED state with the hash for discovery (#41).
+    if (err instanceof ChainPendingError) {
+      await prisma.marketCreationAttempt.update({
+        where: { marketId: market.id },
+        data: { txHash: err.txHash ?? undefined },
+      }).catch(() => undefined);
+      logger.warn(
+        { marketId: market.id, txHash: err.txHash, outboxId: err.outboxId },
+        'Market creation submitted; awaiting confirmation via the outbox worker',
+      );
+      throw err;
+    }
+
     const isExpired = err instanceof ExpiredError || err?.code === 'CHAIN_TX_EXPIRED';
     const txHash = err?.txHash ?? (err as any)?.details?.txHash ?? null;
 
@@ -360,10 +418,14 @@ export async function createMarketOnChain(
   }
 
   if (result.mode === 'live') {
-    await prisma.market.update({
-      where: { id: market.id },
-      data: { onChainMarketId: result.value, creationTxHash: result.txHash, status: 'ACTIVE' },
-    });
+    // #35: the market.create completion handler linked the market (ACTIVE,
+    // onChainMarketId, creationTxHash) before agentCreateMarket resolved.
+    // Link directly when it could not run (e.g. injected chain deps or an
+    // inline handler failure); linkLandedMarket re-applies the same values.
+    const linked = await prisma.market.findUnique({ where: { id: market.id }, select: { onChainMarketId: true } });
+    if (linked?.onChainMarketId == null) {
+      await linkLandedMarket(market.id, result.value, result.txHash);
+    }
     logger.info({ marketId: market.id, onChainMarketId: result.value.toString() }, 'Market created on-chain');
 
     // #90: a price market is unusable until its spec is revealed. Reveal right
@@ -386,7 +448,5 @@ export async function createMarketOnChain(
       'Market creation simulated (dry-run); market stays PENDING',
     );
   }
-  await linkLandedMarket(market.id, result.value, result.txHash);
-  logger.info({ marketId: market.id, onChainMarketId: result.value.toString() }, 'Market created on-chain');
   return result;
 }

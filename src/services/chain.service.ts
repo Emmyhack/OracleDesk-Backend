@@ -21,7 +21,13 @@ import type { rpc } from '@stellar/stellar-sdk';
 import { config } from '../config';
 import { logger } from '../lib/logger';
 import { agentClients, agentSigner, readClients } from './stellar/clients';
-import { ChainError, TransactionError, contractErrorName, ArchivedEntryError } from './stellar/errors';
+import { ChainError, ChainPendingError, TransactionError, contractErrorName, ArchivedEntryError } from './stellar/errors';
+import {
+  parseReturnValue,
+  prismaOutboxStore,
+  runCompletionHandler,
+  type ChainTransactionRow,
+} from './stellar/outbox';
 import { SequenceLockLost, rebuildWithSequence, withSourceAccount } from './stellar/sequence';
 import {
   ChainWriteFailure,
@@ -75,9 +81,20 @@ export interface FeeDetails {
   feeCharged?: bigint;
 }
 
+/**
+ * Domain correlation for the transactional outbox (#35): which completion
+ * handler owns the write and which domain row it updates.
+ */
+export interface WriteRef {
+  kind: string;
+  refId: string;
+}
+
 export type WriteResult<T> =
-  | { mode: 'dry-run'; method: string; value: T; txHash: null; fee?: FeeDetails }
-  | { mode: 'live'; method: string; value: T; txHash: string | null; fee?: FeeDetails };
+  | { mode: 'dry-run'; method: string; value: T; txHash: null; fee?: FeeDetails; outboxId?: string }
+  | { mode: 'live'; method: string; value: T; txHash: string | null; fee?: FeeDetails; outboxId?: string };
+
+export { ChainPendingError };
 
 export const Outcomes = {
   Yes: { tag: 'Yes', values: undefined } as Outcome,
@@ -194,13 +211,14 @@ async function write<T>(
   args: Record<string, unknown>,
   call: (options?: { fee?: bigint; timeoutInSeconds?: number }, signer?: Signer) => Promise<AssembledTransaction<unknown>>,
   signal?: AbortSignal,
+  ref?: WriteRef,
 ): Promise<WriteResult<T>> {
   const seenVersion = await assertAgentActive(scope);
   try {
     const result =
       config.CHAIN_EXECUTION_MODE === 'dry-run'
         ? await dryRunWrite<T>(scope, seenVersion, opClass, contract, method, args, call)
-        : await liveWriteWithRetry<T>(scope, seenVersion, opClass, contract, method, args, call, signal);
+        : await liveWriteWithRetry<T>(scope, seenVersion, opClass, contract, method, args, call, signal, ref);
     await recordChainWriteOutcome(scope, true, null);
     return result;
   } catch (err) {
@@ -270,18 +288,22 @@ async function liveWriteWithRetry<T>(
   args: Record<string, unknown>,
   call: (options?: { fee?: bigint; timeoutInSeconds?: number }, signer?: Signer) => Promise<AssembledTransaction<unknown>>,
   signal?: AbortSignal,
+  ref?: WriteRef,
 ): Promise<WriteResult<T>> {
   const opts = retryOptions();
   const startedAt = Date.now();
   let attempt = 0;
   for (;;) {
     try {
-      return await attemptWrite<T>(scope, seenVersion, opClass, contract, method, args, call, signal);
+      return await attemptWrite<T>(scope, seenVersion, opClass, contract, method, args, call, signal, ref);
     } catch (err) {
       if (err instanceof AgentPausedError) throw err;
       // Expiry has its own recovery (#42): the caller re-checks the edge and
       // resubmits a fresh build, so it is never retried blindly here.
       if (err instanceof ExpiredError) throw err;
+      // Submitted but unconfirmed (#35): the outbox row owns resolution now;
+      // a blind retry could double-apply.
+      if (err instanceof ChainPendingError) throw err;
       const failure: ClassifiedFailure =
         err instanceof ChainWriteFailure ? err.failure : classifyFailure({ contract, err });
       const { retry, delayMs } = retryDecision(failure, attempt, opts, Date.now() - startedAt);
@@ -323,6 +345,7 @@ async function attemptWrite<T>(
   args: Record<string, unknown>,
   call: (options?: { fee?: bigint; timeoutInSeconds?: number }, signer?: Signer) => Promise<AssembledTransaction<unknown>>,
   signal?: AbortSignal,
+  ref?: WriteRef,
 ): Promise<WriteResult<T>> {
   const oracle = getFeeOracle();
   const policy = oracle.getPolicies()[opClass];
@@ -331,6 +354,8 @@ async function attemptWrite<T>(
 
   let leasedChannel: LeasedChannel | null = null;
   let signer: Signer | undefined = undefined;
+  const store = prismaOutboxStore();
+  let outboxRow: ChainTransactionRow | null = null;
 
   const pool = getChannelPool();
   if (pool.size > 0) {
@@ -390,9 +415,13 @@ async function attemptWrite<T>(
     }
 
     const rawMaxTime = (tx as any)?.built?.timeBounds?.maxTime;
-    const maxTime = rawMaxTime !== undefined
-      ? BigInt(rawMaxTime)
-      : BigInt(Math.floor(Date.now() / 1000) + timeoutInSeconds);
+    // #35: once RPC retention has passed, a submitted transaction can only be
+    // resolved by its timebounds, so a write without a maxTime could stay
+    // unresolvable forever. Refuse to submit one.
+    if (rawMaxTime === undefined || rawMaxTime === null || BigInt(rawMaxTime) === 0n) {
+      throw new ChainError(`${method} was built without timebounds; refusing to submit`, null, { method });
+    }
+    const maxTime = BigInt(rawMaxTime);
     const minTime = 0n;
 
     let authExpLedger: number | null = null;
@@ -425,6 +454,24 @@ async function attemptWrite<T>(
       totalFee: expectedTotal,
     };
 
+  // #35: the write exists in the outbox before anything irreversible happens.
+  // The row moves BUILT → SIGNED → SUBMITTED around the steps below; a crash
+  // at any point leaves a row the recovery worker can resolve by hash.
+  const source = (signer?.publicKey as string | undefined) ?? (agentSigner().publicKey as string);
+  outboxRow = await store.create({
+    kind: ref?.kind ?? `${contract}.${method}`,
+    refId: ref?.refId ?? null,
+    contract,
+    method,
+    args: printable(args) as object,
+    simulated: printable(simulated) as object,
+    source,
+    minTime,
+    maxTime,
+    innerFee: inclusionFee.toString(),
+    resourceFee: minResourceFee.toString(),
+  });
+
   let txHash: string | null = null;
   const sender = getTransactionSender();
   const reader = getTransactionReader();
@@ -433,12 +480,20 @@ async function attemptWrite<T>(
     if (typeof (tx as any).sign === 'function') {
       await (tx as any).sign();
     }
+    const rawTx = tx as any;
     try {
-      const rawTx = tx as any;
       if (typeof rawTx?.built?.hash === 'function') {
         txHash = rawTx.built.hash().toString('hex');
       }
     } catch {}
+    // The signed envelope and hash are durable before sendTransaction, so
+    // recovery can resubmit this exact envelope (same hash, same sequence).
+    const signedRow = await store.transition(outboxRow!.id, ['BUILT'], 'SIGNED', {
+      envelopeXdr: typeof rawTx?.built?.toXDR === 'function' ? rawTx.built.toXDR() : null,
+      hash: txHash,
+      sequence: rawTx?.built?.sequence != null ? String(rawTx.built.sequence) : null,
+    });
+    if (signedRow) outboxRow = signedRow;
   };
 
   const send = () =>
@@ -453,6 +508,37 @@ async function attemptWrite<T>(
       { signal },
     );
 
+  /** Maps the send response onto the outbox state machine (#35). */
+  const acceptSend = async (res: any) => {
+    const status = res?.status;
+    if (status === 'ERROR') {
+      // The network rejected this envelope (e.g. tx_bad_seq): it can never
+      // land, so the row is terminal. A retry builds a fresh envelope and row.
+      const failure = classifyFailure({ contract, send: res });
+      await store
+        .transition(outboxRow!.id, ['SIGNED'], 'FAILED', {
+          error: failure.txCode ?? failure.class,
+          handledAt: new Date(),
+        })
+        .catch(() => undefined);
+      throw new ChainWriteFailure(
+        { ...failure, txHash: failure.txHash ?? txHash },
+        new Error(`sendTransaction returned ERROR (${failure.txCode ?? failure.class})`),
+      );
+    }
+    if (status === 'TRY_AGAIN_LATER') {
+      throw new ChainWriteFailure(
+        { class: 'TRANSIENT_RPC', txCode: null, opCode: null, contractError: null, txHash, submitted: false },
+        new Error('sendTransaction returned TRY_AGAIN_LATER'),
+      );
+    }
+    // PENDING or DUPLICATE: the network has this exact envelope.
+    const moved = await store.transition(outboxRow!.id, ['SIGNED'], 'SUBMITTED', {
+      submitLedger: typeof res?.latestLedger === 'number' ? res.latestLedger : null,
+    });
+    if (moved) outboxRow = moved;
+  };
+
   let sendRes: any;
   try {
     if (leasedChannel) {
@@ -460,6 +546,7 @@ async function attemptWrite<T>(
       // contention-free for the duration of the lease.
       await signAndHash();
       sendRes = await send();
+      await acceptSend(sendRes);
     } else {
       // #36: agent-sourced writes serialize on the agent account's sequence.
       // The lock spans rebuild → send and is released as soon as the network
@@ -486,7 +573,9 @@ async function attemptWrite<T>(
             // Fence: a holder that lost its lock must never submit.
             ctx.assertHeld();
             const res = await send();
-            // The network accepted the envelope: reserve the sequence.
+            // A rejected envelope must not advance the cached sequence (#36);
+            // acceptSend throws on ERROR / TRY_AGAIN_LATER before we reserve it.
+            await acceptSend(res);
             await ctx.advanceSequence();
             return res;
           } catch (err: any) {
@@ -496,6 +585,12 @@ async function attemptWrite<T>(
               err?.code === 'UPSTREAM_TIMEOUT'
             ) {
               await ctx.resync().catch(() => undefined);
+              throw err;
+            }
+            if (err instanceof ChainWriteFailure) {
+              if (err.failure.class === 'BAD_SEQUENCE' || err.failure.class === 'UNKNOWN_OUTCOME') {
+                await ctx.resync().catch(() => undefined);
+              }
               throw err;
             }
             const failure = classifyFailure({ contract, err, send: extractSendResponse(err) });
@@ -509,24 +604,39 @@ async function attemptWrite<T>(
       );
     }
   } catch (err: any) {
-    if (err instanceof ChainWriteFailure) throw err;
-    if (err instanceof SequenceLockLost) {
+    let mapped: Error;
+    if (err instanceof ChainWriteFailure || err instanceof ChainError) {
+      mapped = err;
+    } else if (err instanceof SequenceLockLost) {
       // Aborted before send: safe to retry on a fresh sequence.
-      throw new ChainWriteFailure(
+      mapped = new ChainWriteFailure(
         { class: 'TRANSIENT_RPC', txCode: null, opCode: null, contractError: null, txHash, submitted: false },
         err,
       );
-    }
-    if (err instanceof TimeoutError || err?.code === 'UPSTREAM_TIMEOUT') {
+    } else if (err instanceof TimeoutError || err?.code === 'UPSTREAM_TIMEOUT') {
       // The submission may have been applied: ambiguous, never rebuilt (#40).
-      throw new ChainWriteFailure(
+      mapped = new ChainWriteFailure(
         { class: 'UNKNOWN_OUTCOME', txCode: null, opCode: null, contractError: null, txHash, submitted: true },
         err,
       );
+    } else {
+      const failure = classifyFailure({ contract, err, send: extractSendResponse(err) });
+      mapped = new ChainWriteFailure({ ...failure, txHash: failure.txHash ?? txHash }, err);
     }
-    if (err instanceof ChainError) throw err;
-    const failure = classifyFailure({ contract, err, send: extractSendResponse(err) });
-    throw new ChainWriteFailure({ ...failure, txHash: failure.txHash ?? txHash }, err);
+    // #35: an attempt that provably never reached the network is terminal for
+    // this row (a retry builds a fresh envelope and a fresh row), and the live
+    // caller's error path stands in for the completion handler. An ambiguous
+    // outcome leaves the row SUBMITTED for the recovery worker.
+    const ambiguous = mapped instanceof ChainWriteFailure && mapped.failure.submitted;
+    if (!ambiguous && outboxRow) {
+      await store
+        .transition(outboxRow.id, ['BUILT', 'SIGNED'], 'FAILED', {
+          error: err instanceof Error ? err.message : String(err),
+          handledAt: new Date(),
+        })
+        .catch(() => undefined);
+    }
+    throw mapped;
   }
 
   const finalHash = sendRes?.sendTransactionResponse?.hash ?? sendRes?.hash ?? txHash;
@@ -551,7 +661,9 @@ async function attemptWrite<T>(
 
   const attemptId = (args as any)?.attemptId ?? null;
   const pollIntervalMs = 2000;
-  const maxPollTimeoutMs = (timeoutInSeconds + 30) * 1000;
+  // #35: the inline wait is bounded; past it the write returns CHAIN_PENDING
+  // and the outbox worker owns resolution.
+  const maxPollTimeoutMs = Math.min((timeoutInSeconds + 30) * 1000, config.OUTBOX_INLINE_WAIT_MS);
   const pollStart = Date.now();
   let confirmedTx: any = null;
   let decision: ExpiryDecision = 'PENDING';
@@ -607,6 +719,14 @@ async function attemptWrite<T>(
           update: { decision: 'EXPIRED' },
         }).catch(() => undefined);
 
+        // The live caller's expiry handling (#42 rebuild) stands in for the
+        // completion handler, so the row is marked handled.
+        await store
+          .transition(outboxRow!.id, ['SUBMITTED'], 'EXPIRED', {
+            error: 'expired without inclusion',
+            handledAt: new Date(),
+          })
+          .catch(() => undefined);
         throw new ExpiredError(`Transaction ${finalHash} expired without inclusion`, attemptId, finalHash);
       }
 
@@ -656,11 +776,16 @@ async function attemptWrite<T>(
       update: { decision: 'PENDING' },
     }).catch(() => undefined);
 
-    throw new ChainError(
-      `${method} submission timed out while still PENDING`,
-      null,
-      { outcome: 'unknown', txHash: finalHash },
-      'CHAIN_SUBMISSION_TIMEOUT',
+    // #35: submitted but unconfirmed within the inline wait. The outbox row
+    // moves to PENDING and the recovery worker resolves it; the caller records
+    // an intermediate state, never a failure.
+    const pendingRow = await store
+      .transition(outboxRow!.id, ['SUBMITTED'], 'PENDING', {})
+      .catch(() => null);
+    throw new ChainPendingError(
+      `${method} submitted; outcome pending (tx ${finalHash})`,
+      (pendingRow ?? outboxRow!).id,
+      finalHash,
     );
   }
 
@@ -682,6 +807,15 @@ async function attemptWrite<T>(
     }).catch(() => undefined);
 
     const errName = contractErrorName(contract, confirmedTx);
+    // The live caller's error path stands in for the completion handler.
+    await store
+      .transition(outboxRow!.id, ['SUBMITTED'], 'FAILED', {
+        landedHash: finalHash,
+        ledger: (confirmedTx as any)?.ledger ?? null,
+        error: errName ?? 'failed on-chain',
+        handledAt: new Date(),
+      })
+      .catch(() => undefined);
     throw new ChainError(`${method} failed on-chain: ${errName ?? 'Unknown error'}`, errName, { method, txHash: finalHash });
   }
 
@@ -724,9 +858,30 @@ async function attemptWrite<T>(
     },
   }).catch((err: any) => logger.warn({ err: err?.message, txHash: finalHash }, 'Failed to record chain fee'));
 
-  const value = simulatedValueFromSent<T>(contract, method, (confirmedTx as any)?.returnValue ?? simulated);
-  logger.info({ method, txHash: finalHash }, 'submitted and confirmed');
-  return { mode: 'live', method, value, txHash: finalHash, fee: liveFeeDetails };
+  // The on-chain return value decoded with the binding's spec is the source of
+  // truth; the simulation result is the fallback for senders that do not
+  // expose it (#35).
+  const chainValue = parseReturnValue({ contract, method }, (confirmedTx as any)?.returnValue);
+  const value = (chainValue ?? simulatedValueFromSent<T>(contract, method, simulated)) as T;
+
+  const successRow = await store
+    .transition(outboxRow!.id, ['SUBMITTED', 'PENDING'], 'SUCCESS', {
+      landedHash: finalHash,
+      ledger: (confirmedTx as any)?.ledger ?? null,
+      returnValue: printable(value) as object,
+    })
+    .catch(() => null);
+  if (successRow) {
+    // The completion handler has run by the time write() resolves, so callers
+    // never write success state themselves (#35). Idempotent: a crash here is
+    // re-run by the recovery worker.
+    await runCompletionHandler(successRow, { status: 'SUCCESS', value, txHash: finalHash }, store).catch((err) =>
+      logger.error({ err, outboxId: successRow.id, kind: successRow.kind }, 'completion handler failed; recovery will retry'),
+    );
+  }
+
+  logger.info({ method, txHash: finalHash, outboxId: outboxRow!.id }, 'submitted and confirmed');
+  return { mode: 'live', method, value, txHash: finalHash, fee: liveFeeDetails, outboxId: outboxRow!.id };
   } finally {
     if (leasedChannel) {
       await leasedChannel.release();
@@ -856,9 +1011,9 @@ export interface CreateMarketArgs {
   initial_yes_bps: number;
 }
 
-export const agentCreateMarket = (args: CreateMarketArgs, signal?: AbortSignal) =>
+export const agentCreateMarket = (args: CreateMarketArgs, signal?: AbortSignal, ref?: WriteRef) =>
   write<bigint>('MARKET_MAKER', 'market_create', 'treasury', 'agent_create_market', { ...args }, async (opts, signer) =>
-    agentClients.treasury(signer).agent_create_market(args, opts as any), signal,
+    agentClients.treasury(signer).agent_create_market(args, opts as any), signal, ref,
   );
 
 export type AgentBuyArgs = { market_id: bigint; outcome: Outcome; collateral_in: bigint; min_shares_out: bigint };
@@ -873,6 +1028,7 @@ export const agentBuy = (
   args: AgentBuyArgs | (() => Promise<AgentBuyArgs>),
   signal?: AbortSignal,
   meta: Record<string, unknown> = {},
+  ref?: WriteRef,
 ) => {
   const resolveArgs = typeof args === 'function' ? args : async () => args;
   return write<bigint>(
@@ -883,12 +1039,17 @@ export const agentBuy = (
     { ...(typeof args === 'function' ? {} : args), ...meta },
     async (opts, signer) => agentClients.treasury(signer).agent_buy(await resolveArgs(), opts as any),
     signal,
+    ref,
   );
 };
 
-export const agentSell = (args: { market_id: bigint; outcome: Outcome; collateral_out: bigint; max_shares_in: bigint }, signal?: AbortSignal) =>
+export const agentSell = (
+  args: { market_id: bigint; outcome: Outcome; collateral_out: bigint; max_shares_in: bigint },
+  signal?: AbortSignal,
+  ref?: WriteRef,
+) =>
   write<bigint>('TRADER', 'trade', 'treasury', 'agent_sell', args, async (opts, signer) =>
-    agentClients.treasury(signer).agent_sell(args, opts as any), signal,
+    agentClients.treasury(signer).agent_sell(args, opts as any), signal, ref,
   );
 
 export const publishTrace = (args: {
@@ -897,9 +1058,9 @@ export const publishTrace = (args: {
   action: string;
   trace_hash: Buffer;
   ipfs_cid: string;
-}, signal?: AbortSignal, scope: AgentScope = agentScopeForTraceAction(args.action)) =>
+}, signal?: AbortSignal, scope: AgentScope = agentScopeForTraceAction(args.action), ref?: WriteRef) =>
   write<bigint>(scope, 'trace_publish', 'reasoningRegistry', 'publish_trace', args, async (opts, signer) =>
-    agentClients.reasoningRegistry(signer).publish_trace(args, opts as any), signal,
+    agentClients.reasoningRegistry(signer).publish_trace(args, opts as any), signal, ref,
   );
 
 // ─── Resolver writes (#90) ───────────────────────────────────────────────────
