@@ -32,7 +32,7 @@ import {
   sanitizeSignalText,
   type SanitizedSignal,
 } from './llm-guard.service';
-import { ALLOWED_ORACLES, SOURCE_WEIGHTS, meaningfulTokens } from './market-policy';
+import { ALLOWED_ORACLES, SOURCE_WEIGHTS, meaningfulTokens, tokenOverlap } from './market-policy';
 import {
   assessResolvability,
   type QuestionResolutionBlock,
@@ -284,6 +284,12 @@ export function validateMarketQuestion(rawLlmOutput: string): MarketProposal {
 
 /**
  * Computes a weighted probability estimate from a list of signals.
+ *
+ * WARNING: the estimate is a weighted mean of `rawValue`. Never call it with
+ * `rawValue` set to the price the result is compared against: the "estimate"
+ * then equals the price and the edge is zero by construction (the trader bug
+ * fixed in #75). The trader uses forecast.service.ts; this function remains
+ * for the market-maker path.
  */
 export function calculateProbability(
   signals: WeightedSignal[],
@@ -465,7 +471,7 @@ export function findLexicalMatch(question: string, existing: string[]): { index:
     const existingTokens = meaningfulTokens(existing[index]);
 
     // Pass 1: Jaccard similarity on meaningful tokens (threshold 0.55)
-    const intersection = existingTokens.filter(w => newTokensSet.has(w)).length;
+    const intersection = tokenOverlap(existingTokens, newTokensSet);
     const union        = new Set([...newTokens, ...existingTokens]).size;
     const jaccard      = union === 0 ? 0 : intersection / union;
     if (jaccard > 0.55) return { index, jaccard };

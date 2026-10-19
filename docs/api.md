@@ -689,11 +689,39 @@ Not verified: the contracts repo has no known x402-on-Stellar facilitator URL
 #### `GET /portfolio`
 
 The agent's (treasury's) portfolio. Response:
-`{ totalUsdc, deployedCapital, availableCapital, openPositions, totalPnl, dailyPnl, builderFeesEarned, correlationRisk, availableCapitalRaw }`.
-`availableCapitalRaw` is `treasury.available_capital()` read live (`null` if
-the RPC read fails). The float fields are the DB's view.
+`{ totalUsdc, deployedCapital, availableCapital, openPositions, totalPnl, dailyPnl, builderFeesEarned, treasury, correlationRisk, availableCapitalRaw, latestReport }`.
+
+Capital comes from the treasury contract, read live on every request (#76):
+
+```json
+"treasury": {
+  "availableRaw": "8000000000",
+  "maxTradeRaw": "5000000000",
+  "maxMarketRaw": "10000000000",
+  "maxDailyRaw": "20000000000",
+  "dailyUsedRaw": "1500000000",
+  "dailyRemainingRaw": "18500000000",
+  "dailyResetsAt": "2026-10-19T08:14:05.000Z"
+}
+```
+
+All `*Raw` values are 7-decimal USDC base units as decimal strings.
+`availableRaw` is `available_capital()`, the treasury's free USDC (it includes
+subscription revenue paid to the treasury and excludes capital locked in
+markets). `maxTradeRaw` / `maxMarketRaw` / `maxDailyRaw` are `get_config()`'s
+caps; `dailyUsedRaw` and `dailyResetsAt` come from `daily_usage()`, a rolling
+24 h window that starts at the first spend after the previous window expired
+(not UTC midnight). `dailyRemainingRaw` = `maxDailyRaw − dailyUsedRaw`.
+
+The float fields are derived from it: `availableCapital` = `availableRaw` in
+USDC, `totalUsdc` = `availableCapital + deployedCapital`. If the chain read
+fails, `treasury`, `availableCapital`, `totalUsdc` and
+`correlationRisk.isOverExposed` are `null` and the database fields are still
+returned. `availableCapitalRaw` (= `treasury.availableRaw`) is kept for
+compatibility.
 
 `correlationRisk` (#80): `{ pairs, totalExposure, isOverExposed, matrix, method, snapshotId }`.
+`isOverExposed` compares open exposure with 10% of the treasury's free cash.
 Each pair is `{ marketIdA, marketIdB, correlationScore, relationship, method }`
 for open positions with `|correlationScore| ≥ 0.60`. `correlationScore` is the
 estimate used for sizing: the latest correlation snapshot's value for the pair

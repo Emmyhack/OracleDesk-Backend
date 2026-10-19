@@ -90,6 +90,55 @@ export interface ProbabilityEstimate {
   computedAt: Date;
 }
 
+// ─── Forecast types (#75) ───
+
+/**
+ * What a forecaster may see. It deliberately has no price fields: no current
+ * or initial YES probability and no creator confidence interval, so no model
+ * can anchor on the number it is supposed to disagree with.
+ */
+export interface ForecastInput {
+  marketId: string;
+  question: string;
+  category: MarketCategory | string;
+  closeTime: Date;
+  resolutionSource: string | null;
+  /** The pinned question document, only after its hash verified; fields whitelisted. */
+  questionDoc: Record<string, unknown> | null;
+  signals: Array<{ id?: string; source: string; title: string; publishedAt: string }>;
+  now: Date;
+}
+
+export interface ModelForecast {
+  model: string;
+  /** Probability of YES, clamped to [0.02, 0.98]. */
+  p: number;
+  /** Standard deviation of p (probability units), floored at 0.05. */
+  sigma: number;
+  rationale: string;
+  /** sha256 of exactly what the model saw (inputs and, for an LLM, the prompt). */
+  inputsDigest: string;
+  /** Model-specific detail recorded in the trace (base rate, adjustments, samples…). */
+  detail?: Record<string, unknown>;
+}
+
+export interface EnsembleForecast {
+  p: number;
+  /** 90% interval. */
+  ci: ConfidenceInterval;
+  /** Log-odds standard deviation of the combined estimate, before shrinkage. */
+  sigmaLogit: number;
+  shrink: number;
+  members: Array<ModelForecast & { weight: number }>;
+  /** sha256 of the ForecastInput (the cache key's input half). */
+  inputsDigest: string;
+}
+
+export interface Forecaster {
+  name: string;
+  forecast(input: ForecastInput): Promise<ModelForecast | null>;
+}
+
 // ─── Trade types ───
 export interface KellyResult {
   fraction: number;        // f* = (bp - q) / b
@@ -102,7 +151,12 @@ export interface KellyResult {
 export interface TradePayload {
   marketId: string;
   direction: TradeDirection;
+  /** Display USDC; amountRaw is authoritative when present. */
   amount: number;
+  /** Collateral in base units (#76). Submitted as-is, never re-derived from `amount`. */
+  amountRaw?: bigint;
+  /** Treasury budget snapshot the size was clamped against, logged on a cap rejection (#76). */
+  budget?: Record<string, string>;
   price: number;
   kellyFraction: number;
   edgeDetected: number;
@@ -168,13 +222,25 @@ export interface TraceVerification {
 
 // ─── Portfolio types ───
 export interface PortfolioSummary {
-  totalUsdc: number;
+  /** Treasury free cash + deployed capital; null when the treasury could not be read (#76). */
+  totalUsdc: number | null;
   deployedCapital: number;
-  availableCapital: number;
+  /** Treasury free cash (available_capital); null when it could not be read. */
+  availableCapital: number | null;
   openPositions: number;
   totalPnl: number;
   dailyPnl: number;
   builderFeesEarned: number;
+  /** On-chain capital and caps in 7-decimal base units, as decimal strings (#76). */
+  treasury: {
+    availableRaw: string;
+    maxTradeRaw: string;
+    maxMarketRaw: string;
+    maxDailyRaw: string;
+    dailyUsedRaw: string;
+    dailyRemainingRaw: string;
+    dailyResetsAt: string;
+  } | null;
 }
 
 // ─── Correlation types ───

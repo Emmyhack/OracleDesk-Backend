@@ -24,6 +24,7 @@ import type { AggregatedSignals, HedgeRecommendation } from '../types';
 import { parseForecaster, type Forecaster } from './forecasters';
 import { SimError, SimPool, settlePosition, type Outcome } from './sim-pool';
 import { SimTreasury } from './sim-treasury';
+import type { MarketExposure, TreasuryBudget } from '../services/treasury-budget.service';
 import type {
   BacktestConfig, BacktestInputs, BacktestReport, HistoryEvent, ImpactMode, PositionSummary, RunReport, TradeRecord,
 } from './types';
@@ -327,6 +328,30 @@ class BacktestEnv implements TraderEnv {
     };
   }
 
+  /** The simulated treasury's views, as production reads them from the chain (#76). */
+  async budget(): Promise<TreasuryBudget> {
+    this.seen('budget');
+    const t = this.r.treasury;
+    const usage = t.rolledDailyUsage(this.r.nowSecs);
+    const remaining = t.maxDaily - usage.amount;
+    return {
+      availableRaw: t.cash,
+      maxTradeRaw: t.maxTrade,
+      maxMarketRaw: t.maxMarket,
+      maxDailyRaw: t.maxDaily,
+      dailyUsedRaw: usage.amount,
+      dailyRemainingRaw: remaining > 0n ? remaining : 0n,
+      dailyWindowStart: new Date(usage.dayStart * 1000),
+      dailyResetsAt: new Date((usage.dayStart + 86_400) * 1000),
+      readAt: new Date(this.r.now),
+    };
+  }
+
+  async marketExposure(marketId: string): Promise<MarketExposure> {
+    this.seen('marketExposure');
+    return { totalRaw: this.r.treasury.marketTotals.get(marketId) ?? 0n, estimated: false };
+  }
+
   async openPositions() {
     this.seen('openPositions');
     return this.open().map((p) => this.view(p));
@@ -379,13 +404,13 @@ class BacktestEnv implements TraderEnv {
     return evaluateStopLoss(position);
   }
 
-  async correlation(marketId: string, size: number, direction: 'YES' | 'NO') {
+  async correlation(marketId: string, size: number, direction: 'YES' | 'NO', bankroll: number) {
     this.seen('correlation');
     const market = this.r.markets.get(marketId);
     return evaluateCorrelation({
       proposed: { marketId, category: market?.category ?? 'MACRO', direction },
       proposedSize: size,
-      bankroll: this.r.cfg.params.bankroll,
+      bankroll,
       positions: this.open().map((p) => ({
         marketId: p.marketId, category: this.r.markets.get(p.marketId)?.category ?? 'MACRO', direction: p.direction, size: toDisplayUsdc(p.collateralRaw),
       })),

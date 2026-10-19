@@ -280,6 +280,24 @@ const envSchema = z
     // Two markets whose resolution dates are within this many days are "the same date".
     DEDUP_DATE_WINDOW_DAYS: z.string().default('3').transform(Number).pipe(z.number().min(0)),
 
+    // ── Trader forecaster (#75) ───────────────────────────────────────────
+    // LLM samples per forecast; with more than one the median p is used and
+    // the spread is added to the variance.
+    FORECAST_LLM_SAMPLES: z.string().default('1').transform(Number)
+      .pipe(z.number().int().min(1).max(5)),
+    // Shrink the ensemble's log-odds toward 0.5 by this factor.
+    FORECAST_SHRINK: z.string().default('0.15').transform(Number)
+      .pipe(z.number().min(0).max(0.9)),
+    // Markets forecast (not served from cache) per trader cycle.
+    FORECAST_MAX_MARKETS_PER_CYCLE: z.string().default('5').transform(Number)
+      .pipe(z.number().int().min(0).max(100)),
+    // Forecasting LLM calls per trader cycle (samples included).
+    FORECAST_MAX_LLM_CALLS_PER_CYCLE: z.string().default('10').transform(Number)
+      .pipe(z.number().int().min(0).max(500)),
+    // A forecast is reused while the market and its relevant signals are unchanged.
+    FORECAST_CACHE_TTL_HOURS: z.string().default('6').transform(Number)
+      .pipe(z.number().positive().max(72)),
+
     // ── Calibration (#68) ─────────────────────────────────────────────────
     // Slices with fewer resolved markets report insufficientData instead of noise.
     MIN_CALIBRATION_MARKETS: z.string().default('20').transform(Number)
@@ -350,6 +368,12 @@ const envSchema = z
     // Optional stricter backend policy for withdraw operations.
     TREASURY_WITHDRAW_MIN_SIGNERS: z.string().default('0').transform(Number)
       .pipe(z.number().int().min(0).max(20)),
+    // ── Treasury-aware sizing (#76) ───────────────────────────────────────
+    // Share of the daily and per-market headroom the trader leaves unused
+    // (basis points): the daily window can roll and other writers (market
+    // creation) share the caps between the budget read and the submit.
+    TREASURY_HEADROOM_SAFETY_BPS: z.string().default('500').transform(Number)
+      .pipe(z.number().int().min(0).max(9_999)),
     // #147 — development-only local IPFS stub selected explicitly.
     IPFS_TRANSPORT: z.enum(['pinata', 'local']).default('pinata'),
     IPFS_LOCAL_DIR: z.string().default('.ipfs-local'),

@@ -3,26 +3,29 @@ import { prisma } from '../lib/prisma';
 import { sendSuccess, parsePagination, buildPaginationMeta } from '../utils/response.util';
 import { getPortfolioSummary } from '../services/portfolio.service';
 import { getPortfolioCorrelations } from '../services/correlation.service';
-import { treasuryAvailableCapital } from '../services/chain.service';
+import { readTreasuryBudget } from '../services/treasury-budget.service';
+import { toDisplayUsdc } from '../lib/amounts';
 import { logger } from '../lib/logger';
 
 /**
  * GET /portfolio
  * Returns the agent's portfolio summary:
  *   totalUsdc, deployedCapital, availableCapital,
- *   openPositions count, totalPnl, dailyPnl, builderFeesEarned
+ *   openPositions count, totalPnl, dailyPnl, builderFeesEarned,
+ *   treasury (on-chain capital and caps, #76)
  */
-export async function getPortfolio(req: Request, res: Response): Promise<void> {
-  const [summary, correlations, availableCapitalRaw] = await Promise.all([
-    getPortfolioSummary(),
-    getPortfolioCorrelations(10_000),
-    treasuryAvailableCapital(req.signal)
-      .then((v) => v.toString())
-      .catch((err) => {
-        logger.warn({ err: err instanceof Error ? err.message : err }, 'treasury.available_capital read failed');
-        return null;
-      }),
+export async function getPortfolio(_req: Request, res: Response): Promise<void> {
+  // One read of available_capital, get_config and daily_usage (#76). A failed
+  // read leaves the DB fields and reports treasury: null.
+  const budget = await readTreasuryBudget().catch((err) => {
+    logger.warn({ err: err instanceof Error ? err.message : err }, 'treasury budget read failed');
+    return null;
+  });
+  const [summary, correlations] = await Promise.all([
+    getPortfolioSummary(budget),
+    getPortfolioCorrelations(budget ? toDisplayUsdc(budget.availableRaw) : null),
   ]);
+  const availableCapitalRaw = budget?.availableRaw.toString() ?? null;
 
   const latestReport = await prisma.transparencyReport
     .findFirst({ orderBy: { date: 'desc' }, select: { date: true, anchorLedger: true, cid: true, hash: true, onChainTraceId: true, mode: true, consistency: true } })
