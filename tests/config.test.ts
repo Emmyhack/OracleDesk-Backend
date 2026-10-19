@@ -52,3 +52,14 @@ test('defaults to dry-run on testnet, and generates dev-only ephemeral secrets',
   assert.equal(c.STELLAR_NETWORK_PASSPHRASE, 'Test SDF Network ; September 2015');
   assert.deepEqual(c.ephemeralSecrets.sort(), ['AUTH_SIGNING_SECRET', 'JWT_SECRET']);
 });
+
+test('SEP-45 and signing-key rotation settings are validated (#47/#48)', async () => {
+  const { loadConfig } = await import('../src/config');
+  assert.throws(() => loadConfig({ DATABASE_URL: 'x', SEP45_ENABLED: 'true' }), /WEB_AUTH_CONTRACT_ID/);
+  assert.throws(() => loadConfig({ DATABASE_URL: 'x', AUTH_PREVIOUS_SIGNING_KEYS: 'GABC' }));
+  const previous = Keypair.random().publicKey();
+  const c = loadConfig({ DATABASE_URL: 'x', AUTH_PREVIOUS_SIGNING_KEYS: previous });
+  assert.equal(c.AUTH_PREVIOUS_SIGNING_KEYS.length, 1);
+  assert.equal(c.AUTH_PREVIOUS_SIGNING_KEYS[0].publicKey, previous);
+  assert.equal(c.SEP45_ENABLED, false);
+});
