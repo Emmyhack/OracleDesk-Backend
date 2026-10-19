@@ -401,7 +401,7 @@ export async function createMarketFromProposal(
  */
 export async function prepareResolvableProposal(
   proposal: MarketProposal,
-  now = new Date(),
+  now = clockNow(),
 ): Promise<{ proposal: MarketProposal; resolution: QuestionResolutionBlock } | null> {
   const report = assessResolvability(proposal, {
     now,

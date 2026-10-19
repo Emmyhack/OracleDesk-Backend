@@ -787,7 +787,7 @@ const quoteSellImpl = (marketId: bigint, outcome: Outcome, collateralOut: bigint
     readClients.marketCore().quote_sell({ market_id: marketId, outcome, collateral_out: collateralOut }), signal,
   );
 
-export const getPosition = (marketId: bigint, holder: string, signal?: AbortSignal) =>
+const getPositionImpl = (marketId: bigint, holder: string, signal?: AbortSignal) =>
   read<Position>('marketCore', 'get_position', async () =>
     readClients.marketCore().get_position({ market_id: marketId, holder }), signal,
   );
@@ -838,7 +838,7 @@ export const treasuryConfig = (signal?: AbortSignal) => treasuryRiskConfig(signa
 const treasuryDailyUsageImpl = (signal?: AbortSignal) =>
   read<DailyUsage>('treasury', 'daily_usage', async () => readClients.treasury().daily_usage(), signal);
 
-export const marketCoreConfig = () =>
+const marketCoreConfigImpl = () =>
   read<MarketCoreConfig>('marketCore', 'get_config', async () => readClients.marketCore().get_config());
 
 // ─── Writes (through the treasury) ───────────────────────────────────────────
@@ -913,6 +913,8 @@ export const resolvePrice = (marketId: bigint, signal?: AbortSignal) =>
 // an override.
 
 const IMPLS = {
+  getPosition: getPositionImpl,
+  marketCoreConfig: marketCoreConfigImpl,
   marketCount: marketCountImpl,
   getOnChainMarket: getOnChainMarketImpl,
   getPrice: getPriceImpl,
@@ -954,3 +956,5 @@ export const agentCreateMarket = overridable('agentCreateMarket');
 export const agentBuy = overridable('agentBuy');
 export const agentSell = overridable('agentSell');
 export const publishTrace = overridable('publishTrace');
+export const marketCoreConfig = overridable('marketCoreConfig');
+export const getPosition = overridable('getPosition');

@@ -14,6 +14,7 @@
  * unknown stays SUBMITTED and blocks new exits for that position until the
  * next call reconciles it against the on-chain balance, so it never sells twice.
  */
+import { nowMs } from '../lib/clock';
 import { config } from '../config';
 import { prisma } from '../lib/prisma';
 import { logger } from '../lib/logger';
@@ -356,7 +357,7 @@ export async function exitPosition(
     }
   }
 
-  if (position.market.expiryTimestamp.getTime() - Date.now() < EXIT_CLOSE_GUARD_MS) {
+  if (position.market.expiryTimestamp.getTime() - nowMs() < EXIT_CLOSE_GUARD_MS) {
     return failed('EXIT_MARKET_CLOSED', { error: 'within 60s of close_time; left to settlement' });
   }
 
