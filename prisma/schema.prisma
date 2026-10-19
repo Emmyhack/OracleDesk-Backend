@@ -128,10 +128,24 @@ enum LogLevel {
 
 // ─────────────────────────── MODELS ───────────────────────────
 
-/// Registered subscribers who pay for reasoning traces
+/// How a custodial sub-identity is expressed on the signed challenge (#46).
+/// `MUXED` is a CAP-27 / SEP-23 M… address; `MEMO` is a G… account with an id memo.
+enum SubIdKind {
+  MUXED
+  MEMO
+}
+
+/// Registered subscribers who pay for reasoning traces.
+///
+/// `walletAddress` is the base G… account that signs and pays; it is no longer
+/// unique so one pooled account can host many sub-users. `identityKey` is the
+/// unique login identity: `G…`, `G…#muxed:<id>` or `G…#memo:<id>`.
 model User {
   id            String         @id @default(uuid())
-  walletAddress String         @unique
+  walletAddress String
+  subId         String?
+  subIdKind     SubIdKind?
+  identityKey   String         @unique
   email         String?        @unique
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt

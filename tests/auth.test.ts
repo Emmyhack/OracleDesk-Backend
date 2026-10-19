@@ -8,7 +8,7 @@ setupTestEnv();
 async function setup() {
   const auth = await import('../src/services/auth.service');
   const { prisma } = await import('../src/lib/prisma');
-  (prisma.user.upsert as any) = async ({ where }: any) => ({ id: 'user-1', walletAddress: where.walletAddress });
+  (prisma.user.upsert as any) = async ({ where }: any) => ({ id: 'user-1', identityKey: where.identityKey });
   auth.setChallengeStore(new auth.MemoryChallengeStore());
   const { config } = await import('../src/config');
   return { auth, config };
@@ -87,4 +87,62 @@ test('an expired challenge is rejected', async () => {
   } finally {
     Date.now = realNow;
   }
+});
+
+// ─── #46 sub-identities ─────────────────────────────────────────────────
+
+test('a muxed (M…) login signs with the base key and maps to it', async () => {
+  const { auth } = await setup();
+  const { MuxedAccount, Account } = await import('@stellar/stellar-sdk');
+  const base = Keypair.random();
+  const muxed = new MuxedAccount(new Account(base.publicKey(), '0'), '7').accountId();
+
+  const identity = auth.parseLoginIdentity(muxed);
+  assert.equal(identity.account, base.publicKey());
+  assert.equal(identity.subId, '7');
+  assert.equal(identity.subIdKind, 'MUXED');
+
+  const ch = await auth.createChallenge(muxed);
+  const result = await auth.verifyChallenge(muxed, sign(ch.transaction, ch.networkPassphrase, base));
+  assert.equal(result.walletAddress, base.publicKey());
+});
+
+test('a G… login with an id memo maps to that sub-identity', async () => {
+  const { auth } = await setup();
+  const base = Keypair.random();
+  const identity = auth.parseLoginIdentity(base.publicKey(), '42');
+  assert.equal(identity.account, base.publicKey());
+  assert.equal(identity.subId, '42');
+  assert.equal(identity.subIdKind, 'MEMO');
+
+  const ch = await auth.createChallenge(base.publicKey(), '42');
+  const result = await auth.verifyChallenge(base.publicKey(), sign(ch.transaction, ch.networkPassphrase, base), '42');
+  assert.equal(result.walletAddress, base.publicKey());
+});
+
+test('id 0 and the uint64 max are valid identities; text and out-of-range are not', async () => {
+  const { auth } = await setup();
+  const base = Keypair.random();
+  assert.equal(auth.parseLoginIdentity(base.publicKey(), '0').subId, '0');
+  assert.equal(auth.parseLoginIdentity(base.publicKey(), '18446744073709551615').subId, '18446744073709551615');
+  assert.equal(auth.parseLoginIdentity(base.publicKey(), 0).subId, '0');
+  assert.equal(await code(Promise.resolve().then(() => auth.parseLoginIdentity(base.publicKey(), '18446744073709551616'))), 'INVALID_MEMO');
+  assert.equal(await code(Promise.resolve().then(() => auth.parseLoginIdentity(base.publicKey(), 'not-a-number'))), 'INVALID_MEMO');
+  assert.equal(await code(Promise.resolve().then(() => auth.parseLoginIdentity(base.publicKey(), 2 ** 53))), 'INVALID_MEMO');
+});
+
+test('a memo combined with a muxed address is rejected', async () => {
+  const { auth } = await setup();
+  const { MuxedAccount, Account } = await import('@stellar/stellar-sdk');
+  const base = Keypair.random();
+  const muxed = new MuxedAccount(new Account(base.publicKey(), '0'), '7').accountId();
+  assert.equal(await code(Promise.resolve().then(() => auth.parseLoginIdentity(muxed, '7'))), 'INVALID_MEMO');
+});
+
+test('a challenge for one memo cannot be verified as another', async () => {
+  const { auth } = await setup();
+  const base = Keypair.random();
+  const ch = await auth.createChallenge(base.publicKey(), '42');
+  const signed = sign(ch.transaction, ch.networkPassphrase, base);
+  assert.equal(await code(auth.verifyChallenge(base.publicKey(), signed, '43')), 'CHALLENGE_SIGNATURE_INVALID');
 });

@@ -80,6 +80,7 @@ export function buildSeedData(options: SeedOptions = {}): SeedData {
     return {
       id: `seed-user-${i}`,
       walletAddress: wallet.publicKey(),
+      identityKey: wallet.publicKey(),
       email: i % 3 === 0 ? `seed-user-${i}@example.test` : null,
       createdAt: new Date(base - 90 * 86_400_000 + i * 3_600_000),
       updatedAt: new Date(base - 90 * 86_400_000 + i * 3_600_000),

@@ -1,6 +1,6 @@
 -- Minimal pre-backup data for the restore drill (#146).
-INSERT INTO users (id, "walletAddress", email, "createdAt", "updatedAt")
-VALUES ('restore-user', 'GCM7WU3RADBCIKBLGPPAEYV5WHASWMEQX6BU524QR3QFWSE7BIWCXAIF', NULL, now(), now())
+INSERT INTO users (id, "walletAddress", "identityKey", email, "createdAt", "updatedAt")
+VALUES ('restore-user', 'GCM7WU3RADBCIKBLGPPAEYV5WHASWMEQX6BU524QR3QFWSE7BIWCXAIF', 'GCM7WU3RADBCIKBLGPPAEYV5WHASWMEQX6BU524QR3QFWSE7BIWCXAIF', NULL, now(), now())
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO markets (id, question, category, status, "settlementCurrency", "initialYesProb", "confidenceInterval", "expiryTimestamp", "minimumLiquidity", "totalLiquidity", "createdAt", "updatedAt")

@@ -1,4 +1,5 @@
 import type { Request, Response } from 'express';
+import { Account, MuxedAccount } from '@stellar/stellar-sdk';
 import { CopyTradeStatus } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { sendSuccess, sendError } from '../utils/response.util';
@@ -87,6 +88,13 @@ export async function initiateCopyTrade(req: Request, res: Response): Promise<vo
   const direction = trace.edge > 0 ? 'YES' : 'NO';
   const expiresAt = new Date(Date.now() + config.COPY_TRADE_TTL_MINUTES * 60 * 1000);
 
+  // #46: a custodial sub-user shares the pooled base account. Return the muxed
+  // address so the client can sign from the sub-identity where one exists.
+  const userWalletMuxed =
+    req.user.subId != null && req.user.subIdKind === 'MUXED'
+      ? new MuxedAccount(new Account(req.user.walletAddress, '0'), req.user.subId).accountId()
+      : null;
+
   const copyTrade = await prisma.copyTrade.create({
     data: {
       userId:         req.user.userId,
@@ -111,6 +119,7 @@ export async function initiateCopyTrade(req: Request, res: Response): Promise<vo
       outcome:         direction === 'YES' ? 'Yes' : 'No',
       collateralInRaw: amountRaw,
       userWallet:      req.user.walletAddress,
+      userWalletMuxed,
       traceReference:  trace.ipfsCid,
     },
     instructions: 'Quote, then sign market_core.buy with min_shares_out from the quote. ' +
