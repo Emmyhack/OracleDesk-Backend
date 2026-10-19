@@ -51,7 +51,6 @@ A live write failure is classified from the actual Stellar result codes (`servic
 Backoff is jittered exponential, `min(CHAIN_RETRY_MAX_MS, CHAIN_RETRY_BASE_MS × 2^attempt) × U(0.5, 1)`, capped by `CHAIN_RETRY_MAX_ATTEMPTS` attempts and `CHAIN_RETRY_DEADLINE_MS` total. Trade execution re-quotes `min_shares_out` on each rebuild so a retry never reuses a bound a moved price has invalidated, and it marks a `PENDING` trade `FAILED` only for a permanent classification — transient or ambiguous failures stay retryable. The market-maker's on-chain creation likewise leaves a market `PENDING` rather than failed.
 
 ### Fee bumps (#38)
-
 A transaction whose inclusion fee is below the surge price is not rebuilt: a rebuilt transaction is a new hash with a new sequence that can execute alongside the original, which would double-execute a treasury trade. Instead the stored inner envelope is wrapped unchanged in a `FeeBumpTransaction` (`services/stellar/fee-bump.ts`) paid by `FEE_PAYER_SECRET`, so at most one envelope can ever land.
 
 The outer fee is `resourceFee + inclusionPerOp × (operations + 1)` — the `+1` accounts for the fee-bump operation — where `inclusionPerOp = max(prev × FEE_BUMP_MULTIPLIER, p90 surge price, innerInclusion + 1)` and `resourceFee` is read from the inner `sorobanData.resourceFee()`. It is refused with `FEE_BUMP_CAP_EXCEEDED` above `FEE_BUMP_MAX_STROOPS`. The SDK builder only computes `baseFee × (operations + 1)`, so the total is set explicitly after asserting the builder's base-fee semantics, then the outer transaction is signed by the fee payer (the inner signatures are never touched).
@@ -72,6 +71,51 @@ Both hashes are tracked: the inner `hash` is the outbox identity and dedup key, 
 5. Call `treasury.agent_create_market`. In live mode the returned id becomes `onChainMarketId` and the market goes `ACTIVE`; in dry-run it stays `PENDING`.
 
 Backend categories are mapped to the contract enum by `toContractCategory()`.
+
+### Price-mode markets (#90)
+
+A `CRYPTO` proposal that names a registered asset can commit to a Reflector
+(SEP-40) price feed instead of a signer set. This needs no human: after close,
+`resolver.resolve_price` reads the feed at `close_time`, compares it to the
+threshold and finalises market-core directly.
+
+- **Feed registry**: addresses are configuration, never hard-coded. They come
+  from `REFLECTOR_FEEDS_JSON` (keyed by network passphrase → symbol → feed),
+  validated in `config/index.ts`. Every entry carries a `source` citation. An
+  empty registry disables price mode, so every CRYPTO market falls back to
+  signer mode.
+- **Structured proposals**: the generation schema carries optional
+  `price_asset`/`price_threshold`/`price_direction`/`price_close_timestamp`
+  fields. `planPriceMarket()` parses them and, on any problem (parse,
+  unregistered asset, dead feed, or more fractional digits than `decimals()`),
+  logs `PRICE_SPEC_FALLBACK` and returns null so creation keeps the signer spec.
+- **Exact threshold**: `toFixedPoint(human, decimals)` uses string arithmetic
+  (never `parseFloat`) and rejects excess precision rather than rounding, since
+  a wrongly-scaled threshold silently flips outcomes.
+- **Deterministic text**: `renderPriceQuestion()` renders the question from the
+  structured fields, and that rendering replaces the LLM text for price markets,
+  so the human question and the committed spec cannot disagree. The pinned
+  question document gains a `priceResolution` block with the raw threshold,
+  decimals and direction.
+- **Pre-creation checks**: `checkFeed()` asserts the feed supports the asset and
+  that `lastprice` exists and is younger than `maxStaleness` — a dead feed today
+  is dead at close.
+- **Reveal**: right after a live creation `register_price_spec` commits the
+  spec; `MarketAlreadyConfigured` counts as success. Failures are retried by the
+  5-minute cron, which reveals any price market the resolver still reports
+  `Unconfigured`.
+- **Resolution**: the same cron calls `resolve_price` for closed price markets.
+  `MarketNotClosed` retries (ledger time may lag). `PriceUnavailable` and
+  `StalePrice` retry with exponential backoff up to
+  `PRICE_RESOLUTION_MAX_WAIT_SECS`, then log an `ERROR`
+  `PRICE_RESOLUTION_STUCK` so a guardian can decide on `guardian_void_market`.
+  `AlreadyFinalized` ends the loop quietly. Resolution always uses the stored
+  spec, never the current registry, so changing feeds never affects existing
+  markets.
+
+`validateResolutionSpec()` requires `maxStaleness > 0` (matching the contract's
+`InvalidConfig`), and, only at reveal time, rejects a negative threshold; the
+spec-hash fixtures still hash unchanged.
 
 ### Resolvability and the timing rule (#74)
 

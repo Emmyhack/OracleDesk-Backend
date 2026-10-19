@@ -13,6 +13,7 @@ import { startIngestionCron } from './cron/ingestion.cron';
 import { startMonitorCron } from './cron/monitor.cron';
 import { startReportCron } from './cron/report.cron';
 import { startReconcileCron } from './cron/reconcile.cron';
+import { startPriceResolutionCron } from './cron/price-resolution.cron';
 import { isAdminToken } from './middlewares/auth.middleware';
 import { startTraceAuditCron } from './cron/trace-audit.cron';
 import { startTracePublicationCron } from './cron/trace-publication.cron';
@@ -115,6 +116,8 @@ async function bootstrap(): Promise<void> {
   // Agent pause / resume notifications (#79).
   setControlEmitter((event, payload) => io.emit(event, payload));
   startReconcileCron((event, payload) => io.to('admins').emit(event, payload));
+  // Price-mode reveal + resolve loop (#90).
+  startPriceResolutionCron();
 
   io.on('connection', (socket) => {
     logger.info({ socketId: socket.id }, 'New client connected to socket.io');

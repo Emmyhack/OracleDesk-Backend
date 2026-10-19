@@ -34,7 +34,7 @@ import { withTimeout, TimeoutError, sleep } from '../lib/resilience';
 import type { Category, Config as MarketCoreConfig, Market as OnChainMarket, Outcome, Position } from '../generated/market-core';
 import type { Trace } from '../generated/reasoning-registry';
 import type { DailyUsage, RiskConfig } from '../generated/treasury';
-import type { ResolutionState } from '../generated/resolver';
+import type { PriceConfig, ResolutionState } from '../generated/resolver';
 import { agentScopeForTraceAction } from '../lib/trace-actions';
 import {
   AgentPausedError,
@@ -488,4 +488,19 @@ export const publishTrace = (args: {
 }, signal?: AbortSignal, scope: AgentScope = agentScopeForTraceAction(args.action)) =>
   write<bigint>(scope, 'reasoningRegistry', 'publish_trace', args, async () =>
     agentClients.reasoningRegistry().publish_trace(args), signal,
+  );
+
+// ─── Resolver writes (#90) ───────────────────────────────────────────────────
+// Both calls are permissionless; the agent only pays the fee and provides the
+// source account. Reveal commits the price spec; resolve reads the feed at
+// close_time and finalises market-core.
+
+export const registerPriceSpec = (marketId: bigint, spec: PriceConfig, signal?: AbortSignal) =>
+  write<void>('MARKET_MAKER', 'resolver', 'register_price_spec', { market_id: marketId, spec }, async () =>
+    agentClients.resolver().register_price_spec({ market_id: marketId, spec }), signal,
+  );
+
+export const resolvePrice = (marketId: bigint, signal?: AbortSignal) =>
+  write<Outcome>('MARKET_MAKER', 'resolver', 'resolve_price', { market_id: marketId }, async () =>
+    agentClients.resolver().resolve_price({ market_id: marketId }), signal,
   );

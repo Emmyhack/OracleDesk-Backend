@@ -82,7 +82,18 @@ export function resolutionHash(spec: ResolutionSpecJson): Buffer {
   return crypto.createHash('sha256').update(resolutionSpecScVal(spec).toXDR()).digest();
 }
 
-export function validateResolutionSpec(spec: ResolutionSpecJson): void {
+export interface ValidateResolutionSpecOptions {
+  /**
+   * Reveal-time validation (register_price_spec / register_signer_spec) applies
+   * the resolver contract's own rules, which are stricter than hashing needs.
+   * The contract rejects `threshold < 0` with InvalidConfig, but the spec-hash
+   * fixtures include a negative price threshold, so that check is only applied
+   * here, never while hashing.
+   */
+  forReveal?: boolean;
+}
+
+export function validateResolutionSpec(spec: ResolutionSpecJson, opts: ValidateResolutionSpecOptions = {}): void {
   const isAddress = (a: string) => StrKey.isValidEd25519PublicKey(a) || StrKey.isValidContract(a);
   if (spec.kind === 'signers') {
     if (spec.signers.length === 0 || !spec.signers.every(isAddress)) throw new Error('signers must be Stellar addresses');
@@ -94,6 +105,12 @@ export function validateResolutionSpec(spec: ResolutionSpecJson): void {
   }
   if (!StrKey.isValidContract(spec.reflector)) throw new Error('reflector must be a C… contract id');
   if (spec.asset.kind === 'stellar' && !isAddress(spec.asset.address)) throw new Error('asset address is invalid');
+  if (spec.asset.kind === 'other' && spec.asset.symbol.length === 0) throw new Error('asset symbol must not be empty');
   if (!/^-?\d+$/.test(spec.threshold)) throw new Error('threshold must be an integer string');
-  if (!Number.isInteger(spec.maxStaleness) || spec.maxStaleness < 0) throw new Error('maxStaleness must be >= 0');
+  // The resolver contract rejects max_staleness == 0 with InvalidConfig, so a
+  // market committed with 0 could never be revealed.
+  if (!Number.isInteger(spec.maxStaleness) || spec.maxStaleness <= 0) throw new Error('maxStaleness must be > 0');
+  if (opts.forReveal && BigInt(spec.threshold) < 0n) {
+    throw new Error('threshold must be >= 0 to reveal a price spec');
+  }
 }

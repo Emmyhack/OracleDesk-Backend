@@ -51,6 +51,39 @@ const seedCategoryBase = z
     ),
   );
 
+// ── Price-mode feed registry (#90) ──────────────────────────────────────────
+// REFLECTOR_FEEDS_JSON is a JSON object keyed by network passphrase → asset
+// symbol → feed. Addresses are cited, never hard-coded. Empty disables price
+// mode (every market falls back to signer mode).
+const reflectorFeedSchema = z.object({
+  reflector: z.string().refine((v) => StrKey.isValidContract(v), 'must be a C… Stellar contract id'),
+  asset: z.union([
+    z.object({ kind: z.literal('other'), symbol: z.string().min(1) }),
+    z.object({
+      kind: z.literal('stellar'),
+      address: z
+        .string()
+        .refine((v) => StrKey.isValidEd25519PublicKey(v) || StrKey.isValidContract(v), 'must be a G… or C… address'),
+    }),
+  ]),
+  quote: z.literal('USD'),
+  maxStaleness: z.number().int().positive(),
+  source: z.string().url(),
+});
+
+const reflectorFeeds = z
+  .string()
+  .default('{}')
+  .transform((v, ctx) => {
+    try {
+      return JSON.parse(v) as unknown;
+    } catch {
+      ctx.addIssue({ code: 'custom', message: 'must be a JSON object keyed by network passphrase → symbol → feed' });
+      return z.NEVER;
+    }
+  })
+  .pipe(z.record(z.string(), z.record(z.string(), reflectorFeedSchema)));
+
 export const PROBE_NAMES = ['database', 'redis', 'rpc', 'indexer'] as const;
 
 const probeName = z
@@ -156,6 +189,14 @@ const envSchema = z
     RESOLUTION_SIGNERS: commaList(stellarAccount),
     RESOLUTION_THRESHOLD: z.string().default('1').transform(Number),
     RESOLUTION_DISPUTE_WINDOW_SECS: z.string().default('86400').transform(Number),
+
+    // ── Price-mode markets (#90) ──────────────────────────────────────────
+    // Cited Reflector (SEP-40) feeds; see src/config/reflector-feeds.ts.
+    REFLECTOR_FEEDS_JSON: reflectorFeeds,
+    // How long resolve_price keeps retrying PriceUnavailable/StalePrice before
+    // escalating with an ERROR AgentLog for a guardian to void the market.
+    PRICE_RESOLUTION_MAX_WAIT_SECS: z.string().default('86400').transform(Number).pipe(z.number().int().min(60)),
+    PRICE_RESOLUTION_POLL_MS: z.string().default('300000').transform(Number).pipe(z.number().int().min(1000)),
 
     // Failure breaker (#79): this many chain-write failures inside the window
     // pause the writing agent until an operator resumes it.

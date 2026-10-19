@@ -26,6 +26,7 @@ import { ChainError } from './stellar/errors';
 import { MIN_SEED_RAW, initialYesBps, decideSeed, type SeedDecision, type SeedPolicyConfig } from './seed-policy.service';
 import { agentSigner } from './stellar/clients';
 import { pinJson } from './ipfs.service';
+import { revealPriceSpec } from './price-resolution.service';
 import type { QuestionResolutionBlock } from './resolvability.service';
 
 // The seed policy owns both (it must stay free of config and database imports).
@@ -50,8 +51,20 @@ export function defaultResolutionSpec(): ResolutionSpecJson {
  * details. Markets without them keep the exact v1 shape, so their pinned bytes
  * (and hashes) are unchanged. Readers must ignore unknown fields.
  */
-export function questionDocument(market: Market, resolutionHashHex: string) {
+export function questionDocument(market: Market, resolutionHashHex: string, spec?: ResolutionSpecJson) {
   const details = market.resolutionDetails as QuestionResolutionBlock | null | undefined;
+  const priceResolution =
+    spec && spec.kind === 'price'
+      ? {
+          kind: 'price' as const,
+          reflector: spec.reflector,
+          asset: spec.asset.kind === 'stellar' ? spec.asset.address : spec.asset.symbol,
+          assetKind: spec.asset.kind,
+          threshold: spec.threshold,
+          direction: spec.direction,
+          maxStaleness: spec.maxStaleness,
+        }
+      : undefined;
   return {
     version: details ? 2 : 1,
     question: market.question,
@@ -62,6 +75,7 @@ export function questionDocument(market: Market, resolutionHashHex: string) {
     resolutionHash: resolutionHashHex,
     backendMarketId: market.id,
     ...(details ? { resolution: details } : {}),
+    ...(priceResolution ? { priceResolution } : {}),
   };
 }
 
@@ -186,7 +200,7 @@ export async function createMarketOnChain(
 ): Promise<WriteResult<bigint>> {
   const resolutionHashBytes = resolutionHash(spec);
   const resolutionHashHex = resolutionHashBytes.toString('hex');
-  const pinned = await pinJson(questionDocument(market, resolutionHashHex), `oracledesk-market-${market.id}`);
+  const pinned = await pinJson(questionDocument(market, resolutionHashHex, spec), `oracledesk-market-${market.id}`);
 
   const requested = usdcFromNumber(market.minimumLiquidity);
   const seed = plan ? plan.seedRaw : requested < MIN_SEED_RAW ? MIN_SEED_RAW : requested;
@@ -232,6 +246,21 @@ export async function createMarketOnChain(
       data: { onChainMarketId: result.value, creationTxHash: result.txHash, status: 'ACTIVE' },
     });
     logger.info({ marketId: market.id, onChainMarketId: result.value.toString() }, 'Market created on-chain');
+
+    // #90: a price market is unusable until its spec is revealed. Reveal right
+    // after creation; on failure the periodic reveal pass retries, so the market
+    // simply stays Unconfigured until then.
+    if (spec.kind === 'price') {
+      try {
+        await revealPriceSpec(result.value, spec);
+        logger.info({ marketId: market.id, onChainMarketId: result.value.toString() }, 'Price spec revealed');
+      } catch (err) {
+        await writeAgentLog({
+          agentType: 'MARKET_MAKER', level: 'WARN', action: 'PRICE_SPEC_REVEAL_DEFERRED', marketId: market.id,
+          data: { onChainMarketId: result.value.toString(), error: err instanceof Error ? err.message : String(err) },
+        }).catch(() => undefined);
+      }
+    }
   } else {
     logger.info(
       { marketId: market.id, simulatedMarketId: result.value.toString() },
