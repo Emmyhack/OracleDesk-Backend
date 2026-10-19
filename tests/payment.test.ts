@@ -40,6 +40,27 @@ function reader(status: rpc.Api.GetTransactionStatus, envelope?: ReturnType<type
   };
 }
 
+/** The same transfer, submitted inside a fee-bump envelope (#38). */
+function feeBumpedEnvelope(opts: Parameters<typeof transferEnvelope>[0]) {
+  const source = new Account(opts.from, '1');
+  const inner = new TransactionBuilder(source, { fee: '100', networkPassphrase: opts.passphrase })
+    .addOperation(Operation.invokeContractFunction({
+      contract: opts.contract,
+      function: opts.fn ?? 'transfer',
+      args: [
+        new Address(opts.from).toScVal(),
+        new Address(opts.to).toScVal(),
+        nativeToScVal(opts.amount, { type: 'i128' }),
+      ],
+    }))
+    .setTimeout(30)
+    .build();
+  const payer = Keypair.random();
+  const outer = TransactionBuilder.buildFeeBumpTransaction(payer, '200', inner, opts.passphrase);
+  outer.sign(payer);
+  return outer.toEnvelope();
+}
+
 const HASH = 'ab'.repeat(32);
 const code = (p: Promise<unknown>) => p.then(() => 'ok', (e: any) => e.code ?? e.message);
 
@@ -66,6 +87,22 @@ test('payment verification: success and every failure mode', async () => {
   assert.equal(await run(reader(S.FAILED, env())), 'PAYMENT_FAILED');
   assert.equal(await run(reader(S.NOT_FOUND)), 'PAYMENT_NOT_FOUND');
   assert.equal(await run(reader(S.SUCCESS, env()), { ...expected, txHash: '0xnot-a-stellar-hash' }), 'VALIDATION_ERROR');
+});
+
+test('payment verification unwraps a fee-bump envelope (#38)', async () => {
+  const { verification, CONTRACTS, PAYMENTS_RECIPIENT, config } = await load();
+  const user = Keypair.random().publicKey();
+  const passphrase = config.STELLAR_NETWORK_PASSPHRASE;
+  const expected = { txHash: HASH, token: CONTRACTS.usdc, from: user, to: PAYMENTS_RECIPIENT, minAmount: PRICE };
+  const bumped = feeBumpedEnvelope({ passphrase, contract: CONTRACTS.usdc, from: user, to: PAYMENTS_RECIPIENT, amount: PRICE });
+  const prev = verification.setTransactionReader(reader(rpc.Api.GetTransactionStatus.SUCCESS, bumped as any));
+  try {
+    const result = await verification.verifyUsdcTransfer(expected);
+    assert.equal(result.from, user);
+    assert.equal(result.amount, PRICE);
+  } finally {
+    verification.setTransactionReader(prev);
+  }
 });
 
 test('recordPayment: grants a pass once per hash and never without verification', async () => {

@@ -50,6 +50,15 @@ A live write failure is classified from the actual Stellar result codes (`servic
 
 Backoff is jittered exponential, `min(CHAIN_RETRY_MAX_MS, CHAIN_RETRY_BASE_MS × 2^attempt) × U(0.5, 1)`, capped by `CHAIN_RETRY_MAX_ATTEMPTS` attempts and `CHAIN_RETRY_DEADLINE_MS` total. Trade execution re-quotes `min_shares_out` on each rebuild so a retry never reuses a bound a moved price has invalidated, and it marks a `PENDING` trade `FAILED` only for a permanent classification — transient or ambiguous failures stay retryable. The market-maker's on-chain creation likewise leaves a market `PENDING` rather than failed.
 
+### Fee bumps (#38)
+
+A transaction whose inclusion fee is below the surge price is not rebuilt: a rebuilt transaction is a new hash with a new sequence that can execute alongside the original, which would double-execute a treasury trade. Instead the stored inner envelope is wrapped unchanged in a `FeeBumpTransaction` (`services/stellar/fee-bump.ts`) paid by `FEE_PAYER_SECRET`, so at most one envelope can ever land.
+
+The outer fee is `resourceFee + inclusionPerOp × (operations + 1)` — the `+1` accounts for the fee-bump operation — where `inclusionPerOp = max(prev × FEE_BUMP_MULTIPLIER, p90 surge price, innerInclusion + 1)` and `resourceFee` is read from the inner `sorobanData.resourceFee()`. It is refused with `FEE_BUMP_CAP_EXCEEDED` above `FEE_BUMP_MAX_STROOPS`. The SDK builder only computes `baseFee × (operations + 1)`, so the total is set explicitly after asserting the builder's base-fee semantics, then the outer transaction is signed by the fee payer (the inner signatures are never touched).
+
+Both hashes are tracked: the inner `hash` is the outbox identity and dedup key, and every build appends its outer hash to `feeBumpHashes` before submission. Recovery (`services/stellar/outbox.ts`) polls `[hash, ...feeBumpHashes]`; whichever lands first resolves the row and sets `landedHash`. If the inner lands first, an outstanding bump is automatically invalid (`txFeeBumpInnerFailed`/`txBadSeq`) and its error is ignored after a re-poll. Domain rows store the landed hash in `txHash`/`creationTxHash`/`publishTxHash` and the inner hash in the matching `*InnerTxHash` column, and the indexer resolves an event's outer hash back to the inner hash through the outbox. Rows are only bumped while pending past `FEE_BUMP_AFTER_LEDGERS`, under `FEE_BUMP_MAX_ATTEMPTS`, and never within one ledger of the inner `maxTime` (a bump cannot extend timebounds). A fee bump cannot change `resourceFee`, so a resource/state failure stops bumping rather than escalating.
+
+
 
 
 ## Market creation (ADR 0001)

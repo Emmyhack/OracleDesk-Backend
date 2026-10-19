@@ -199,11 +199,21 @@ async function applySideEffects(event: DecodedEvent): Promise<void> {
     });
     if (trace && (trace.onChainTraceId === null || trace.onChainTraceId === onChainTraceId)) {
       // The event's trace_hash equals our stored traceHash, which is exactly
-      // what verification means for our own traces (#131).
+      // what verification means for our own traces (#131). RPC reports a
+      // fee-bumped transaction by its outer hash, so resolve the inner hash
+      // from the outbox by any known hash (#38).
+      const innerTxHash = await import('./stellar/outbox')
+        .then((m) => m.innerHashForTx(event.txHash))
+        .catch(() => null);
       if (trace.onChainTraceId === null) {
         await prisma.reasoningTrace.update({
           where: { id: trace.id },
-          data: { onChainTraceId, publishTxHash: event.txHash, verified: true },
+          data: {
+            onChainTraceId,
+            publishTxHash: event.txHash,
+            ...(innerTxHash && innerTxHash !== event.txHash ? { publishInnerTxHash: innerTxHash } : {}),
+            verified: true,
+          },
         });
       } else {
         await prisma.reasoningTrace.update({ where: { id: trace.id }, data: { verified: true } });

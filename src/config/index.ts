@@ -138,6 +138,18 @@ const envSchema = z
     CHAIN_RETRY_MAX_MS: z.string().default('5000').transform(Number).pipe(z.number().int().min(1)),
     CHAIN_RETRY_DEADLINE_MS: z.string().default('30000').transform(Number).pipe(z.number().int().min(1)),
 
+    // ── Fee bump sponsorship (#38) ────────────────────────────────────────
+    // When an outbox row stays pending past FEE_BUMP_AFTER_LEDGERS, its stored
+    // inner envelope is wrapped in a fee bump paid by FEE_PAYER_SECRET. The
+    // inclusion fee starts at the previous value × FEE_BUMP_MULTIPLIER (or the
+    // p90 surge price) and is capped by FEE_BUMP_MAX_STROOPS.
+    FEE_PAYER_SECRET: optionalString,
+    FEE_BUMP_ENABLED: z.enum(['true', 'false']).default('false').transform((v) => v === 'true'),
+    FEE_BUMP_AFTER_LEDGERS: z.string().default('3').transform(Number).pipe(z.number().int().min(1)),
+    FEE_BUMP_MULTIPLIER: z.string().default('2').transform(Number).pipe(z.number().min(1)),
+    FEE_BUMP_MAX_STROOPS: z.string().default('10000000').transform(Number).pipe(z.number().int().min(1)),
+    FEE_BUMP_MAX_ATTEMPTS: z.string().default('3').transform(Number).pipe(z.number().int().min(1)),
+
     // Resolution spec committed at market creation (ADR 0001). Signer mode:
     // RESOLUTION_SIGNERS attest the outcome on the resolver contract. Empty
     // means the agent account is the only signer.
@@ -358,6 +370,25 @@ const envSchema = z
           path: ['STELLAR_NETWORK_PASSPHRASE'],
           message: 'live mode is testnet-only; use the testnet passphrase',
         });
+      }
+    }
+    if (env.FEE_BUMP_ENABLED) {
+      if (!env.FEE_PAYER_SECRET) {
+        ctx.addIssue({ code: 'custom', path: ['FEE_PAYER_SECRET'], message: 'is required when FEE_BUMP_ENABLED=true' });
+      }
+      if (env.STELLAR_NETWORK_PASSPHRASE !== Networks.TESTNET) {
+        ctx.addIssue({ code: 'custom', path: ['FEE_PAYER_SECRET'], message: 'fee bumps are testnet-only' });
+      }
+    }
+    if (env.FEE_PAYER_SECRET) {
+      if (!StrKey.isValidEd25519SecretSeed(env.FEE_PAYER_SECRET)) {
+        ctx.addIssue({ code: 'custom', path: ['FEE_PAYER_SECRET'], message: 'must be a Stellar secret seed (S…)' });
+      }
+      if (env.FEE_PAYER_SECRET === env.AGENT_SECRET_KEY) {
+        ctx.addIssue({ code: 'custom', path: ['FEE_PAYER_SECRET'], message: 'must differ from AGENT_SECRET_KEY' });
+      }
+      if (env.FEE_PAYER_SECRET === env.AUTH_SIGNING_SECRET) {
+        ctx.addIssue({ code: 'custom', path: ['FEE_PAYER_SECRET'], message: 'must differ from AUTH_SIGNING_SECRET' });
       }
     }
   });

@@ -134,15 +134,31 @@ test('a chain write re-checks after simulation and aborts if paused in between',
   const clients = await import('../src/services/stellar/clients');
   const chain = await import('../src/services/chain.service');
   const { config } = await import('../src/config');
+  const { Account, Keypair: Kp, Operation, TransactionBuilder } = await import('@stellar/stellar-sdk');
+  const { setSequenceDepsForTest } = await import('../src/services/stellar/sequence');
+  const { FakeRedis, fakeRpc } = await import('./helpers/fake-redis');
   // The instance chain.service.ts imported; keep its breaker off Redis.
   const c = await import('../src/services/agent-controls.service');
   c.setFailureCounterForTest({ increment: async () => 1, reset: async () => undefined });
+  // #36: the live path takes a per-account lock and rewrites the built
+  // transaction with the allocated sequence, so provide a test double and key.
+  const agent = Kp.random();
   (config as any).CHAIN_EXECUTION_MODE = 'live';
+  (config as any).AGENT_SECRET_KEY = agent.secret();
+  const net = fakeRpc(100n);
+  setSequenceDepsForTest({ redis: new FakeRedis() as any, rpc: net.rpc });
   let signed = 0;
+  const built = new TransactionBuilder(new Account(agent.publicKey(), '100'), {
+    fee: '100',
+    networkPassphrase: config.STELLAR_NETWORK_PASSPHRASE,
+  })
+    .addOperation(Operation.manageData({ name: 'x', value: 'y' }))
+    .setTimeout(30)
+    .build();
   const fakeTx = {
     simulation: {},
     result: { isOk: () => true, unwrap: () => 5n },
-    built: { hash: () => Buffer.alloc(32) },
+    built,
     signAndSend: async () => { signed++; return { result: 5n, sendTransactionResponse: { hash: 'ab'.repeat(32) } }; },
   };
   let pauseDuringBuild = false;
@@ -154,13 +170,17 @@ test('a chain write re-checks after simulation and aborts if paused in between',
   });
   const args = { market_id: 1n, outcome: chain.Outcomes.Yes, collateral_in: 10n, min_shares_out: 1n };
 
-  const ok = await chain.agentBuy(args);
-  assert.equal(ok.mode, 'live');
-  assert.equal(signed, 1);
+  try {
+    const ok = await chain.agentBuy(args);
+    assert.equal(ok.mode, 'live');
+    assert.equal(signed, 1);
 
-  pauseDuringBuild = true;
-  await assert.rejects(chain.agentBuy(args), (e: any) => e.code === 'AGENT_PAUSED');
-  assert.equal(signed, 1, 'a paused write must never be signed');
+    pauseDuringBuild = true;
+    await assert.rejects(chain.agentBuy(args), (e: any) => e.code === 'AGENT_PAUSED');
+    assert.equal(signed, 1, 'a paused write must never be signed');
+  } finally {
+    setSequenceDepsForTest(null);
+  }
   (config as any).CHAIN_EXECUTION_MODE = 'dry-run';
   assert.equal(store.rows.get('TRADER')!.paused, true);
 });

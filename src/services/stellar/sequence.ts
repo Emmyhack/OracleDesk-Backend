@@ -80,13 +80,23 @@ function keys(account: string) {
 }
 
 function deps(override: Partial<SequenceDeps> = {}): Required<SequenceDeps> {
-  return {
-    rpc: override.rpc ?? rpcServer,
-    redis: override.redis ?? getRedis(),
-    now: override.now ?? Date.now,
-    sleep: override.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms))),
-    random: override.random ?? Math.random,
+  const base: Required<SequenceDeps> = {
+    rpc: override.rpc ?? testDeps?.rpc ?? rpcServer,
+    redis: override.redis ?? testDeps?.redis ?? getRedis(),
+    now: override.now ?? testDeps?.now ?? Date.now,
+    sleep: override.sleep ?? testDeps?.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms))),
+    random: override.random ?? testDeps?.random ?? Math.random,
   };
+  return base;
+}
+
+/**
+ * Test seam: install fake RPC/Redis so the live write path can be exercised
+ * without a running Redis or Stellar RPC. Call with null to restore.
+ */
+let testDeps: Partial<SequenceDeps> | null = null;
+export function setSequenceDepsForTest(next: Partial<SequenceDeps> | null): void {
+  testDeps = next;
 }
 
 /** Reads the account sequence from RPC and caches it. Returns the raw sequence. */

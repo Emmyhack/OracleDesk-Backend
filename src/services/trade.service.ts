@@ -149,6 +149,7 @@ export async function executeTrade(payload: TradePayload): Promise<{
       data:  {
         status:     'EXECUTED',
         txHash,
+        innerTxHash: txHash,
         executedAt: new Date(),
       },
     }),
