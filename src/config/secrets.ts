@@ -12,6 +12,7 @@
  */
 import fs from 'fs';
 import { StrKey } from '@stellar/stellar-sdk';
+import { entitlementKeyProblem } from '../services/entitlement/keys';
 
 export const SECRET_NAMES = [
   'JWT_SECRET',
@@ -22,6 +23,7 @@ export const SECRET_NAMES = [
   'GEMINI_API_KEY',
   'NEWSAPI_KEY',
   'FRED_API_KEY',
+  'ENTITLEMENT_SIGNING_KEY',
   'DATABASE_URL',
 ] as const;
 
@@ -61,6 +63,7 @@ interface ResolvedSecrets {
   GEMINI_API_KEY: string;
   NEWSAPI_KEY: string;
   FRED_API_KEY: string;
+  ENTITLEMENT_SIGNING_KEY: string;
   DATABASE_URL: string;
   AGENT_SECRET_KEY?: string;
   NODE_ENV?: string;
@@ -163,9 +166,15 @@ export function validateSecrets(
   if (values.AGENT_SECRET_KEY && !StrKey.isValidEd25519SecretSeed(values.AGENT_SECRET_KEY)) {
     problems.push('AGENT_SECRET_KEY must be a Stellar secret seed (S…)');
   }
+  if (values.ENTITLEMENT_SIGNING_KEY) {
+    // Never echo the key; only say that it could not be parsed.
+    const problem = entitlementKeyProblem(values.ENTITLEMENT_SIGNING_KEY);
+    if (problem) problems.push(`ENTITLEMENT_SIGNING_KEY ${problem}`);
+  }
   if (nodeEnv === 'production' && requireProd) {
     if (!values.JWT_SECRET) problems.push('JWT_SECRET is required in production');
     if (!values.AUTH_SIGNING_SECRET) problems.push('AUTH_SIGNING_SECRET is required in production');
+    if (!values.ENTITLEMENT_SIGNING_KEY) problems.push('ENTITLEMENT_SIGNING_KEY is required in production');
   }
   return problems;
 }
@@ -262,6 +271,10 @@ export async function refreshSecretsOnce(
     }
     if (name === 'AUTH_SIGNING_SECRET' && value && !StrKey.isValidEd25519SecretSeed(value)) {
       problems.push('AUTH_SIGNING_SECRET refresh failed validation; keeping the previous value');
+      continue;
+    }
+    if (name === 'ENTITLEMENT_SIGNING_KEY' && value && entitlementKeyProblem(value)) {
+      problems.push('ENTITLEMENT_SIGNING_KEY refresh failed validation; keeping the previous value');
       continue;
     }
     if (setEntry(name, value, { rotate: true })) updated.push(name);

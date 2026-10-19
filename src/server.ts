@@ -19,7 +19,7 @@ import { startTraceAuditCron } from './cron/trace-audit.cron';
 import { startTracePublicationCron } from './cron/trace-publication.cron';
 import { startEventListener } from './services/indexer.service';
 import { gateDecision, runSpecCompatGate } from './services/stellar/spec-compat';
-import { closeRedis, getRedis } from './lib/redis';
+import { closeRedis, getRedis, checkRedisPolicy } from './lib/redis';
 import { memoryEventBus, redisEventBus } from './lib/event-bus';
 import { startFanout, startLocalFanout } from './lib/fanout';
 import { setControlEmitter } from './services/agent-controls.service';
@@ -64,6 +64,10 @@ async function bootstrap(): Promise<void> {
     );
   }
   logger.info({ mode: config.CHAIN_EXECUTION_MODE }, 'Chain execution mode');
+
+  // #50: challenges must not be evicted before their TTL, and non-TTL data
+  // (locks, queues) shares this Redis. Warn on a policy that evicts them.
+  await checkRedisPolicy();
 
   // Initialise the cached agent sequence before any live write can race (#36).
   if (config.CHAIN_EXECUTION_MODE === 'live' && config.AGENT_SECRET_KEY) {

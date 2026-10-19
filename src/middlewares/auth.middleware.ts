@@ -18,6 +18,11 @@ export interface JwtPayload {
   /** Muxed id or memo id as a decimal string (never a JS number). */
   subId?: string | null;
   subIdKind?: 'MUXED' | 'MEMO' | null;
+  /**
+   * Session account kind (#47). Absent on tokens issued before SEP-45 and
+   * therefore treated as a classic G… account.
+   */
+  accountType?: 'account' | 'contract';
   iat: number;
   exp: number;
 }
@@ -106,6 +111,8 @@ export function optionalAuth(req: Request, _res: Response, next: NextFunction): 
  */
 function isAdmin(user: JwtPayload | undefined): boolean {
   if (!user) return false;
+  // Contract accounts (#47) are never admins: ADMIN_ADDRESSES is G… only.
+  if (user.accountType === 'contract') return false;
   if ((user.subIdKind ?? null) !== null) return false;
   return config.ADMIN_ADDRESSES.includes(user.walletAddress);
 }
@@ -138,6 +145,7 @@ export interface TokenIdentity {
   account?: string;
   subId?: string | null;
   subIdKind?: 'MUXED' | 'MEMO' | null;
+  accountType?: 'account' | 'contract';
 }
 
 /**
@@ -155,6 +163,9 @@ export function signToken(userId: string, walletAddress: string, identity: Token
   if (identity.subId != null || identity.subIdKind != null) {
     payload.subId = identity.subId ?? null;
     payload.subIdKind = identity.subIdKind ?? null;
+  }
+  if (identity.accountType === 'contract') {
+    payload.accountType = 'contract';
   }
   return jwt.sign(payload, secret('JWT_SECRET'), { expiresIn: '7d' });
 }
