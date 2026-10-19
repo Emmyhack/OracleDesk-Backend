@@ -1,0 +1,484 @@
+{
+  "source": "OracleDesk-SmartContract@eb5f3fdaf00a39dabd7e7d41eb84e6d2c1940551",
+  "commit": "eb5f3fdaf00a39dabd7e7d41eb84e6d2c1940551",
+  "network": "testnet",
+  "contracts": {
+    "marketCore": {
+      "binding": "market-core.ts",
+      "contractId": "CC4MMHWZ6ZRYAOQRR42KIIWNEZNFM4CWQ5Y4NNWTWNRUYH2O7E3SRK2O",
+      "specSha256": "59e1db633a7b43821ec35edc4c25cf7607508b6289b8e714b8298e0b9d604803",
+      "expectedWasmHash": null,
+      "entries": [
+        {
+          "kind": "error",
+          "name": "Error",
+          "sha256": "b5ff42f1d7dd8f42578cdeb26b994677e6c475849122deb70597465e2ef3021d"
+        },
+        {
+          "kind": "event",
+          "name": "FeesSwept",
+          "sha256": "9785e2f65e2e0c483fe7d8d40bcffadaf49810678610c14305fffdeade06e678"
+        },
+        {
+          "kind": "event",
+          "name": "MarketCreated",
+          "sha256": "81d17a9b472bfae2fa72c05a66d0630c2db44ad59ab832f4fada42e36c63b630"
+        },
+        {
+          "kind": "event",
+          "name": "MarketResolved",
+          "sha256": "c2adaf97b13d79e9536cd5bc647cb2923f02267661f53054682f9b344f9d1d76"
+        },
+        {
+          "kind": "event",
+          "name": "Redeemed",
+          "sha256": "71435248a6218e254fe4e1329f9ef43d29d404f3d809c993364fa5d57f377ef8"
+        },
+        {
+          "kind": "event",
+          "name": "Trade",
+          "sha256": "d426d1a7a3c822f0a1e76dd8f531f4a319d8f1bad078d8fa0e4051a9e80e4241"
+        },
+        {
+          "kind": "function",
+          "name": "__constructor",
+          "sha256": "6cb18a95c6b36b503a2412c4053fe250f0360d883109eb7d2c44e06e79ab7ae1"
+        },
+        {
+          "kind": "function",
+          "name": "buy",
+          "sha256": "8cbb78fee8716415a5faa82688f995864cf56b4779c0c7251955cd7625e6f223"
+        },
+        {
+          "kind": "function",
+          "name": "claim_pool_remainder",
+          "sha256": "a2f26ef5bd09b789033c7fe717ea4d5027abc0583c48a39942700644815cd816"
+        },
+        {
+          "kind": "function",
+          "name": "create_market",
+          "sha256": "1a6d567a4d5238bcc17a1d0212dbe5541e6f1ce703a580f32dcd43dfedadf614"
+        },
+        {
+          "kind": "function",
+          "name": "get_config",
+          "sha256": "e254087f766cd3547edd77f148b24757f88ae522930400ba8696cd3715ffd1fb"
+        },
+        {
+          "kind": "function",
+          "name": "get_market",
+          "sha256": "b609022fdf787d8f73e7ac9bc70d344098e926100f3b33546787ef0b22f5eaa6"
+        },
+        {
+          "kind": "function",
+          "name": "get_position",
+          "sha256": "1ecc91bba1814707bf485e3bc6b838a92c27bec91ab2ce432e193e6b31f3ebd7"
+        },
+        {
+          "kind": "function",
+          "name": "get_price",
+          "sha256": "e08b0ff9e5b048ce002808755bb9d2fe537631f0aa6f2fc78d5cc9d56366be4e"
+        },
+        {
+          "kind": "function",
+          "name": "market_count",
+          "sha256": "90c844cd92e1d0a4196cbcb2c26dd139dec02ef00d288c364aca56ecea8e4f16"
+        },
+        {
+          "kind": "function",
+          "name": "quote_buy",
+          "sha256": "3ee7f55c2d5d751571a3bcb4732d56b98eb3d7a7e07c21dcb4f7fcf847165ab1"
+        },
+        {
+          "kind": "function",
+          "name": "quote_sell",
+          "sha256": "7aa67fac2ca83048c0d9703981731d78a310ae39f3cca785c492cc1c3684e78e"
+        },
+        {
+          "kind": "function",
+          "name": "redeem",
+          "sha256": "c95751e91e50b02f1990840ccc83529eaba9092d38278635524e20880350fe2b"
+        },
+        {
+          "kind": "function",
+          "name": "resolve",
+          "sha256": "3364ff85517bbff1faf1f577336e6bcb8369b7939a482656c818060e1ff38987"
+        },
+        {
+          "kind": "function",
+          "name": "sell",
+          "sha256": "e7c9e729d8cda6cc8e2d4028dfbabea525de145a630400bd2eaa38111ee75a2d"
+        },
+        {
+          "kind": "function",
+          "name": "set_default_fee_bps",
+          "sha256": "8c7eb6f7909099dd1f2ccc77d40cd9eea3ca5417e63fc08b3f472045d005973f"
+        },
+        {
+          "kind": "function",
+          "name": "set_paused",
+          "sha256": "b9160639fdbaebbe261664bbb58d8dbba3ea1b6d3b9b6c28a20b55965a914407"
+        },
+        {
+          "kind": "function",
+          "name": "set_resolver",
+          "sha256": "8a4ec6c6dbc395d52032725c518ff1822df742b825d3683461c895682fe60e6f"
+        },
+        {
+          "kind": "function",
+          "name": "set_treasury",
+          "sha256": "a290c83cd905502fc867a29483926e04c3d1ab926ab46b10b89a9b93520d5f14"
+        },
+        {
+          "kind": "function",
+          "name": "sweep_fees",
+          "sha256": "b8a652873c48b407b3d52c2c9c952cda531f54ab67545501be9c2f8a6bbb8e7f"
+        },
+        {
+          "kind": "function",
+          "name": "void_market",
+          "sha256": "eed1e7c8836b4b1325e617e98e3ffc9f6037c5dd2d8611142923c3b1b1e6f3a2"
+        },
+        {
+          "kind": "struct",
+          "name": "Config",
+          "sha256": "64610de63a3f8cd119c6df8c989975af1ac3d00aff9bfe8cea0bb52b93b675e0"
+        },
+        {
+          "kind": "struct",
+          "name": "Market",
+          "sha256": "3c992f78050aab7f4ea371c5c05d2e9a16c7914d79aea27f030f8120782df379"
+        },
+        {
+          "kind": "struct",
+          "name": "Position",
+          "sha256": "71204b58274f78132528a66f3d35777a0ac730f7bcac604b668869d72d64f631"
+        },
+        {
+          "kind": "union",
+          "name": "Category",
+          "sha256": "97d0fa9e22e7ba56105ae8764289b6da9db76f296068db09bff33163b2c5ce6b"
+        },
+        {
+          "kind": "union",
+          "name": "DataKey",
+          "sha256": "78afc22a59bac66acf3e053054931284f82461380bd858584e74e92d4aa0c213"
+        },
+        {
+          "kind": "union",
+          "name": "MarketStatus",
+          "sha256": "f63f95a8a623b794169fa47dcbcb3fad0dab1e3a1ee22ed16ea2e7eb91ea2b73"
+        },
+        {
+          "kind": "union",
+          "name": "Outcome",
+          "sha256": "f48fd29535a11cc7b94a3d3b0b4eb69bab0dd5becf4e7e4545c137e9ed1ef00f"
+        }
+      ]
+    },
+    "treasury": {
+      "binding": "treasury.ts",
+      "contractId": "CBTFA3EPQ63PL5XXHOMU4LRDCAB2MHKOLEPDQI7E7TNK454YNBOMZLYB",
+      "specSha256": "0ab3b41951cd3d6593f48ca60acf2e5b0156b91e2afb12d4779c754063fb6fa0",
+      "expectedWasmHash": null,
+      "entries": [
+        {
+          "kind": "error",
+          "name": "Error",
+          "sha256": "4115e304ab410894b5f3fbf5c95cf6c182ccb73382059c78678748e253e89538"
+        },
+        {
+          "kind": "event",
+          "name": "FeesCollected",
+          "sha256": "01d90340031e7dedae314472786f04d2d91151fc54e93b7162b10cbd28e2ca2f"
+        },
+        {
+          "kind": "event",
+          "name": "PositionClosed",
+          "sha256": "c45c7b7a63cda5e547f9a67af0c0ff2a85e38ba82a72e972ed2c9895c57b2b97"
+        },
+        {
+          "kind": "event",
+          "name": "TradeAuthorized",
+          "sha256": "6a624cb74b3cff30fb7cd88d134960b4d873850ad1832dc614a5400b9fe191b2"
+        },
+        {
+          "kind": "function",
+          "name": "__constructor",
+          "sha256": "80662bf77729340acd6597ac7e117bd2b23c79070224304f6ee8b230796f82f4"
+        },
+        {
+          "kind": "function",
+          "name": "agent_buy",
+          "sha256": "9b9edd63915aab93f3405593a10499c8ddf19f6a6e44dccd0cf5e54019b5ddd7"
+        },
+        {
+          "kind": "function",
+          "name": "agent_create_market",
+          "sha256": "73fba65f67fa3fe0fb061ecb09d9ea0b9d38ab80c49d0501f58e1527b8bf6401"
+        },
+        {
+          "kind": "function",
+          "name": "agent_sell",
+          "sha256": "4eccec81fbb8ec011e640539b998aacfe3fd9be6a4ed4fbfb9783214abcac05f"
+        },
+        {
+          "kind": "function",
+          "name": "available_capital",
+          "sha256": "5348596a50d21e6157b577cab8bf2275aa7c2163d272c1d456b1ab1c8d0bdb66"
+        },
+        {
+          "kind": "function",
+          "name": "claim_pool_remainder",
+          "sha256": "874c1c8fe62d5dea3d12e9f3f6c7bbf306047b22214c1db83a70e2cc81ceb4e2"
+        },
+        {
+          "kind": "function",
+          "name": "close_trade",
+          "sha256": "40bf0d76812c3cc8cfbabafbdca4b749eb1a05c6f7f74e8123d15c98b4a95376"
+        },
+        {
+          "kind": "function",
+          "name": "collect_market_fees",
+          "sha256": "f46513b03b23a864c2f151f123defdb69dc6f97c55027c2116e658fe0ca47612"
+        },
+        {
+          "kind": "function",
+          "name": "daily_usage",
+          "sha256": "1a15abfe53ae4d66fbbef78e41bd67fc8d28f3c7ec549a730088dd54abf23ba1"
+        },
+        {
+          "kind": "function",
+          "name": "deposit",
+          "sha256": "0cca13fb5acf46028d482a197309dfaf75741627f96309dcf6b342fa425d738e"
+        },
+        {
+          "kind": "function",
+          "name": "get_config",
+          "sha256": "ce1239567381eb53e2fbdb10bf4e03534772e2206ba790dae30db114c20c117c"
+        },
+        {
+          "kind": "function",
+          "name": "redeem",
+          "sha256": "d548a13784ecb61947ca7898853f741cad0741e199b32375447cc961cd2a2456"
+        },
+        {
+          "kind": "function",
+          "name": "set_paused",
+          "sha256": "b9160639fdbaebbe261664bbb58d8dbba3ea1b6d3b9b6c28a20b55965a914407"
+        },
+        {
+          "kind": "function",
+          "name": "withdraw",
+          "sha256": "8379d16ff45699a755ef8340317491d96b65e4bf595245a28cd39dcf44102236"
+        },
+        {
+          "kind": "struct",
+          "name": "DailyUsage",
+          "sha256": "dc50bc8149ae477a1aebf241e1396d89311f9c803e97ac035ce158d092ddf654"
+        },
+        {
+          "kind": "struct",
+          "name": "RiskConfig",
+          "sha256": "d12646f677ab3a3f1323e0e9270e0c8dce665bec08a29471a29fa3655ac4d0d0"
+        },
+        {
+          "kind": "union",
+          "name": "Category",
+          "sha256": "97d0fa9e22e7ba56105ae8764289b6da9db76f296068db09bff33163b2c5ce6b"
+        },
+        {
+          "kind": "union",
+          "name": "Outcome",
+          "sha256": "f48fd29535a11cc7b94a3d3b0b4eb69bab0dd5becf4e7e4545c137e9ed1ef00f"
+        }
+      ]
+    },
+    "resolver": {
+      "binding": "resolver.ts",
+      "contractId": "CDDJU3PH6T3Z4O6EYLALXXB5XBFPYO2G5P5RBDEIZ7ZVN6V37OQSVYGR",
+      "specSha256": "49c98acd9a1fe301e7bff438567b9983c07dae3ee073f16c3e92dc441dd62102",
+      "expectedWasmHash": null,
+      "entries": [
+        {
+          "kind": "error",
+          "name": "Error",
+          "sha256": "aab5b5a399d5e7c5eea7e9715a126aaef0b800be01fd30219bfc41b78d893248"
+        },
+        {
+          "kind": "event",
+          "name": "PriceResolution",
+          "sha256": "fb85fe050189f82b52880187376811f9f546f0e762c795f44b9aa72428d09139"
+        },
+        {
+          "kind": "event",
+          "name": "ResolutionFinalized",
+          "sha256": "ed4035efc97291be713bef93d342d13735beff53f7ec5e055f80f7a81cf125a9"
+        },
+        {
+          "kind": "event",
+          "name": "ResolutionProposed",
+          "sha256": "37a1995018127b1165fc11220733747c665b84b9d2cf4be2393606892964d3a9"
+        },
+        {
+          "kind": "function",
+          "name": "__constructor",
+          "sha256": "c26f63914b37d271a632832b6c43be60cd14dfd85d0606105995dbafa3c95ba0"
+        },
+        {
+          "kind": "function",
+          "name": "attest",
+          "sha256": "bb3cda30830c4d9f8dbb1431d81d09bf337fd358e20d69d94125e355886062ee"
+        },
+        {
+          "kind": "function",
+          "name": "cancel_proposal",
+          "sha256": "0db7e25a3a97541bb07078437faa20b341fbace2655fba2cfec0512eccc203a0"
+        },
+        {
+          "kind": "function",
+          "name": "finalize_signers",
+          "sha256": "cc43349dacf8aa25441f77a4c83d7648a7d72ad4dad77a0c9cb00d7839b15088"
+        },
+        {
+          "kind": "function",
+          "name": "guardian_void_market",
+          "sha256": "382abd20db0760b009961660dc0fb37f32863790dca93fc6c3e6522b79e7d5ef"
+        },
+        {
+          "kind": "function",
+          "name": "register_price_spec",
+          "sha256": "9f4ca8ed50e60437a8086bccf0ec493605c8a094fd75c5b7e693728e69609033"
+        },
+        {
+          "kind": "function",
+          "name": "register_signer_spec",
+          "sha256": "cc9e66d063387e4cf40d9ecc27da767a5414229a30bd1fa3294a2b8f85572be7"
+        },
+        {
+          "kind": "function",
+          "name": "resolve_price",
+          "sha256": "3817970f0104aaaadc02fba742403c15c2157418c3d070893630a1e3c1002901"
+        },
+        {
+          "kind": "function",
+          "name": "state",
+          "sha256": "3bf9abfd74c85ce2840858b9fa10c2be445c0f63af961eff0aaaa2107c761311"
+        },
+        {
+          "kind": "struct",
+          "name": "PriceConfig",
+          "sha256": "d8c6c5b943c95c6cc20166fc7888c5916324963e50975390f20b95e1fa71421a"
+        },
+        {
+          "kind": "struct",
+          "name": "SignerConfig",
+          "sha256": "093cf853646ed9c64c3755c1b50dd10df2bdbc0e6c1d9787d2070a12ba14cc40"
+        },
+        {
+          "kind": "union",
+          "name": "OracleAsset",
+          "sha256": "60c4066089ab9567a017be443298408fd61f62df143adba4b156fdd3debf9f81"
+        },
+        {
+          "kind": "union",
+          "name": "Outcome",
+          "sha256": "f48fd29535a11cc7b94a3d3b0b4eb69bab0dd5becf4e7e4545c137e9ed1ef00f"
+        },
+        {
+          "kind": "union",
+          "name": "PriceDirection",
+          "sha256": "a1054365fe3478a22eb1bc4b10a67f1972a6a6c3832155a1bb35569aab3d857f"
+        },
+        {
+          "kind": "union",
+          "name": "ResolutionState",
+          "sha256": "0c56cc2468a2968fd8aea40f62f18eb09cf87bd7dc1eca0c35018bcadf76c9a7"
+        }
+      ]
+    },
+    "reasoningRegistry": {
+      "binding": "reasoning-registry.ts",
+      "contractId": "CAFEED35XICK4OXIEXQDS6KTTBUA2LDNW3EXEUGTNMN54DY5ANETCH6M",
+      "specSha256": "47db3ae4334bee5c3531993bea00c5bc4b58c76f0c734ddc15f7b49f9b699b62",
+      "expectedWasmHash": null,
+      "entries": [
+        {
+          "kind": "error",
+          "name": "Error",
+          "sha256": "3c416b0a8bcfb0ac2fe0e811db5d2e81c61d2f7e309662f34caac1d53a855480"
+        },
+        {
+          "kind": "event",
+          "name": "AgentRegistered",
+          "sha256": "e46e23c4f4cd39c6c0bc4d7fcdd1f638a8b1e61dbcbd1cf23be56fe28c958c37"
+        },
+        {
+          "kind": "event",
+          "name": "TracePublished",
+          "sha256": "e21dd5756e455c722b8c969f7cc0b19f5496308c56c134b16bd1636181f8f095"
+        },
+        {
+          "kind": "function",
+          "name": "__constructor",
+          "sha256": "a85a5028c7c2173e84ea84c7c0f098ff12c739a1b8f32e588587aeeb9d72d598"
+        },
+        {
+          "kind": "function",
+          "name": "get_trace",
+          "sha256": "12e967106a9d8e61cf463eb74f65474ab8591af0f4d98b1c6208223c31c83f46"
+        },
+        {
+          "kind": "function",
+          "name": "is_registered",
+          "sha256": "ef646a69f1a4eef88f28d4e04385baaa3f45253f3365d9aa9c047ae6d7c26f71"
+        },
+        {
+          "kind": "function",
+          "name": "market_trace_at",
+          "sha256": "9fb37a03d501f523f60a2369e2827f0306efc7c704382c0f54f3a1a46f78d0c8"
+        },
+        {
+          "kind": "function",
+          "name": "market_trace_count",
+          "sha256": "1e057bbbc5f8453e8cbfc27df9963e602452e2e7fac1d154ea0884e3fd95bdb1"
+        },
+        {
+          "kind": "function",
+          "name": "publish_trace",
+          "sha256": "285d7a740a097c4aa7bbd37b02dd85ce2766d7d46926bcd12c704b8c583920cf"
+        },
+        {
+          "kind": "function",
+          "name": "register_agent",
+          "sha256": "1876bf8fe3fb02ce94dd8a09d19cef82302c721ccb732484e4bf8d2fd8a20245"
+        },
+        {
+          "kind": "function",
+          "name": "trace_count",
+          "sha256": "67d26c78e029694f51a5048cf3681f7e3e23be11481a8893de732587bf996ec5"
+        },
+        {
+          "kind": "function",
+          "name": "unregister_agent",
+          "sha256": "42157ffc0538185f9f8d3dd37662a85d8366b809b5b96cbc72bdaf3ce9eab718"
+        },
+        {
+          "kind": "function",
+          "name": "verify_trace",
+          "sha256": "197226c97a7f5a3b4da6205f6cb8d641184e09d73263ef3cf6354ae317636d00"
+        },
+        {
+          "kind": "struct",
+          "name": "Trace",
+          "sha256": "ffa7769f0172330339654df64d01be19498fdca87df51bea50c038552ac0a3dc"
+        },
+        {
+          "kind": "union",
+          "name": "DataKey",
+          "sha256": "b38f565e62e41e23a8d3d1d0d667fa5c6257a85301aa2b33e9a7b0492018721b"
+        }
+      ]
+    }
+  }
+}

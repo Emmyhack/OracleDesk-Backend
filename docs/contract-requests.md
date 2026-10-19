@@ -79,6 +79,29 @@ Transparency reports use `market_id = u64::MAX` as a documented sentinel in
 report counter/index) would remove the sentinel hack and let
 `market_trace_count(u64::MAX)` stay a valid market-only index.
 
+## 8. Record wasm hashes in `deployments/*.json`
+
+The backend's startup spec-compat gate (#34) verifies each deployed
+contract's wasm against the bindings it was synced with. The spec itself
+comes from the chain, but there is no recorded expectation for the wasm
+*hash*: two different builds can share a spec, and a hash pin would catch a
+redeploy from an unreviewed build. Have `scripts/deploy-testnet.sh` write
+the installed wasm hashes into `deployments/testnet.json`, e.g.:
+
+```json
+"wasm_hashes": {
+  "market_core": "<hex sha256 of the installed wasm>",
+  "resolver": "…",
+  "treasury": "…",
+  "reasoning_registry": "…"
+}
+```
+
+`scripts/sync-contracts.mjs` here already copies `wasm_hashes.<contract>`
+into `src/generated/contracts-manifest.json` when present (it records
+`expectedWasmHash: null` otherwise), and the boot gate starts enforcing the
+pin as soon as the hashes appear.
+
 ## Note: `publish_trace` action strings differ between repos
 
 The backend publishes traces with `create_market`, `buy_yes` and `buy_no`

@@ -137,6 +137,8 @@ useMutation({
 
 `GET /api/v1/admin/status` (admin JWT) → probe details with latencies, indexer cursor vs RPC latest ledger and lag, last success/failure per cron job (in memory, reset on restart), chain execution mode, agent public key, LLM provider configuration and Gemini breaker state, and process info.
 
+`GET /api/v1/admin/chain/spec-compat` (admin JWT) → `{ mode, report }`: the contract spec compatibility report from the boot gate (#34). `report` lists, per contract, the deployed wasm hash against the pinned one and every spec difference with its `breaking`/`compatible` classification; it is `null` when the gate has not run (`SPEC_COMPAT_ENFORCE=off`). See "Contract compatibility" in `docs/architecture.md`.
+
 ### Auth (signed challenge, SEP-10 style)
 
 The old `POST /auth/connect` issued a JWT for any address it was handed, so

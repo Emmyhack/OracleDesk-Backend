@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 // Copies generated contract code out of the pinned `contracts` submodule
 // (OracleDesk-SmartContract) into src/generated/, so the build never imports
-// from the submodule directly.
+// from the submodule directly. Also writes src/generated/contracts-manifest.json
+// (#34): the spec hash of every binding plus the expected wasm hash when the
+// submodule records one, so binding drift shows up in code review and the
+// startup spec-compat gate has something to pin against. The manifest is
+// derived from the submodule only — no network access.
 //
 //   node scripts/sync-contracts.mjs          # write the files
 //   node scripts/sync-contracts.mjs --check  # exit 1 if any file is stale
@@ -10,6 +14,7 @@
 // sync and commit both the submodule pointer and src/generated/.
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,6 +33,16 @@ const FILES = [
   ["agents/core/fpmm.ts", "fpmm.ts"],
   ["deployments/testnet.json", "deployments.testnet.json"],
 ];
+
+// [backend contract name, binding file, key in deployments/*.json]
+const BINDINGS = [
+  ["marketCore", "market-core.ts", "market_core"],
+  ["treasury", "treasury.ts", "treasury"],
+  ["resolver", "resolver.ts", "resolver"],
+  ["reasoningRegistry", "reasoning-registry.ts", "reasoning_registry"],
+];
+
+const MANIFEST = "contracts-manifest.json";
 
 const check = process.argv.includes("--check");
 
@@ -56,23 +71,99 @@ function render(src, contents) {
 let stale = 0;
 mkdirSync(DEST, { recursive: true });
 
-for (const [src, name] of FILES) {
-  const from = join(SOURCE, src);
+function syncFile(name, expected, from) {
   const to = join(DEST, name);
-  const expected = render(src, readFileSync(from, "utf8"));
   const current = existsSync(to) ? readFileSync(to, "utf8") : null;
 
   if (current === expected) {
     if (!check) console.log(`up to date  ${relative(ROOT, to)}`);
-    continue;
+    return;
   }
   if (check) {
-    console.error(`stale       ${relative(ROOT, to)}  (from ${src})`);
+    console.error(`stale       ${relative(ROOT, to)}  (from ${from})`);
     stale++;
-    continue;
+    return;
   }
   writeFileSync(to, expected);
   console.log(`wrote       ${relative(ROOT, to)}`);
+}
+
+const rendered = new Map();
+for (const [src, name] of FILES) {
+  const expected = render(src, readFileSync(join(SOURCE, src), "utf8"));
+  rendered.set(name, expected);
+  syncFile(name, expected, src);
+}
+
+syncFile(MANIFEST, await buildManifest(rendered), "binding spec arrays");
+
+/**
+ * The spec entries a generated binding embeds: the base64 xdr.ScSpecEntry
+ * strings inside `new ContractSpec([ … ])`. The format is fixed by
+ * `stellar contract bindings typescript`, so anything else is an error.
+ */
+function extractSpecEntries(name, contents) {
+  const block = contents.match(/new ContractSpec\(\s*\[([\s\S]*?)\]\s*\)/);
+  if (!block) {
+    console.error(`cannot find \`new ContractSpec([ … ])\` in ${name}; was the binding format changed?`);
+    process.exit(2);
+  }
+  const entries = [...block[1].matchAll(/"([A-Za-z0-9+/=]+)"/g)].map((m) => m[1]);
+  if (entries.length === 0) {
+    console.error(`the ContractSpec array in ${name} contains no base64 entries`);
+    process.exit(2);
+  }
+  return entries;
+}
+
+async function buildManifest(files) {
+  // The SDK is only needed to name each entry; hashes come straight from the bytes.
+  const { xdr } = await import("@stellar/stellar-sdk");
+  const KINDS = {
+    scSpecEntryFunctionV0: ["function", (e) => e.functionV0().name().toString()],
+    scSpecEntryUdtStructV0: ["struct", (e) => e.udtStructV0().name().toString()],
+    scSpecEntryUdtUnionV0: ["union", (e) => e.udtUnionV0().name().toString()],
+    scSpecEntryUdtEnumV0: ["enum", (e) => e.udtEnumV0().name().toString()],
+    scSpecEntryUdtErrorEnumV0: ["error", (e) => e.udtErrorEnumV0().name().toString()],
+    scSpecEntryEventV0: ["event", (e) => e.eventV0().name().toString()],
+  };
+  const sha256 = (data) => createHash("sha256").update(data).digest("hex");
+
+  const deployments = JSON.parse(readFileSync(join(SOURCE, "deployments/testnet.json"), "utf8"));
+  const contracts = {};
+  for (const [contract, file, deployKey] of BINDINGS) {
+    const base64Entries = extractSpecEntries(file, files.get(file));
+    const entries = base64Entries
+      .map((b64) => {
+        const entry = xdr.ScSpecEntry.fromXDR(b64, "base64");
+        const [kind, nameOf] = KINDS[entry.switch().name] ?? [];
+        if (!kind) {
+          console.error(`${file}: unknown spec entry kind ${entry.switch().name}`);
+          process.exit(2);
+        }
+        return { kind, name: nameOf(entry), sha256: sha256(Buffer.from(b64, "base64")) };
+      })
+      .sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name));
+    contracts[contract] = {
+      binding: file,
+      contractId: deployments.contracts?.[deployKey] ?? null,
+      specSha256: sha256([...base64Entries].sort().join("")),
+      // Recorded by the contracts repo's deploy script once it writes
+      // wasm_hashes into deployments/*.json (docs/contract-requests.md).
+      expectedWasmHash: deployments.wasm_hashes?.[deployKey] ?? null,
+      entries,
+    };
+  }
+  return JSON.stringify(
+    {
+      source: `OracleDesk-SmartContract@${commit}`,
+      commit,
+      network: "testnet",
+      contracts,
+    },
+    null,
+    2,
+  ) + "\n";
 }
 
 if (check) {

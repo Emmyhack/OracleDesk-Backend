@@ -23,6 +23,7 @@ import { health } from '../services/health.service';
 import { indexerStatus } from '../services/indexer.service';
 import { agentSigner } from '../services/stellar/clients';
 import { getFeeOracle } from '../services/stellar/fees';
+import { effectiveMode, specCompatReport } from '../services/stellar/spec-compat';
 import { getLlmUsage } from '../lib/llm-budget';
 import { getCronStatus } from '../cron/registry';
 import { AppError } from '../middlewares/error.middleware';
@@ -212,6 +213,17 @@ export async function triggerTraceAuditRun(req: Request, res: Response): Promise
   });
 
   sendSuccess(res, { runId, message: 'Trace audit run scheduled' }, 202);
+}
+
+/**
+ * GET /admin/chain/spec-compat (#34)
+ * The last contract spec compatibility report from the boot gate: per
+ * contract, the deployed wasm hash against the pinned one and every spec
+ * difference with its breaking/compatible classification. `report` is null
+ * when the gate has not run (SPEC_COMPAT_ENFORCE=off).
+ */
+export async function getSpecCompat(_req: Request, res: Response): Promise<void> {
+  sendSuccess(res, { mode: effectiveMode(), report: specCompatReport() });
 }
 
 /**

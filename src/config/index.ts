@@ -253,6 +253,14 @@ const envSchema = z
     // HMAC-SHA256 key for the X-OracleDesk-Signature header on generic webhooks.
     ALERT_WEBHOOK_SECRET: optionalString,
 
+    // Spec compatibility gate (#34). Empty derives from the execution mode:
+    // live → enforce (refuse to start on breaking spec/wasm drift), dry-run →
+    // warn (log and keep running). off skips the check entirely.
+    SPEC_COMPAT_ENFORCE: z
+      .string()
+      .default('')
+      .refine((v) => ['', 'off', 'warn', 'enforce'].includes(v), 'must be off, warn or enforce'),
+
     TRUST_INBOUND_REQUEST_ID: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
     INDEXER_ENABLED: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
     INDEXER_POLL_MS: z.string().default('5000').transform(Number),

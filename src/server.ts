@@ -18,6 +18,7 @@ import { isAdminToken } from './middlewares/auth.middleware';
 import { startTraceAuditCron } from './cron/trace-audit.cron';
 import { startTracePublicationCron } from './cron/trace-publication.cron';
 import { startEventListener } from './services/indexer.service';
+import { gateDecision, runSpecCompatGate } from './services/stellar/spec-compat';
 import { closeRedis, getRedis } from './lib/redis';
 import { memoryEventBus, redisEventBus } from './lib/event-bus';
 import { startFanout, startLocalFanout } from './lib/fanout';
@@ -74,6 +75,15 @@ async function bootstrap(): Promise<void> {
     } catch (err) {
       logger.warn({ err: err instanceof Error ? err.message : err }, 'Could not initialise the agent sequence cache; live writes will resync on first use');
     }
+  }
+
+  // 1b. Contract spec compatibility gate (#34): verify the deployed contracts
+  // still run what the synced bindings were generated from, before anything
+  // simulates calls or decodes events against those bindings. Live mode
+  // refuses to start on breaking drift; dry-run warns and keeps running.
+  const specCompat = await runSpecCompatGate();
+  if (specCompat && gateDecision(specCompat, specCompat.mode) === 'refuse') {
+    process.exit(1);
   }
 
   // 2. Start HTTP server with Socket.io

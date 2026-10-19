@@ -474,6 +474,23 @@ The runner only issues `findMany` (events up to `--to`, because pools are rebuil
 
 `src/generated/` is copied from the pinned `contracts` submodule by `scripts/sync-contracts.mjs`, with a do-not-edit header and `// @ts-nocheck`. CI fails if it's stale.
 
+The sync also writes `src/generated/contracts-manifest.json`: for each binding, a sha256 over its embedded spec entries, a per-entry `{ kind, name, sha256 }` index, and the expected wasm hash when the submodule's `deployments/*.json` records one (see `docs/contract-requests.md`). The manifest is derived from the submodule only — `--check` needs no network — so a binding bump shows up in code review as changed spec hashes.
+
+## Contract compatibility (#34)
+
+The backend assumes the contracts at the `CONTRACTS` addresses run exactly the wasm the bindings were generated from. Deployed contracts can be upgraded, redeployed from another build, or replaced by an env override, and when they drift the failures appear late and far from the cause: a renamed entrypoint fails simulations with `MissingValue`, a changed struct decodes with missing fields, a changed event makes `Spec.parseEvent` return null or throw inside the indexer poll.
+
+Every deployed Soroban contract carries its interface: the wasm's `contractspecv0` custom section holds the same `ScSpecEntry` XDR the bindings embed, and the contract instance records its wasm hash. At boot, `src/services/stellar/spec-compat.ts`:
+
+- fetches each contract's instance and code ledger entries over RPC (`getLedgerEntries`), reads the wasm hash and parses the embedded spec (`contract.Spec.fromWasm`), cached per wasm hash;
+- diffs the deployed spec structurally against the synced binding — docs are ignored, types compare canonically (`Option`/`Vec`/`Map`/`BytesN`/UDT-by-name) — and classifies each difference as **breaking** or **compatible** against a usage table of the entrypoints the services actually call and the events the indexer projects (a unit test greps the services and fails when the table is stale);
+- checks the wasm hash against the manifest pin when one is recorded and the contract id is not overridden by env;
+- only confirms the USDC contract's executable is a Stellar Asset (its interface is a SAC, never checked).
+
+Classification rules: a used function removed or changed is breaking, an unused or new one is compatible; a struct/union/enum reachable from a used function or projected event is breaking when changed, except a union/enum case appended at the end, which is compatible for read-only types and breaking for types the backend encodes (e.g. `Category`); an error enum code reassigned under an existing name is breaking (error naming depends on it), new codes are compatible; a projected event changed in topics or data fields is breaking. A contract that cannot be verified (archived code entry, RPC failure) is breaking — the gate never fails open.
+
+In live mode (default `SPEC_COMPAT_ENFORCE=enforce`) any breaking difference or wasm-hash mismatch refuses startup, listing every breaking item. Dry-run (default `warn`) logs a structured warning and keeps running; `off` skips the check. The indexer keeps **storing** events whose spec changed in a breaking way but stops projecting and publishing them (and a `parseEvent` throw skips that event instead of aborting the poll). Admins can read the last report at `GET /api/v1/admin/chain/spec-compat`.
+
 ## LLM router (#157)
 
 All generation goes through `src/lib/llm/router.ts`. Each `LlmTask`

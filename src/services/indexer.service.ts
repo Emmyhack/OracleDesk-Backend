@@ -27,6 +27,7 @@ import { prisma } from '../lib/prisma';
 import { logger } from '../lib/logger';
 import { newId, runWithContext } from '../lib/context';
 import { readClients, rpcServer } from './stellar/clients';
+import { disabledEventProjections } from './stellar/spec-compat';
 import { printable } from './chain.service';
 import { priceYesBps } from '../generated/fpmm';
 import { withTimeout, deadline } from '../lib/resilience';
@@ -76,13 +77,34 @@ export interface DecodedEvent {
   params: Record<string, any>;
 }
 
+// One warning per key per process: a breaking spec change would otherwise
+// repeat the same line on every poll.
+const warned = new Set<string>();
+function warnOnce(key: string, context: Record<string, unknown>, message: string): void {
+  if (warned.has(key)) return;
+  warned.add(key);
+  logger.warn(context, message);
+}
+
 /** Decodes one RPC event with its contract's spec; null for unknown events. */
 export function decodeEvent(event: rpc.Api.EventResponse, known = specs()): DecodedEvent | null {
   const contractId = event.contractId?.contractId();
   if (!contractId) return null;
   const entry = known.get(contractId);
   if (!entry) return null;
-  const parsed = entry.spec.parseEvent(event.topic as xdr.ScVal[], event.value);
+  let parsed: ReturnType<Spec['parseEvent']>;
+  try {
+    parsed = entry.spec.parseEvent(event.topic as xdr.ScVal[], event.value);
+  } catch (err) {
+    // A deployed event whose shape drifted from the binding spec (#34) must
+    // not abort the whole poll; the spec-compat report names the drift.
+    warnOnce(
+      `decode:${entry.name}`,
+      { contract: entry.name, eventId: event.id, err: err instanceof Error ? err.message : String(err) },
+      'Indexer: event does not decode with the binding spec (skipped; see /admin/chain/spec-compat)',
+    );
+    return null;
+  }
   if (!parsed) return null;
   return {
     id: event.id,
@@ -105,7 +127,7 @@ function hasPublicEvent(event: Pick<DecodedEvent, 'contractName' | 'eventName'>)
 }
 
 /** Stores an event; returns false if it was already stored (idempotent). */
-async function store(event: DecodedEvent): Promise<boolean> {
+async function store(event: DecodedEvent, publishable = hasPublicEvent(event)): Promise<boolean> {
   try {
     await prisma.chainEvent.create({
       data: {
@@ -117,7 +139,7 @@ async function store(event: DecodedEvent): Promise<boolean> {
         ledgerClosedAt: new Date(event.ledgerClosedAt),
         txHash: event.txHash,
         params: printable(event.params) as Prisma.InputJsonValue,
-        published: !hasPublicEvent(event),
+        published: !publishable,
       },
     });
     return true;
@@ -396,11 +418,25 @@ export async function backfillEvents(
         seen++;
         const decoded = decodeEvent(raw, known);
         if (!decoded) continue;
-        if (await store(decoded)) {
-          stored++;
-          await applySideEffects(decoded).catch((err) =>
-            logger.error({ err, eventId: decoded.id }, 'Indexer side effect failed'),
+        // #34: an event whose deployed spec has a breaking change is still
+        // stored, but no longer projected or published — its decoded params
+        // can no longer be trusted to match what the binding promised.
+        const key = `${decoded.contractName}:${decoded.eventName}`;
+        const projectable = !disabledEventProjections().has(key);
+        if (!projectable) {
+          warnOnce(
+            `project:${key}`,
+            { contract: decoded.contractName, event: decoded.eventName },
+            'Indexer: projections disabled for this event (breaking spec change; see /admin/chain/spec-compat)',
           );
+        }
+        if (await store(decoded, projectable && hasPublicEvent(decoded))) {
+          stored++;
+          if (projectable) {
+            await applySideEffects(decoded).catch((err) =>
+              logger.error({ err, eventId: decoded.id }, 'Indexer side effect failed'),
+            );
+          }
         }
       }
       if (page.events.length < PAGE_LIMIT) break;
