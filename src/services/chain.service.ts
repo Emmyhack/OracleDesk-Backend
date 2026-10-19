@@ -34,7 +34,7 @@ import { withTimeout, TimeoutError, sleep } from '../lib/resilience';
 import type { Category, Config as MarketCoreConfig, Market as OnChainMarket, Outcome, Position } from '../generated/market-core';
 import type { Trace } from '../generated/reasoning-registry';
 import type { DailyUsage, RiskConfig } from '../generated/treasury';
-import type { PriceConfig, ResolutionState } from '../generated/resolver';
+import type { PriceConfig, ResolutionState, SignerConfig } from '../generated/resolver';
 import { agentScopeForTraceAction } from '../lib/trace-actions';
 import {
   AgentPausedError,
@@ -907,6 +907,25 @@ export const resolvePrice = (marketId: bigint, signal?: AbortSignal) =>
     agentClients.resolver().resolve_price({ market_id: marketId }, opts as any), signal,
   );
 
+const registerSignerSpecImpl = (marketId: bigint, spec: SignerConfig, signal?: AbortSignal) =>
+  write<void>('MARKET_MAKER', 'maintenance', 'resolver', 'register_signer_spec', { market_id: marketId, spec }, async (opts) =>
+    agentClients.resolver().register_signer_spec({ market_id: marketId, spec }, opts as any), signal,
+  );
+
+const attestImpl = (marketId: bigint, signerPublicKey: string, outcome: 'YES' | 'NO', signal?: AbortSignal) =>
+  write<void>('MARKET_MAKER', 'maintenance', 'resolver', 'attest', { market_id: marketId, signer: signerPublicKey, outcome }, async (opts, signer) =>
+    agentClients.resolver(signer).attest({
+      market_id: marketId,
+      signer: signerPublicKey,
+      outcome: outcome === 'YES' ? { tag: 'Yes', values: undefined } : { tag: 'No', values: undefined },
+    }, opts as any), signal,
+  );
+
+const finalizeSignersImpl = (marketId: bigint, signal?: AbortSignal) =>
+  write<Outcome>('MARKET_MAKER', 'maintenance', 'resolver', 'finalize_signers', { market_id: marketId }, async (opts, signer) =>
+    agentClients.resolver(signer).finalize_signers({ market_id: marketId }, opts as any), signal,
+  );
+
 // ─── Test seam (#72) ─────────────────────────────────────────────────────────
 // Agent-cycle tests replace chain calls at this level instead of faking the
 // RPC (a fake RPC server is a separate piece of work). Production never sets
@@ -927,6 +946,9 @@ const IMPLS = {
   agentBuy: agentBuyImpl,
   agentSell: agentSellImpl,
   publishTrace: publishTraceImpl,
+  registerSignerSpec: registerSignerSpecImpl,
+  attest: attestImpl,
+  finalizeSigners: finalizeSignersImpl,
 };
 
 export type ChainOverrides = Partial<typeof IMPLS>;
@@ -958,3 +980,6 @@ export const agentSell = overridable('agentSell');
 export const publishTrace = overridable('publishTrace');
 export const marketCoreConfig = overridable('marketCoreConfig');
 export const getPosition = overridable('getPosition');
+export const registerSignerSpec = overridable('registerSignerSpec');
+export const attest = overridable('attest');
+export const finalizeSigners = overridable('finalizeSigners');
