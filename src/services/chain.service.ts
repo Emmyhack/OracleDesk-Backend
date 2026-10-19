@@ -37,8 +37,18 @@ import {
 
 export { ArchivedEntryError };
 
+import { scValToNative } from '@stellar/stellar-sdk';
 import { prisma } from '../lib/prisma';
 import { getFeeOracle, type OperationClass } from './stellar/fees';
+import { timeoutFor, decideExpiry, ExpiredError, type ExpiryDecision } from './stellar/timebounds';
+import {
+  getTransactionReader,
+  getTransactionSender,
+  type TransactionReader,
+  type TransactionSender,
+} from './stellar/tx-inspect';
+
+export { ExpiredError };
 
 type ContractKey = 'marketCore' | 'treasury' | 'resolver' | 'reasoningRegistry';
 
@@ -164,16 +174,17 @@ async function submitWrite<T>(
   contract: 'treasury' | 'reasoningRegistry',
   method: string,
   args: Record<string, unknown>,
-  call: (options?: { fee?: bigint }) => Promise<AssembledTransaction<unknown>>,
+  call: (options?: { fee?: bigint; timeoutInSeconds?: number }) => Promise<AssembledTransaction<unknown>>,
   signal?: AbortSignal,
 ): Promise<WriteResult<T>> {
   const oracle = getFeeOracle();
   const policy = oracle.getPolicies()[opClass];
   const inclusionFee = await oracle.pickInclusionFee(opClass);
+  const timeoutInSeconds = timeoutFor(opClass);
 
   let tx: AssembledTransaction<unknown>;
   try {
-    tx = await call({ fee: inclusionFee });
+    tx = await call({ fee: inclusionFee, timeoutInSeconds });
   } catch (err) {
     throw new ChainError(`${method} could not be built`, contractErrorName(contract, err), {
       method,
@@ -220,6 +231,12 @@ async function submitWrite<T>(
     }
   }
 
+  const rawMaxTime = (tx as any)?.built?.timeBounds?.maxTime;
+  const maxTime = rawMaxTime !== undefined
+    ? BigInt(rawMaxTime)
+    : BigInt(Math.floor(Date.now() / 1000) + timeoutInSeconds);
+  const minTime = 0n;
+
   const feeDetails: FeeDetails = {
     opClass,
     inclusionFee,
@@ -228,8 +245,22 @@ async function submitWrite<T>(
   };
 
   if (config.CHAIN_EXECUTION_MODE === 'dry-run') {
-    logger.info({ method, args: printable(args), simulated: printable(simulated) }, 'dry-run: simulated, not submitted');
+    logger.info(
+      {
+        method,
+        args: printable(args),
+        simulated: printable(simulated),
+        timeoutInSeconds,
+        minTime: minTime.toString(),
+        maxTime: maxTime.toString(),
+      },
+      'dry-run: simulated, not submitted',
+    );
     return { mode: 'dry-run', method, value: simulated, txHash: null, fee: feeDetails };
+  }
+
+  if (typeof (tx as any).sign === 'function') {
+    await (tx as any).sign();
   }
 
   let txHash: string | null = null;
@@ -240,37 +271,21 @@ async function submitWrite<T>(
     }
   } catch {}
 
+  const sender = getTransactionSender();
+  const reader = getTransactionReader();
+
+  let sendRes: any;
   try {
-    const sent = await withTimeout('rpc-write', async () => tx.signAndSend(), { signal });
-    const value = simulatedValueFromSent<T>(contract, method, sent.result);
-    const finalHash = sent.sendTransactionResponse?.hash ?? txHash;
-
-    const feeChargedRaw = (sent.sendTransactionResponse as any)?.feeCharged ?? (sent as any)?.feeCharged;
-    const feeCharged = feeChargedRaw !== undefined ? BigInt(feeChargedRaw) : expectedTotal;
-    const liveFeeDetails: FeeDetails = {
-      ...feeDetails,
-      feeCharged,
-    };
-
-    if (finalHash) {
-      await prisma.chainFee.upsert({
-        where: { txHash: finalHash },
-        create: {
-          txHash: finalHash,
-          opClass,
-          inclusionFee,
-          resourceFee: minResourceFee,
-          totalFee: expectedTotal,
-          feeCharged,
-        },
-        update: {
-          feeCharged,
-        },
-      }).catch((err: any) => logger.warn({ err: err?.message, txHash: finalHash }, 'Failed to record chain fee'));
-    }
-
-    logger.info({ method, txHash: finalHash }, 'submitted');
-    return { mode: 'live', method, value, txHash: finalHash, fee: liveFeeDetails };
+    sendRes = await withTimeout(
+      'rpc-write',
+      async () => {
+        if (typeof sender.sendTransaction === 'function') {
+          return sender.sendTransaction((tx as any).built ?? tx);
+        }
+        return (tx as any).send?.() ?? (tx as any).signAndSend?.();
+      },
+      { signal },
+    );
   } catch (err: any) {
     if (err instanceof TimeoutError || err?.code === 'UPSTREAM_TIMEOUT') {
       throw new ChainError(
@@ -285,7 +300,205 @@ async function submitWrite<T>(
       cause: err instanceof Error ? err.message : String(err),
     });
   }
-}
+
+  const finalHash = sendRes?.sendTransactionResponse?.hash ?? sendRes?.hash ?? txHash;
+  if (!finalHash) {
+    throw new ChainError(`${method} no transaction hash returned from send`, null, { method });
+  }
+
+  const submittedLedger = sendRes?.latestLedger ?? (tx.simulation as any)?.latestLedger;
+  const submittedAtCloseTime = sendRes?.latestLedgerCloseTime !== undefined
+    ? BigInt(sendRes.latestLedgerCloseTime)
+    : undefined;
+
+  if (sendRes?.latestLedgerCloseTime) {
+    const hostSec = Math.floor(Date.now() / 1000);
+    if (Math.abs(hostSec - Number(sendRes.latestLedgerCloseTime)) > 30) {
+      logger.warn(
+        { hostTime: hostSec, ledgerCloseTime: Number(sendRes.latestLedgerCloseTime) },
+        'Host clock differs from ledger close time by > 30s',
+      );
+    }
+  }
+
+  const attemptId = (args as any)?.attemptId ?? null;
+  const pollIntervalMs = 2000;
+  const maxPollTimeoutMs = (timeoutInSeconds + 30) * 1000;
+  const pollStart = Date.now();
+  let confirmedTx: any = null;
+  let decision: ExpiryDecision = 'PENDING';
+
+  while (Date.now() - pollStart < maxPollTimeoutMs) {
+    if (signal?.aborted) {
+      throw new ChainError(
+        `${method} poll aborted`,
+        null,
+        { outcome: 'unknown', txHash: finalHash },
+        'CHAIN_SUBMISSION_TIMEOUT',
+      );
+    }
+
+    let txStatusRes: any;
+    try {
+      txStatusRes = await reader.getTransaction(finalHash);
+    } catch (err: any) {
+      logger.warn({ err: err?.message, txHash: finalHash }, 'getTransaction poll error; retrying');
+    }
+
+    if (txStatusRes) {
+      const latestLedgerCloseTime = Number(txStatusRes.latestLedgerCloseTime ?? Math.floor(Date.now() / 1000));
+      const oldestLedgerCloseTime = txStatusRes.oldestLedgerCloseTime !== undefined ? Number(txStatusRes.oldestLedgerCloseTime) : undefined;
+
+      decision = decideExpiry({
+        status: txStatusRes.status,
+        latestLedgerCloseTime,
+        maxTime: Number(maxTime),
+        submittedAtCloseTime: submittedAtCloseTime !== undefined ? Number(submittedAtCloseTime) : undefined,
+        oldestLedgerCloseTime,
+      });
+
+      if (decision === 'LANDED' || decision === 'FAILED') {
+        confirmedTx = txStatusRes;
+        break;
+      }
+
+      if (decision === 'EXPIRED') {
+        await prisma.chainSubmission.upsert({
+          where: { txHash: finalHash },
+          create: {
+            txHash: finalHash,
+            opClass,
+            minTime,
+            maxTime,
+            authExpirationLedger: (tx as any).authExpirationLedger ?? null,
+            submittedLedger: submittedLedger ? Number(submittedLedger) : null,
+            submittedAtCloseTime,
+            decision: 'EXPIRED',
+            attemptId,
+          },
+          update: { decision: 'EXPIRED' },
+        }).catch(() => undefined);
+
+        throw new ExpiredError(`Transaction ${finalHash} expired without inclusion`, attemptId, finalHash);
+      }
+
+      if (decision === 'UNKNOWN') {
+        await prisma.chainSubmission.upsert({
+          where: { txHash: finalHash },
+          create: {
+            txHash: finalHash,
+            opClass,
+            minTime,
+            maxTime,
+            authExpirationLedger: (tx as any).authExpirationLedger ?? null,
+            submittedLedger: submittedLedger ? Number(submittedLedger) : null,
+            submittedAtCloseTime,
+            decision: 'UNKNOWN',
+            attemptId,
+          },
+          update: { decision: 'UNKNOWN' },
+        }).catch(() => undefined);
+
+        throw new ChainError(
+          `Transaction ${finalHash} outcome is unknown (beyond RPC retention window)`,
+          null,
+          { outcome: 'unknown', txHash: finalHash },
+          'CHAIN_TX_UNKNOWN',
+        );
+      }
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+
+  if (decision === 'PENDING') {
+    await prisma.chainSubmission.upsert({
+      where: { txHash: finalHash },
+      create: {
+        txHash: finalHash,
+        opClass,
+        minTime,
+        maxTime,
+        authExpirationLedger: (tx as any).authExpirationLedger ?? null,
+        submittedLedger: submittedLedger ? Number(submittedLedger) : null,
+        submittedAtCloseTime,
+        decision: 'PENDING',
+        attemptId,
+      },
+      update: { decision: 'PENDING' },
+    }).catch(() => undefined);
+
+    throw new ChainError(
+      `${method} submission timed out while still PENDING`,
+      null,
+      { outcome: 'unknown', txHash: finalHash },
+      'CHAIN_SUBMISSION_TIMEOUT',
+    );
+  }
+
+  if (decision === 'FAILED') {
+    await prisma.chainSubmission.upsert({
+      where: { txHash: finalHash },
+      create: {
+        txHash: finalHash,
+        opClass,
+        minTime,
+        maxTime,
+        authExpirationLedger: (tx as any).authExpirationLedger ?? null,
+        submittedLedger: submittedLedger ? Number(submittedLedger) : null,
+        submittedAtCloseTime,
+        decision: 'FAILED',
+        attemptId,
+      },
+      update: { decision: 'FAILED' },
+    }).catch(() => undefined);
+
+    const errName = contractErrorName(contract, confirmedTx);
+    throw new ChainError(`${method} failed on-chain: ${errName ?? 'Unknown error'}`, errName, { method, txHash: finalHash });
+  }
+
+  // Record LANDED submission
+  await prisma.chainSubmission.upsert({
+    where: { txHash: finalHash },
+    create: {
+      txHash: finalHash,
+      opClass,
+      minTime,
+      maxTime,
+      authExpirationLedger: (tx as any).authExpirationLedger ?? null,
+      submittedLedger: submittedLedger ? Number(submittedLedger) : null,
+      submittedAtCloseTime,
+      decision: 'LANDED',
+      attemptId,
+    },
+    update: { decision: 'LANDED' },
+  }).catch(() => undefined);
+
+  const feeChargedRaw = (confirmedTx as any)?.feeCharged ?? (sendRes as any)?.feeCharged;
+  const feeCharged = feeChargedRaw !== undefined ? BigInt(feeChargedRaw) : expectedTotal;
+  const liveFeeDetails: FeeDetails = {
+    ...feeDetails,
+    feeCharged,
+  };
+
+  await prisma.chainFee.upsert({
+    where: { txHash: finalHash },
+    create: {
+      txHash: finalHash,
+      opClass,
+      inclusionFee,
+      resourceFee: minResourceFee,
+      totalFee: expectedTotal,
+      feeCharged,
+    },
+    update: {
+      feeCharged,
+    },
+  }).catch((err: any) => logger.warn({ err: err?.message, txHash: finalHash }, 'Failed to record chain fee'));
+
+  const value = simulatedValueFromSent<T>(contract, method, (confirmedTx as any)?.returnValue ?? simulated);
+  logger.info({ method, txHash: finalHash }, 'submitted and confirmed');
+  return { mode: 'live', method, value, txHash: finalHash, fee: liveFeeDetails };
 
 function simulatedValueFromSent<T>(contract: ContractKey, method: string, result: unknown): T {
   if (result && typeof result === 'object' && 'isOk' in result) {

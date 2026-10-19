@@ -46,6 +46,34 @@ To calibrate budgets for production:
 3. Set each class budget in `FEE_POLICY_JSON` to ~1.3x–1.5x the observed peak simulation fee to accommodate ledger state growth and contract rent variations without risking unbounded agent spend.
 Confirmed transactions record fee accounting in `chain_fees`, exposed via `GET /admin/fees` with daily p50/p95 charged quantiles and oracle health snapshots.
 
+### Transaction lifetime (#42)
+
+Every transaction built by `chain.service.ts` carries explicit timebounds (`minTime = 0`, `maxTime = submissionTime + timeoutInSeconds`) passed through generated binding options (`MethodOptions.timeoutInSeconds`).
+
+**Per-class Timeouts**:
+- `market_create`: `TIMEOUT_MARKET_CREATE_SECONDS` (default: 60 s, range: 15–300 s)
+- `trade`: `TIMEOUT_TRADE_SECONDS` (default: 30 s, range: 10–120 s)
+- `trace_publish`: `TIMEOUT_TRACE_PUBLISH_SECONDS` (default: 45 s, range: 10–180 s)
+- `maintenance`: `TIMEOUT_MAINTENANCE_SECONDS` (default: 30 s, range: 10–120 s)
+
+**Auth Entry Expiration**:
+`authExpirationLedger` is derived strictly from the transaction deadline: `latestLedger + ceil(timeoutInSeconds / 5) + AUTH_EXPIRY_MARGIN_LEDGERS` (default margin: 12 ledgers). An auth entry never expires before its enclosing transaction, nor outlives it by more than the margin.
+
+**Explicit Polling and Expiry Determination**:
+Instead of relying on SDK internal polling, `chain.service.ts` submits the transaction via `sendTransaction` and polls `getTransaction` every 2 seconds. The pure function `decideExpiry()` decides the state using Stellar ledger close time from the RPC response (never the local host clock):
+- `LANDED`: RPC status `SUCCESS`. Returns unwrapped execution value.
+- `FAILED`: RPC status `FAILED`. Throws typed `ChainError`.
+- `EXPIRED`: RPC status `NOT_FOUND`, latest ledger close time is strictly past `maxTime + skew` (skew: 10 s), and the submission is within the RPC retention window. Throws `ExpiredError` (code `CHAIN_TX_EXPIRED`) carrying `attemptId` and `txHash`.
+- `UNKNOWN`: RPC status `NOT_FOUND` where submission is older than the RPC retention window (`oldestLedgerCloseTime`). Non-inclusion cannot be proven. Throws `ChainError` with code `CHAIN_TX_UNKNOWN`, preserving the transaction hash.
+- `PENDING`: Transaction not yet included, but ledger time has not definitively passed `maxTime + skew`. If the poll loop reaches its local cap while still `PENDING` or `UNKNOWN`, it reports an ambiguous timeout (`CHAIN_SUBMISSION_TIMEOUT`) preserving `txHash`, never a failure or expiry.
+
+All submissions are tracked in `chain_submissions` (`tx_hash`, `op_class`, `min_time`, `max_time`, `auth_expiration_ledger`, `submitted_ledger`, `submitted_at_close_time`, `decision`, `rebuild_count`, `attempt_id`).
+
+**Safe Rebuild Rules**:
+- **Trades**: An expired trade catches `ExpiredError`. If `rebuildCount < MAX_REBUILD_COUNT`, the caller re-runs `quoteBuy` to obtain the fresh on-chain price and verifies that the edge still exceeds `MIN_EDGE_THRESHOLD` (8%). If edge degraded, the trade cancels with `INSUFFICIENT_EDGE`. If edge still holds, it resubmits with incremented `rebuildCount`, linking the old attempt.
+- **Trace Publication**: Trace publication is idempotent by `trace_hash`. On `ExpiredError`, it links the previous attempt and marks the queue row `READY` for immediate resubmission.
+- **Market Creation**: Rebuilds only after a definitive `EXPIRED` decision, and never after `UNKNOWN`.
+
 ## Market creation (ADR 0001)
 
 `market-chain.service.ts` turns a generated proposal into an on-chain market:

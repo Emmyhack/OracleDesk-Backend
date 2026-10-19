@@ -867,3 +867,24 @@ model ChainFee {
   @@index([opClass, createdAt])
   @@map("chain_fees")
 }
+
+/// On-chain transaction submissions and lifetime tracking (#42).
+model ChainSubmission {
+  txHash               String   @id @map("tx_hash")
+  opClass              String   @map("op_class")
+  minTime              BigInt   @default(0) @map("min_time")
+  maxTime              BigInt   @map("max_time")
+  authExpirationLedger Int?     @map("auth_expiration_ledger")
+  submittedLedger      Int?     @map("submitted_ledger")
+  submittedAtCloseTime BigInt?  @map("submitted_at_close_time")
+  decision             String   @map("decision")
+  rebuildCount         Int      @default(0) @map("rebuild_count")
+  attemptId            String?  @map("attempt_id")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  @@index([opClass, createdAt])
+  @@index([attemptId])
+  @@map("chain_submissions")
+}
+

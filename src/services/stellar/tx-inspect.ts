@@ -35,6 +35,24 @@ export function setTransactionReader(next: TransactionReader): TransactionReader
   return prev;
 }
 
+export interface TransactionSender {
+  sendTransaction(tx: any): Promise<any>;
+}
+
+let sharedSender: TransactionSender | null = null;
+
+export function getTransactionSender(): TransactionSender {
+  if (sharedSender) return sharedSender;
+  const { rpcServer } = require('./clients');
+  return rpcServer;
+}
+
+export function setTransactionSender(next: TransactionSender): TransactionSender {
+  const prev = getTransactionSender();
+  sharedSender = next;
+  return prev;
+}
+
 export interface ContractEventParsed {
   contractId: string;
   name: string;

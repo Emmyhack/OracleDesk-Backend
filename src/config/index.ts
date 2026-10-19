@@ -140,6 +140,14 @@ const envSchema = z
     FEE_STATS_CACHE_MS: z.string().default('10000').transform(Number).pipe(z.number().int().positive()),
     FEE_STATS_MAX_AGE_MS: z.string().default('60000').transform(Number).pipe(z.number().int().positive()),
 
+    // ── Timebounds & Rebuilds (#42) ───────────────────────────────────────
+    TIMEOUT_MARKET_CREATE_SECONDS: z.string().default('60').transform(Number).pipe(z.number().int().min(15).max(300)),
+    TIMEOUT_TRADE_SECONDS: z.string().default('30').transform(Number).pipe(z.number().int().min(10).max(120)),
+    TIMEOUT_TRACE_PUBLISH_SECONDS: z.string().default('45').transform(Number).pipe(z.number().int().min(10).max(180)),
+    TIMEOUT_MAINTENANCE_SECONDS: z.string().default('30').transform(Number).pipe(z.number().int().min(10).max(120)),
+    AUTH_EXPIRY_MARGIN_LEDGERS: z.string().default('12').transform(Number).pipe(z.number().int().min(2).max(100)),
+    MAX_REBUILD_COUNT: z.string().default('2').transform(Number).pipe(z.number().int().min(0).max(10)),
+
     TRUST_INBOUND_REQUEST_ID: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
     INDEXER_ENABLED: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
     INDEXER_POLL_MS: z.string().default('5000').transform(Number),
