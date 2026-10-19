@@ -156,10 +156,18 @@ to the network; signing it proves control of the key and spends nothing.
 Rate-limited. Request:
 
 ```json
-{ "address": "GABC…" }
+{ "address": "GABC…", "memo": "42" }
 ```
 
-`address` must pass `StrKey.isValidEd25519PublicKey`.
+`address` must be a Stellar G… public key (or an M… muxed address, see below).
+`memo` is optional and, when present, must be an unsigned 64-bit decimal
+string (id `0` and `18446744073709551615` are valid).
+
+Login identities (#46): a plain `G…` account, a `G…` account with an id
+`memo`, or an `M…` muxed address (SEP-23). Muxed logins carry the sub-identity
+inside the address and must not send a `memo`. The signature always comes from
+the base `G…` key; the server binds the sub-identity into the challenge and
+stores it with the challenge.
 
 Response `200`:
 
@@ -173,25 +181,29 @@ Response `200`:
 
 The challenge is stored in Redis under its transaction hash with a 300 s TTL.
 
-Errors: `400 INVALID_ADDRESS`, `429 RATE_LIMITED`.
+Errors: `400 INVALID_ADDRESS`, `400 INVALID_MEMO` (bad id, or a memo combined
+with an `M…` address), `429 RATE_LIMITED`.
 
 #### `POST /auth/verify`
 
 Rate-limited. Request:
 
 ```json
-{ "address": "GABC…", "signed": "<base64 XDR signed by the wallet>" }
+{ "address": "GABC…", "signed": "<base64 XDR signed by the wallet>", "memo": "42" }
 ```
+
+The same `address` (and `memo`, if the login was a `G…`-with-memo identity)
+that was sent to `/auth/challenge` must be repeated here.
 
 The server checks, in order:
 
 1. `readChallengeTx` passes: signed by the server key, time bounds still
    valid, home domain and web-auth domain match.
-2. The challenge's client account equals `address`.
+2. The challenge's client account and memo match the requested identity.
 3. The challenge exists in Redis and is deleted atomically (`GETDEL`), so a
    challenge works once. It's consumed even if a later check fails.
-4. `verifyChallengeTxSigners(..., [address], ...)` returns exactly
-   `[address]`.
+4. `verifyChallengeTxSigners(..., [baseAccount], ...)` returns exactly
+   `[baseAccount]`.
 
 Response `200`:
 
@@ -199,10 +211,14 @@ Response `200`:
 { "token": "<jwt>", "userId": "<uuid>", "walletAddress": "GABC…" }
 ```
 
-Errors: `400 INVALID_ADDRESS`, `400 INVALID_CHALLENGE` (malformed XDR),
-`401 CHALLENGE_EXPIRED`, `401 CHALLENGE_NOT_FOUND` (unknown or already
-used), `401 CHALLENGE_SIGNATURE_INVALID` (wrong signer, missing signature,
-address mismatch).
+`walletAddress` is the base `G…` account (never the `M…`/memo identity). The
+JWT also carries `account`, and `subId`/`subIdKind` (`MUXED` or `MEMO`) for a
+sub-identity.
+
+Errors: `400 INVALID_ADDRESS`, `400 INVALID_MEMO`, `400 INVALID_CHALLENGE`
+(malformed XDR), `401 CHALLENGE_EXPIRED`, `401 CHALLENGE_NOT_FOUND` (unknown or
+already used), `401 CHALLENGE_SIGNATURE_INVALID` (wrong signer, missing
+signature, address or memo mismatch).
 
 Multisig accounts: only a signature from `address`'s own key is accepted.
 Threshold-based SEP-10 verification is a backlog item.

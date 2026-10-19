@@ -20,6 +20,8 @@ import {
   treasuryAvailableCapital,
   treasuryConfig,
   treasuryDailyUsage,
+  marketCount,
+  ExpiredError,
   type WriteResult,
 } from './chain.service';
 import { ChainError } from './stellar/errors';
@@ -28,6 +30,13 @@ import { agentSigner } from './stellar/clients';
 import { pinJson } from './ipfs.service';
 import { revealPriceSpec } from './price-resolution.service';
 import type { QuestionResolutionBlock } from './resolvability.service';
+import { AppError } from '../middlewares/error.middleware';
+import {
+  claimCreation,
+  discoverLandedMarket,
+  linkLandedMarket,
+  releaseClaim,
+} from './market-idempotency.service';
 
 // The seed policy owns both (it must stay free of config and database imports).
 export { MIN_SEED_RAW, initialYesBps };
@@ -201,6 +210,75 @@ export async function createMarketOnChain(
   const resolutionHashBytes = resolutionHash(spec);
   const resolutionHashHex = resolutionHashBytes.toString('hex');
   const pinned = await pinJson(questionDocument(market, resolutionHashHex, spec), `oracledesk-market-${market.id}`);
+  const doc = questionDocument(market, resolutionHashHex);
+  const pinned = await pinJson(doc, `oracledesk-market-${market.id}`);
+
+  // Abort if a re-pinned question document produces a hash different from stored (#41)
+  if (market.questionHash && market.questionHash !== pinned.hash) {
+    throw new AppError(409, 'QUESTION_HASH_MISMATCH', 'Re-pinned question document produced a hash different from stored questionHash');
+  }
+
+  // ── Dry-run path: claim and discover, but never move attempt past CLAIMED (#41) ──
+  if (config.CHAIN_EXECUTION_MODE === 'dry-run') {
+    const { acquired } = await claimCreation(market.id);
+    try {
+      await discoverLandedMarket({
+        marketId: market.id,
+        questionHashHex: pinned.hash,
+        resolutionHashHex,
+      });
+
+      const requested = usdcFromNumber(market.minimumLiquidity);
+      const seed = plan ? plan.seedRaw : requested < MIN_SEED_RAW ? MIN_SEED_RAW : requested;
+      const openBps = plan ? plan.initialYesBps : initialYesBps(market.initialYesProb);
+
+      const result = await agentCreateMarket({
+        question_hash: Buffer.from(pinned.hash, 'hex'),
+        resolution_hash: resolutionHashBytes,
+        meta_uri: `ipfs://${pinned.cid}`,
+        category: toContractCategoryValue(market.category),
+        close_time: BigInt(Math.floor(market.expiryTimestamp.getTime() / 1000)),
+        seed_amount: seed,
+        initial_yes_bps: openBps,
+      });
+
+      logger.info(
+        { marketId: market.id, simulatedMarketId: result.value.toString() },
+        'Market creation simulated (dry-run); market stays PENDING',
+      );
+      return result;
+    } finally {
+      if (acquired) {
+        await releaseClaim(market.id);
+      }
+    }
+  }
+
+  // ── Live path: atomic claim, discovery first, bounded retry (#41) ──
+  const { acquired, attempt } = await claimCreation(market.id);
+  if (!acquired && attempt?.status === 'CLAIMED') {
+    logger.warn({ marketId: market.id }, 'Market creation currently claimed by another worker; skipping');
+    throw new AppError(409, 'CREATION_ALREADY_CLAIMED', 'Market creation is currently claimed by another process');
+  }
+
+  // Always run discovery first before submitting
+  const discoveredId = await discoverLandedMarket({
+    marketId: market.id,
+    questionHashHex: pinned.hash,
+    resolutionHashHex,
+    txHash: attempt?.tx_hash,
+    preSubmissionCount: attempt?.pre_submission_market_count,
+  });
+
+  if (discoveredId !== null) {
+    await linkLandedMarket(market.id, discoveredId, attempt?.tx_hash);
+    return {
+      mode: 'live',
+      method: 'agent_create_market',
+      value: discoveredId,
+      txHash: attempt?.tx_hash ?? null,
+    };
+  }
 
   const requested = usdcFromNumber(market.minimumLiquidity);
   const seed = plan ? plan.seedRaw : requested < MIN_SEED_RAW ? MIN_SEED_RAW : requested;
@@ -217,6 +295,20 @@ export async function createMarketOnChain(
     },
   });
 
+  let preCount: bigint | null = null;
+  try {
+    preCount = await marketCount();
+    await prisma.marketCreationAttempt.update({
+      where: { marketId: market.id },
+      data: {
+        preSubmissionMarketCount: preCount,
+        questionHash: pinned.hash,
+        resolutionHash: resolutionHashHex,
+        status: 'SUBMITTED',
+      },
+    });
+  } catch {}
+
   let result: WriteResult<bigint>;
   try {
     result = await agentCreateMarket({
@@ -228,9 +320,38 @@ export async function createMarketOnChain(
       seed_amount: seed,
       initial_yes_bps: openBps,
     });
-  } catch (err) {
-    // The trader may have spent the headroom between the budget read and now.
-    // The market stays PENDING and is visible to the reconciler.
+  } catch (err: any) {
+    const isExpired = err instanceof ExpiredError || err?.code === 'CHAIN_TX_EXPIRED';
+    const txHash = err?.txHash ?? (err as any)?.details?.txHash ?? null;
+
+    await prisma.marketCreationAttempt.update({
+      where: { marketId: market.id },
+      data: {
+        status: isExpired ? 'EXPIRED' : 'UNKNOWN',
+        txHash: txHash ?? undefined,
+      },
+    }).catch(() => undefined);
+
+    // Run discovery immediately across ambiguous outcome
+    try {
+      const recoveredId = await discoverLandedMarket({
+        marketId: market.id,
+        questionHashHex: pinned.hash,
+        resolutionHashHex,
+        txHash,
+        preSubmissionCount: preCount,
+      });
+      if (recoveredId !== null) {
+        await linkLandedMarket(market.id, recoveredId, txHash);
+        return {
+          mode: 'live',
+          method: 'agent_create_market',
+          value: recoveredId,
+          txHash,
+        };
+      }
+    } catch {}
+
     if (err instanceof ChainError && err.contractError && CAP_RACE_ERRORS.has(err.contractError)) {
       await writeAgentLog({
         agentType: 'MARKET_MAKER', level: 'WARN', action: 'SEED_CAP_RACE', marketId: market.id,
@@ -267,5 +388,7 @@ export async function createMarketOnChain(
       'Market creation simulated (dry-run); market stays PENDING',
     );
   }
+  await linkLandedMarket(market.id, result.value, result.txHash);
+  logger.info({ marketId: market.id, onChainMarketId: result.value.toString() }, 'Market created on-chain');
   return result;
 }

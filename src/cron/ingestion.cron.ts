@@ -1,6 +1,8 @@
 import cron from 'node-cron';
 import { runMarketMakerCycle } from '../agents/market-maker.agent';
 import { backfillEmbeddings } from '../services/embeddings.service';
+import { reconcileUnresolvedAttempts } from '../services/market-idempotency.service';
+import { config } from '../config';
 import { logger } from '../lib/logger';
 import { newId, runWithContext } from '../lib/context';
 import { recordCronRun } from './registry';
@@ -35,6 +37,10 @@ export function startIngestionCron(): void {
         // fire-and-forget, or created before an embedding provider was set up).
         await backfillEmbeddings(32, { maxBatches: 1 }).catch((err) =>
           logger.warn({ err: (err as Error)?.message?.slice(0, 200) }, 'Ingestion cron: embedding sweep failed'));
+        if (config.CHAIN_EXECUTION_MODE === 'live') {
+          await reconcileUnresolvedAttempts().catch((err) =>
+            logger.warn({ err: (err as Error)?.message?.slice(0, 200) }, 'Ingestion cron: attempt reconciliation failed'));
+        }
         recordCronRun('ingestion', 'success', startedAt, new Date());
       } catch (err) {
         recordCronRun('ingestion', 'failure', startedAt, new Date(), err);

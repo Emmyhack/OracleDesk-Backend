@@ -128,10 +128,24 @@ enum LogLevel {
 
 // ─────────────────────────── MODELS ───────────────────────────
 
-/// Registered subscribers who pay for reasoning traces
+/// How a custodial sub-identity is expressed on the signed challenge (#46).
+/// `MUXED` is a CAP-27 / SEP-23 M… address; `MEMO` is a G… account with an id memo.
+enum SubIdKind {
+  MUXED
+  MEMO
+}
+
+/// Registered subscribers who pay for reasoning traces.
+///
+/// `walletAddress` is the base G… account that signs and pays; it is no longer
+/// unique so one pooled account can host many sub-users. `identityKey` is the
+/// unique login identity: `G…`, `G…#muxed:<id>` or `G…#memo:<id>`.
 model User {
   id            String         @id @default(uuid())
-  walletAddress String         @unique
+  walletAddress String
+  subId         String?
+  subIdKind     SubIdKind?
+  identityKey   String         @unique
   email         String?        @unique
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
@@ -204,6 +218,7 @@ model Market {
   reasoningTraces ReasoningTrace[]
   copyTrades     CopyTrade[]
   agentLogs      AgentLog[]
+  creationAttempt MarketCreationAttempt?
 
   @@index([status])
   @@index([category])
@@ -897,5 +912,60 @@ model ChainTransaction {
   @@index([landedHash])
   @@index([kind, refId])
   @@map("chain_transactions")
+/// On-chain fees recorded per transaction (#39).
+model ChainFee {
+  txHash       String   @id @map("tx_hash")
+  opClass      String   @map("op_class")
+  inclusionFee BigInt   @map("inclusion_fee")
+  resourceFee  BigInt   @map("resource_fee")
+  totalFee     BigInt   @map("total_fee")
+  feeCharged   BigInt?  @map("fee_charged")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([opClass, createdAt])
+  @@map("chain_fees")
+}
+
+/// On-chain transaction submissions and lifetime tracking (#42).
+model ChainSubmission {
+  txHash               String   @id @map("tx_hash")
+  opClass              String   @map("op_class")
+  minTime              BigInt   @default(0) @map("min_time")
+  maxTime              BigInt   @map("max_time")
+  authExpirationLedger Int?     @map("auth_expiration_ledger")
+  submittedLedger      Int?     @map("submitted_ledger")
+  submittedAtCloseTime BigInt?  @map("submitted_at_close_time")
+  decision             String   @map("decision")
+  rebuildCount         Int      @default(0) @map("rebuild_count")
+  attemptId            String?  @map("attempt_id")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  @@index([opClass, createdAt])
+  @@index([attemptId])
+  @@map("chain_submissions")
+}
+
+/// Idempotent market creation attempts (#41).
+model MarketCreationAttempt {
+  id                        String    @id @default(uuid())
+  marketId                  String    @unique @map("market_id")
+  market                    Market    @relation(fields: [marketId], references: [id], onDelete: Cascade)
+  status                    String    @map("status") // CLAIMED, SUBMITTED, LANDED, UNKNOWN, EXPIRED
+  attempts                  Int       @default(0) @map("attempts")
+  claimedAt                 DateTime? @map("claimed_at")
+  claimLeaseExpiresAt       DateTime? @map("claim_lease_expires_at")
+  questionHash              String?   @map("question_hash")
+  resolutionHash            String?   @map("resolution_hash")
+  preSubmissionMarketCount  BigInt?   @map("pre_submission_market_count")
+  postSubmissionMarketCount BigInt?   @map("post_submission_market_count")
+  txHash                    String?   @map("tx_hash")
+  onChainMarketId           BigInt?   @map("on_chain_market_id")
+  createdAt                 DateTime  @default(now()) @map("created_at")
+  updatedAt                 DateTime  @updatedAt @map("updated_at")
+
+  @@index([questionHash])
+  @@index([status, claimedAt])
+  @@map("market_creation_attempts")
 }
 

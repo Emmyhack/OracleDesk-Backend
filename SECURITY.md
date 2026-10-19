@@ -35,3 +35,7 @@ the frontend (report to
 [OracleDesk-Frontend](https://github.com/OracleDesk/OracleDesk-Frontend)), and
 third-party dependencies unless this repo's use of them is what's
 exploitable.
+
+## Channel accounts note (#37)
+
+Channel accounts are configured on Stellar testnet exclusively as parallel transaction source accounts to prevent sequence collisions during concurrent agent submissions. Channel keys hold only minimal fee XLM and have no permissions, roles, or allowances in the treasury or market-core contracts. Compromise of a channel key cannot move treasury capital, create markets, or trade shares, as all privileged operations require invocation authorization entries signed by the agent key (`AGENT_SECRET_KEY`).

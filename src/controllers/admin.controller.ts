@@ -22,6 +22,7 @@ import { secret } from '../config/secrets';
 import { health } from '../services/health.service';
 import { indexerStatus } from '../services/indexer.service';
 import { agentSigner } from '../services/stellar/clients';
+import { getFeeOracle } from '../services/stellar/fees';
 import { getLlmUsage } from '../lib/llm-budget';
 import { getCronStatus } from '../cron/registry';
 import { AppError } from '../middlewares/error.middleware';
@@ -287,3 +288,48 @@ export async function triggerReconciliationRun(req: Request, res: Response): Pro
   ).catch((err) => logger.error({ err, runId }, 'Background reconciliation run failed'));
   sendSuccess(res, { runId, message: 'Reconciliation run scheduled' }, 202);
 }
+
+/**
+ * GET /admin/fees
+ * Returns aggregate fee statistics per operation class per day, plus the current fee oracle snapshot (#39).
+ */
+export async function getChainFeesReport(req: Request, res: Response): Promise<void> {
+  const oracle = getFeeOracle();
+  const snapshot = oracle.getSnapshot();
+
+  const rows = await prisma.$queryRaw<Array<{
+    op_class: string;
+    day: Date;
+    count: number | bigint;
+    total_charged: string | bigint;
+    p50_charged: string | number;
+    p95_charged: string | number;
+  }>>`
+    SELECT
+      op_class,
+      DATE_TRUNC('day', created_at) AS day,
+      COUNT(*)::int AS count,
+      COALESCE(SUM(fee_charged), 0)::text AS total_charged,
+      COALESCE(percentile_cont(0.50) WITHIN GROUP (ORDER BY fee_charged), 0)::numeric::text AS p50_charged,
+      COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY fee_charged), 0)::numeric::text AS p95_charged
+    FROM chain_fees
+    WHERE fee_charged IS NOT NULL
+    GROUP BY op_class, DATE_TRUNC('day', created_at)
+    ORDER BY day DESC, op_class ASC
+  `;
+
+  const report = rows.map((r) => ({
+    opClass: r.op_class,
+    day: r.day,
+    count: Number(r.count),
+    totalCharged: r.total_charged.toString(),
+    p50Charged: r.p50_charged.toString(),
+    p95Charged: r.p95_charged.toString(),
+  }));
+
+  sendSuccess(res, {
+    oracle: snapshot,
+    report,
+  });
+}
+

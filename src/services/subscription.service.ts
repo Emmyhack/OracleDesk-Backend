@@ -84,8 +84,11 @@ export async function recordPayment(params: {
   traceId?:      string;
   type:          'PER_TRACE' | 'DAILY_PASS';
   txHash:        string;
+  /** Sub-identity of a pooled account (#46); proven against the payment. */
+  subId?:        string | null;
+  subIdKind?:    'MUXED' | 'MEMO' | null;
 }): Promise<any> {
-  const { userId, walletAddress, traceId, type } = params;
+  const { userId, walletAddress, traceId, type, subId, subIdKind } = params;
   const txHash = params.txHash.toLowerCase();
 
   if (type !== 'DAILY_PASS') {
@@ -109,6 +112,8 @@ export async function recordPayment(params: {
     from:      walletAddress,
     to:        PAYMENTS_RECIPIENT,
     minAmount: DAILY_PASS_PRICE_RAW,
+    subId,
+    subIdKind,
   });
   const amount = toDisplayUsdc(transfer.amount);
 

@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import crypto from 'crypto';
 import os from 'os';
 import dotenv from 'dotenv';
@@ -202,6 +203,26 @@ const envSchema = z
     // pause the writing agent until an operator resumes it.
     AGENT_FAILURE_THRESHOLD: z.string().default('5').transform(Number),
     AGENT_FAILURE_WINDOW_MS: z.string().default('1800000').transform(Number),
+
+    // ── Fee policies (#39) ───────────────────────────────────────────────
+    FEE_POLICY_JSON: optionalString,
+    FEE_STATS_CACHE_MS: z.string().default('10000').transform(Number).pipe(z.number().int().positive()),
+    FEE_STATS_MAX_AGE_MS: z.string().default('60000').transform(Number).pipe(z.number().int().positive()),
+
+    // ── Timebounds & Rebuilds (#42) ───────────────────────────────────────
+    TIMEOUT_MARKET_CREATE_SECONDS: z.string().default('60').transform(Number).pipe(z.number().int().min(15).max(300)),
+    TIMEOUT_TRADE_SECONDS: z.string().default('30').transform(Number).pipe(z.number().int().min(10).max(120)),
+    TIMEOUT_TRACE_PUBLISH_SECONDS: z.string().default('45').transform(Number).pipe(z.number().int().min(10).max(180)),
+    TIMEOUT_MAINTENANCE_SECONDS: z.string().default('30').transform(Number).pipe(z.number().int().min(10).max(120)),
+    AUTH_EXPIRY_MARGIN_LEDGERS: z.string().default('12').transform(Number).pipe(z.number().int().min(2).max(100)),
+    MAX_REBUILD_COUNT: z.string().default('2').transform(Number).pipe(z.number().int().min(0).max(10)),
+
+    // ── Channel Accounts (#37) ────────────────────────────────────────────
+    CHANNEL_SECRET_KEYS: optionalString,
+    CHANNELS_SECRETS_FILE: optionalString,
+    CHANNEL_MIN_BALANCE_XLM: z.string().default('5').transform(Number).pipe(z.number().positive()),
+    CHANNEL_ACQUIRE_TIMEOUT_MS: z.string().default('5000').transform(Number).pipe(z.number().int().positive()),
+    CHANNEL_LEASE_MS: z.string().default('60000').transform(Number).pipe(z.number().int().positive()),
 
     TRUST_INBOUND_REQUEST_ID: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
     INDEXER_ENABLED: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
@@ -430,6 +451,107 @@ const envSchema = z
       }
       if (env.FEE_PAYER_SECRET === env.AUTH_SIGNING_SECRET) {
         ctx.addIssue({ code: 'custom', path: ['FEE_PAYER_SECRET'], message: 'must differ from AUTH_SIGNING_SECRET' });
+
+    // ── Channel Accounts validation (#37) ──
+    const channelKeys: string[] = [];
+    if (env.CHANNEL_SECRET_KEYS) {
+      for (const k of env.CHANNEL_SECRET_KEYS.split(',')) {
+        const trimmed = k.trim();
+        if (trimmed) channelKeys.push(trimmed);
+      }
+    }
+    if (env.CHANNELS_SECRETS_FILE && fs.existsSync(env.CHANNELS_SECRETS_FILE)) {
+      try {
+        const content = fs.readFileSync(env.CHANNELS_SECRETS_FILE, 'utf-8');
+        for (const line of content.split('\n')) {
+          const trimmed = line.trim();
+          if (trimmed && !trimmed.startsWith('#') && StrKey.isValidEd25519SecretSeed(trimmed)) {
+            channelKeys.push(trimmed);
+          }
+        }
+      } catch {
+        ctx.addIssue({ code: 'custom', path: ['CHANNELS_SECRETS_FILE'], message: 'could not read channels secrets file' });
+      }
+    }
+
+    if (channelKeys.length > 0) {
+      if (env.CHAIN_EXECUTION_MODE === 'live' && env.STELLAR_NETWORK_PASSPHRASE !== Networks.TESTNET) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['CHANNEL_SECRET_KEYS'],
+          message: 'channel accounts are testnet-only',
+        });
+      }
+      const seenChannels = new Set<string>();
+      for (const key of channelKeys) {
+        if (!StrKey.isValidEd25519SecretSeed(key)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['CHANNEL_SECRET_KEYS'],
+            message: 'contains invalid Stellar secret seed',
+          });
+          continue;
+        }
+        if (seenChannels.has(key)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['CHANNEL_SECRET_KEYS'],
+            message: 'duplicate channel secret key configured',
+          });
+        }
+        seenChannels.add(key);
+
+        if (env.AGENT_SECRET_KEY && key === env.AGENT_SECRET_KEY) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['CHANNEL_SECRET_KEYS'],
+            message: 'channel secret key must not equal AGENT_SECRET_KEY',
+          });
+        }
+        if (env.AUTH_SIGNING_SECRET && key === env.AUTH_SIGNING_SECRET) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['CHANNEL_SECRET_KEYS'],
+            message: 'channel secret key must not equal AUTH_SIGNING_SECRET',
+          });
+        }
+      }
+    }
+    if (env.FEE_POLICY_JSON) {
+      try {
+        const parsed = JSON.parse(env.FEE_POLICY_JSON);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          ctx.addIssue({ code: 'custom', path: ['FEE_POLICY_JSON'], message: 'must be a JSON object' });
+        } else {
+          const validClasses = ['market_create', 'trade', 'trace_publish', 'maintenance'];
+          const validPercentiles = ['p10', 'p20', 'p30', 'p40', 'p50', 'p60', 'p70', 'p80', 'p90', 'p95', 'p99', 'min', 'mode', 'max'];
+          for (const [k, v] of Object.entries(parsed)) {
+            if (!validClasses.includes(k)) {
+              ctx.addIssue({ code: 'custom', path: ['FEE_POLICY_JSON', k], message: `unknown operation class: ${k}` });
+            } else if (v && typeof v === 'object' && !Array.isArray(v)) {
+              const pol = v as any;
+              if (pol.percentile && !validPercentiles.includes(pol.percentile)) {
+                ctx.addIssue({ code: 'custom', path: ['FEE_POLICY_JSON', k, 'percentile'], message: `invalid percentile: ${pol.percentile}` });
+              }
+              if (pol.floor !== undefined && (!/^\d+$/.test(String(pol.floor)) || BigInt(pol.floor) < 0n)) {
+                ctx.addIssue({ code: 'custom', path: ['FEE_POLICY_JSON', k, 'floor'], message: 'floor must be a non-negative integer' });
+              }
+              if (pol.cap !== undefined && (!/^\d+$/.test(String(pol.cap)) || BigInt(pol.cap) < 0n)) {
+                ctx.addIssue({ code: 'custom', path: ['FEE_POLICY_JSON', k, 'cap'], message: 'cap must be a non-negative integer' });
+              }
+              if (pol.budget !== undefined && (!/^\d+$/.test(String(pol.budget)) || BigInt(pol.budget) < 0n)) {
+                ctx.addIssue({ code: 'custom', path: ['FEE_POLICY_JSON', k, 'budget'], message: 'budget must be a non-negative integer' });
+              }
+              if (pol.floor !== undefined && pol.cap !== undefined && BigInt(pol.floor) > BigInt(pol.cap)) {
+                ctx.addIssue({ code: 'custom', path: ['FEE_POLICY_JSON', k], message: 'floor cannot exceed cap' });
+              }
+            } else {
+              ctx.addIssue({ code: 'custom', path: ['FEE_POLICY_JSON', k], message: 'must be an object' });
+            }
+          }
+        }
+      } catch {
+        ctx.addIssue({ code: 'custom', path: ['FEE_POLICY_JSON'], message: 'must be valid JSON' });
       }
     }
   });

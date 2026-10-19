@@ -7,9 +7,11 @@ import type { KellyResult, TradePayload, KellyInput } from '../types';
 import { agentBuy, getOnChainMarket, Outcomes, quoteBuy } from './chain.service';
 import { TransactionError } from './stellar/errors';
 import { isPermanentFailure, type FailureClass } from './stellar/failures';
+import { agentBuy, getOnChainMarket, Outcomes, quoteBuy, ExpiredError } from './chain.service';
 import { enqueueTracePublication } from './trace-publish.service';
 import { tradeTraceAction } from '../lib/trace-actions';
 import { bigintToDecimalString, mulDivCeil, usdcFromNumber } from '../lib/amounts';
+import { config } from '../config';
 
 // ─── Risk constants ───
 const MAX_CORRELATED_EXPOSURE  = 0.05;   // 5% total correlated exposure
@@ -72,21 +74,78 @@ export async function executeTrade(payload: TradePayload): Promise<{
     },
   });
 
-  // ── Step 3: Attempt on-chain execution ──
+  // ── Step 3: Attempt on-chain execution with safe rebuild on EXPIRED ──
   let txHash: string | null = null;
   let dryRun = false;
   let fill: Pick<SubmittedTrade, 'sharesOut' | 'collateralIn' | 'feeRaw'> | null = null;
-  try {
-    const submitted = await submitTradeTransaction(payload, market);
-    txHash = submitted.txHash;
-    dryRun = submitted.dryRun;
-    fill = submitted;
-  } catch (err) {
-    // A paused agent is not a failed trade: nothing was sent (#79).
-    if (err instanceof AgentPausedError) {
+  let rebuildAttempt = 0;
+  let prevTxHash: string | null = null;
+
+  while (true) {
+    try {
+      const submitted = await submitTradeTransaction(payload, market, trade.id, rebuildAttempt);
+      txHash = submitted.txHash;
+      dryRun = submitted.dryRun;
+      fill = submitted;
+      break;
+    } catch (err: any) {
+      // A paused agent is not a failed trade: nothing was sent (#79).
+      if (err instanceof AgentPausedError) {
+        await prisma.trade.update({
+          where: { id: trade.id },
+          data:  { status: 'CANCELLED', errorMessage: `${err.code}: ${err.message}` },
+        });
+        await logAgentAction('TRADER', 'INFO', 'TRADE_SKIPPED_PAUSED', payload.marketId, { tradeId: trade.id });
+        throw err;
+      }
+
+      // Safe rebuild if expired and within MAX_REBUILD_COUNT
+      const isExpired = err instanceof ExpiredError || err?.code === 'CHAIN_TX_EXPIRED' || /expired/i.test(err?.message ?? '');
+      if (isExpired && rebuildAttempt < config.MAX_REBUILD_COUNT) {
+        rebuildAttempt++;
+        prevTxHash = err?.txHash ?? txHash;
+        logger.info(
+          { marketId: payload.marketId, tradeId: trade.id, rebuildAttempt, prevTxHash },
+          'Trade transaction expired; re-quoting and checking edge before rebuild',
+        );
+
+        // Re-quote market to verify edge
+        const outcome = payload.direction === 'YES' ? Outcomes.Yes : Outcomes.No;
+        const collateralIn = usdcFromNumber(payload.amount);
+        const freshQuoted = await quoteBuy(market.onChainMarketId!, outcome, collateralIn);
+        const freshPrice = Math.min(1, Number(collateralIn) / Number(freshQuoted));
+        const freshEdge = Math.abs(payload.price - freshPrice);
+
+        if (freshEdge < MIN_EDGE_THRESHOLD) {
+          logger.warn(
+            { marketId: payload.marketId, freshEdge, threshold: MIN_EDGE_THRESHOLD },
+            'Fresh price removes edge; aborting rebuild',
+          );
+          await prisma.trade.update({
+            where: { id: trade.id },
+            data:  { status: 'CANCELLED', errorMessage: `EDGE_DEGRADED: fresh edge ${freshEdge} below minimum ${MIN_EDGE_THRESHOLD}` },
+          });
+          await logAgentAction('TRADER', 'WARN', 'TRADE_REBUILD_EDGE_LOST', payload.marketId, {
+            tradeId: trade.id,
+            freshEdge,
+            rebuildAttempt,
+          });
+          throw new AppError(400, 'INSUFFICIENT_EDGE', `Edge degraded on re-quote (${freshEdge} < ${MIN_EDGE_THRESHOLD})`);
+        }
+
+        // Edge holds; resubmit linked to old attempt
+        await logAgentAction('TRADER', 'INFO', 'TRADE_REBUILD_ATTEMPT', payload.marketId, {
+          tradeId: trade.id,
+          rebuildAttempt,
+          prevTxHash,
+        });
+        continue;
+      }
+
+      // Mark as FAILED — no position created
       await prisma.trade.update({
         where: { id: trade.id },
-        data:  { status: 'CANCELLED', errorMessage: `${err.code}: ${err.message}` },
+        data:  { status: 'FAILED', errorMessage: String(err) },
       });
       await logAgentAction('TRADER', 'INFO', 'TRADE_SKIPPED_PAUSED', payload.marketId, { tradeId: trade.id });
       throw err;
@@ -106,6 +165,7 @@ export async function executeTrade(payload: TradePayload): Promise<{
         where: { id: trade.id },
         data:  { status: 'FAILED', errorMessage: String(err) },
       });
+
       await logAgentAction('TRADER', 'ERROR', 'TRADE_EXECUTION_FAILED', payload.marketId, {
         tradeId: trade.id,
         error:   String(err),
@@ -123,6 +183,9 @@ export async function executeTrade(payload: TradePayload): Promise<{
     }
 
     throw new AppError(502, 'TRADE_FAILED', 'On-chain trade execution failed', { error: String(err), failureClass: failure });
+
+      throw new AppError(502, 'TRADE_FAILED', 'On-chain trade execution failed', { error: String(err) });
+    }
   }
 
   if (dryRun) {
@@ -267,6 +330,8 @@ export interface SubmittedTrade {
 async function submitTradeTransaction(
   payload: TradePayload,
   market: { id: string; onChainMarketId: bigint | null },
+  attemptId?: string,
+  rebuildCount = 0,
 ): Promise<SubmittedTrade> {
   if (market.onChainMarketId === null) {
     throw new AppError(409, 'MARKET_NOT_ON_CHAIN', 'Market has no on-chain id yet');
@@ -278,7 +343,13 @@ async function submitTradeTransaction(
   const feeRaw = mulDivCeil(collateralIn, BigInt(onChain.fee_bps), 10_000n);
 
   logger.info(
-    { marketId: market.id, onChainMarketId: market.onChainMarketId.toString(), collateralIn: collateralIn.toString() },
+    {
+      marketId: market.id,
+      onChainMarketId: market.onChainMarketId.toString(),
+      collateralIn: collateralIn.toString(),
+      attemptId,
+      rebuildCount,
+    },
     'Executing agent_buy through the treasury',
   );
   // The min_shares_out bound is recomputed from a fresh quote on every attempt,
@@ -293,6 +364,14 @@ async function submitTradeTransaction(
       min_shares_out: minSharesOut,
     };
   });
+  const result = await agentBuy({
+    market_id: market.onChainMarketId,
+    outcome,
+    collateral_in: collateralIn,
+    min_shares_out: minSharesOut,
+    ...(attemptId ? { attemptId } : {}),
+    ...(rebuildCount ? { rebuildCount } : {}),
+  } as any);
   return {
     txHash: result.txHash,
     dryRun: result.mode === 'dry-run',

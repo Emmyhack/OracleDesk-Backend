@@ -17,9 +17,11 @@ after(async () => { if (db) { await prisma.$disconnect(); await db.drop(); } });
 
 const WALLET = 'GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7';
 
-for (const name of ['first insert of a unique wallet', 'same wallet again: truncation isolates tests']) {
+// walletAddress is no longer unique alone (#46); identityKey is the unique
+// login identity. Each test asserts truncation isolates it from the last.
+for (const name of ['first insert of a unique identity', 'same identity again: truncation isolates tests']) {
   test(name, { skip: skipReason() }, async () => {
-    await prisma.user.create({ data: { walletAddress: WALLET } });
+    await prisma.user.create({ data: { walletAddress: WALLET, identityKey: WALLET } });
     assert.equal(await prisma.user.count(), 1);
   });
 }
