@@ -162,8 +162,10 @@ function classify(err: unknown): Failure {
       case 'MarketNotOpen': return 'closed';
       case 'Paused': return 'paused';
     }
-    // The submission may or may not have landed.
+    // The submission may or may not have landed. #40 reports this as a
+    // TransactionError with failureClass UNKNOWN_OUTCOME / submitted=true.
     if (err.code === 'CHAIN_SUBMISSION_TIMEOUT') return 'ambiguous';
+    if ((err.details as { failureClass?: string } | undefined)?.failureClass === 'UNKNOWN_OUTCOME') return 'ambiguous';
     if (err.contractError === null && /submission failed/.test(err.message)) return 'ambiguous';
   }
   return 'other';

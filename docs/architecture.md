@@ -38,6 +38,19 @@ Every Stellar transaction consumes one sequence number of its source account. Se
 
 The lock covers one attempt, from sequence allocation until `sendTransaction` returns; confirmation polling happens after release, which is safe because the sequence is already reserved.
 
+### Write failure classification and retry (#40)
+
+A live write failure is classified from the actual Stellar result codes (`services/stellar/failures.ts`) into one of `TRANSIENT_RPC`, `BAD_SEQUENCE`, `INSUFFICIENT_FEE`, `EXPIRED`, `RESOURCE_OR_STATE`, `CONTRACT_ERROR`, `AUTH`, `INSUFFICIENT_BALANCE`, `UNKNOWN_OUTCOME` or `UNKNOWN`. Only the first five are retried, and only when the envelope is provably *not* applied:
+
+- `TRANSIENT_RPC` (e.g. `TRY_AGAIN_LATER`, a connection error before send) rebuilds.
+- `BAD_SEQUENCE` re-syncs the cached sequence and rebuilds.
+- `INSUFFICIENT_FEE`, `EXPIRED` and `RESOURCE_OR_STATE` rebuild, because the previous envelope was rejected, not applied.
+- `CONTRACT_ERROR`, `AUTH`, `INSUFFICIENT_BALANCE` and `UNKNOWN` are permanent and never retried.
+- `UNKNOWN_OUTCOME` (a send timeout, a `DUPLICATE`, a `NOT_FOUND` poll) is ambiguous: the transaction may have been applied. It is **never** re-submitted with a rebuilt transaction; the cached sequence is re-synced and the failure surfaces as a `TransactionError` with `submitted: true`.
+
+Backoff is jittered exponential, `min(CHAIN_RETRY_MAX_MS, CHAIN_RETRY_BASE_MS × 2^attempt) × U(0.5, 1)`, capped by `CHAIN_RETRY_MAX_ATTEMPTS` attempts and `CHAIN_RETRY_DEADLINE_MS` total. Trade execution re-quotes `min_shares_out` on each rebuild so a retry never reuses a bound a moved price has invalidated, and it marks a `PENDING` trade `FAILED` only for a permanent classification — transient or ambiguous failures stay retryable. The market-maker's on-chain creation likewise leaves a market `PENDING` rather than failed.
+
+
 
 ## Market creation (ADR 0001)
 

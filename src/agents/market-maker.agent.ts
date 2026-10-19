@@ -18,6 +18,7 @@ import { LlmBudgetExceeded, claimDailyOnce, getLlmUsage, type CallContext, type 
 import { logger } from '../lib/logger';
 import { config } from '../config';
 import { AgentPausedError, gateCycle } from '../services/agent-controls.service';
+import { TransactionError } from '../services/stellar/errors';
 import { deadline } from '../lib/resilience';
 import { shutdownController } from '../lib/shutdown';
 
@@ -178,7 +179,10 @@ export async function runMarketMakerCycle(
       const result = await createMarketOnChain(market, undefined, { seedRaw: decision.seedRaw, initialYesBps: decision.initialYesBps });
       if (result.mode === 'live') onChainMarketId = result.value;
     } catch (err) {
-      logger.error({ err, marketId: market.id }, 'Market Maker Agent: on-chain creation failed; market stays PENDING');
+      // #40: a transient/ambiguous failure leaves the market PENDING rather than
+      // FAILED; only a permanent classification would need operator repair.
+      const failureClass = err instanceof TransactionError ? (err.details as { failureClass?: string } | undefined)?.failureClass : undefined;
+      logger.error({ err, marketId: market.id, failureClass }, 'Market Maker Agent: on-chain creation failed; market stays PENDING');
     }
 
     signal.throwIfAborted();

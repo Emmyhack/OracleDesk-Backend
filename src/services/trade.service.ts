@@ -5,6 +5,8 @@ import { AppError } from '../middlewares/error.middleware';
 import { AgentPausedError } from './agent-controls.service';
 import type { KellyResult, TradePayload, KellyInput } from '../types';
 import { agentBuy, getOnChainMarket, Outcomes, quoteBuy } from './chain.service';
+import { TransactionError } from './stellar/errors';
+import { isPermanentFailure, type FailureClass } from './stellar/failures';
 import { enqueueTracePublication } from './trace-publish.service';
 import { tradeTraceAction } from '../lib/trace-actions';
 import { bigintToDecimalString, mulDivCeil, usdcFromNumber } from '../lib/amounts';
@@ -89,18 +91,38 @@ export async function executeTrade(payload: TradePayload): Promise<{
       await logAgentAction('TRADER', 'INFO', 'TRADE_SKIPPED_PAUSED', payload.marketId, { tradeId: trade.id });
       throw err;
     }
-    // Mark as FAILED — no position created
-    await prisma.trade.update({
-      where: { id: trade.id },
-      data:  { status: 'FAILED', errorMessage: String(err) },
-    });
 
-    await logAgentAction('TRADER', 'ERROR', 'TRADE_EXECUTION_FAILED', payload.marketId, {
-      tradeId: trade.id,
-      error:   String(err),
-    });
+    // #40: only a permanent classification marks the trade FAILED. A retryable
+    // failure that exhausted its attempts, and an ambiguous outcome (the
+    // transaction may have been applied), are left PENDING for a later retry or
+    // reconciliation instead of being recorded as a definite failure.
+    const failure = err instanceof TransactionError
+      ? (err.details as { failureClass?: string } | undefined)?.failureClass
+      : null;
+    const permanent = failure ? isPermanentFailure(failure as any) : !(err instanceof TransactionError);
 
-    throw new AppError(502, 'TRADE_FAILED', 'On-chain trade execution failed', { error: String(err) });
+    if (permanent) {
+      await prisma.trade.update({
+        where: { id: trade.id },
+        data:  { status: 'FAILED', errorMessage: String(err) },
+      });
+      await logAgentAction('TRADER', 'ERROR', 'TRADE_EXECUTION_FAILED', payload.marketId, {
+        tradeId: trade.id,
+        error:   String(err),
+      });
+    } else {
+      await prisma.trade.update({
+        where: { id: trade.id },
+        data:  { errorMessage: String(err) },
+      });
+      await logAgentAction('TRADER', 'WARN', 'TRADE_DEFERRED', payload.marketId, {
+        tradeId: trade.id,
+        failureClass: failure,
+        error:   String(err),
+      });
+    }
+
+    throw new AppError(502, 'TRADE_FAILED', 'On-chain trade execution failed', { error: String(err), failureClass: failure });
   }
 
   if (dryRun) {
@@ -250,8 +272,6 @@ async function submitTradeTransaction(
   }
   const outcome = payload.direction === 'YES' ? Outcomes.Yes : Outcomes.No;
   const collateralIn = usdcFromNumber(payload.amount);
-  const quoted = await quoteBuy(market.onChainMarketId, outcome, collateralIn);
-  const minSharesOut = (quoted * (10_000n - AGENT_SLIPPAGE_BPS)) / 10_000n;
   // fee_bps is fixed at market creation; the fee is charged on collateral in.
   const onChain = await getOnChainMarket(market.onChainMarketId);
   const feeRaw = mulDivCeil(collateralIn, BigInt(onChain.fee_bps), 10_000n);
@@ -260,11 +280,17 @@ async function submitTradeTransaction(
     { marketId: market.id, onChainMarketId: market.onChainMarketId.toString(), collateralIn: collateralIn.toString() },
     'Executing agent_buy through the treasury',
   );
-  const result = await agentBuy({
-    market_id: market.onChainMarketId,
-    outcome,
-    collateral_in: collateralIn,
-    min_shares_out: minSharesOut,
+  // The min_shares_out bound is recomputed from a fresh quote on every attempt,
+  // so a retry never reuses a bound that a moved price has invalidated (#40).
+  const result = await agentBuy(async () => {
+    const quoted = await quoteBuy(market.onChainMarketId!, outcome, collateralIn);
+    const minSharesOut = (quoted * (10_000n - AGENT_SLIPPAGE_BPS)) / 10_000n;
+    return {
+      market_id: market.onChainMarketId!,
+      outcome,
+      collateral_in: collateralIn,
+      min_shares_out: minSharesOut,
+    };
   });
   return {
     txHash: result.txHash,

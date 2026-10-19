@@ -17,12 +17,20 @@
  * so the two can converge (see docs/contract-requests.md).
  */
 import type { AssembledTransaction } from '@stellar/stellar-sdk/contract';
+import type { rpc } from '@stellar/stellar-sdk';
 import { config } from '../config';
 import { logger } from '../lib/logger';
 import { agentClients, agentSigner, readClients } from './stellar/clients';
-import { ChainError, contractErrorName, ArchivedEntryError } from './stellar/errors';
+import { ChainError, TransactionError, contractErrorName, ArchivedEntryError } from './stellar/errors';
 import { SequenceLockLost, rebuildWithSequence, withSourceAccount } from './stellar/sequence';
-import { withTimeout, TimeoutError } from '../lib/resilience';
+import {
+  ChainWriteFailure,
+  classifyFailure,
+  retryDecision,
+  type ClassifiedFailure,
+  type RetryOptions,
+} from './stellar/failures';
+import { withTimeout, TimeoutError, sleep } from '../lib/resilience';
 import type { Category, Config as MarketCoreConfig, Market as OnChainMarket, Outcome, Position } from '../generated/market-core';
 import type { Trace } from '../generated/reasoning-registry';
 import type { DailyUsage, RiskConfig } from '../generated/treasury';
@@ -119,10 +127,37 @@ async function read<T>(
   return (await readTx<T>(contract, method, call, signal)).value;
 }
 
+const retryOptions = (): RetryOptions => ({
+  maxAttempts: config.CHAIN_RETRY_MAX_ATTEMPTS,
+  baseDelayMs: config.CHAIN_RETRY_BASE_MS,
+  maxDelayMs: config.CHAIN_RETRY_MAX_MS,
+  deadlineMs: config.CHAIN_RETRY_DEADLINE_MS,
+});
+
+/** Pull a structured send response off an SDK error, when the SDK attached one. */
+function extractSendResponse(err: unknown): rpc.Api.SendTransactionResponse | undefined {
+  const anyErr = err as {
+    status?: string;
+    sendTransactionResponse?: rpc.Api.SendTransactionResponse;
+    response?: rpc.Api.SendTransactionResponse;
+    errorResult?: unknown;
+    errorResultXdr?: string;
+  };
+  for (const candidate of [anyErr?.sendTransactionResponse, anyErr?.response]) {
+    if (candidate && typeof (candidate as { status?: unknown }).status === 'string') return candidate;
+  }
+  if (typeof anyErr?.status === 'string' && (anyErr.errorResult || anyErr.errorResultXdr)) {
+    return anyErr as unknown as rpc.Api.SendTransactionResponse;
+  }
+  return undefined;
+}
+
 /**
  * Every chain write goes through here (#79): the agent's control state is
  * checked before the transaction is built, re-checked under a share lock after
  * simulation (right before signing), and the outcome feeds the failure breaker.
+ * Live failures are classified and retried by policy (#40); dry-run never
+ * retries and never touches the network.
  */
 async function write<T>(
   scope: AgentScope,
@@ -134,7 +169,10 @@ async function write<T>(
 ): Promise<WriteResult<T>> {
   const seenVersion = await assertAgentActive(scope);
   try {
-    const result = await submitWrite<T>(scope, seenVersion, contract, method, args, call, signal);
+    const result =
+      config.CHAIN_EXECUTION_MODE === 'dry-run'
+        ? await dryRunWrite<T>(scope, seenVersion, contract, method, args, call)
+        : await liveWriteWithRetry<T>(scope, seenVersion, contract, method, args, call, signal);
     await recordChainWriteOutcome(scope, true, null);
     return result;
   } catch (err) {
@@ -146,31 +184,79 @@ async function write<T>(
   }
 }
 
-async function submitWrite<T>(
+async function dryRunWrite<T>(
   scope: AgentScope,
   seenVersion: number,
-  contract: 'treasury' | 'reasoningRegistry' | 'resolver',
+  contract: ContractKey,
+  method: string,
+  args: Record<string, unknown>,
+  call: () => Promise<AssembledTransaction<unknown>>,
+): Promise<WriteResult<T>> {
+  let tx: AssembledTransaction<unknown>;
+  try {
+    tx = await call();
+  } catch (err) {
+    throw new ChainError(`${method} could not be built`, contractErrorName(contract, err), {
+      method,
+      cause: err instanceof Error ? err.message : String(err),
+    });
+  }
+  const simulated = simulatedValue<T>(contract, method, tx);
+  await assertAgentActiveLocked(scope, seenVersion);
+  logger.info({ method, args: printable(args), simulated: printable(simulated) }, 'dry-run: simulated, not submitted');
+  return { mode: 'dry-run', method, value: simulated, txHash: null };
+}
+
+/** Retry loop for live writes (#40): only provably-not-applied failures retry. */
+async function liveWriteWithRetry<T>(
+  scope: AgentScope,
+  seenVersion: number,
+  contract: ContractKey,
   method: string,
   args: Record<string, unknown>,
   call: () => Promise<AssembledTransaction<unknown>>,
   signal?: AbortSignal,
 ): Promise<WriteResult<T>> {
-  if (config.CHAIN_EXECUTION_MODE === 'dry-run') {
-    let tx: AssembledTransaction<unknown>;
+  const opts = retryOptions();
+  const startedAt = Date.now();
+  let attempt = 0;
+  for (;;) {
     try {
-      tx = await call();
+      return await attemptWrite<T>(scope, seenVersion, contract, method, args, call, signal);
     } catch (err) {
-      throw new ChainError(`${method} could not be built`, contractErrorName(contract, err), {
-        method,
-        cause: err instanceof Error ? err.message : String(err),
-      });
+      if (err instanceof AgentPausedError) throw err;
+      const failure: ClassifiedFailure =
+        err instanceof ChainWriteFailure ? err.failure : classifyFailure({ contract, err });
+      const { retry, delayMs } = retryDecision(failure, attempt, opts, Date.now() - startedAt);
+      if (!retry) {
+        throw new TransactionError(`${method} failed (${failure.class})`, failure, attempt + 1);
+      }
+      logger.warn(
+        {
+          method,
+          failureClass: failure.class,
+          txCode: failure.txCode,
+          opCode: failure.opCode,
+          attempt: attempt + 1,
+          delayMs,
+        },
+        'chain write retrying',
+      );
+      await sleep(delayMs, signal);
+      attempt++;
     }
-    const simulated = simulatedValue<T>(contract, method, tx);
-    await assertAgentActiveLocked(scope, seenVersion);
-    logger.info({ method, args: printable(args), simulated: printable(simulated) }, 'dry-run: simulated, not submitted');
-    return { mode: 'dry-run', method, value: simulated, txHash: null };
   }
+}
 
+async function attemptWrite<T>(
+  scope: AgentScope,
+  seenVersion: number,
+  contract: ContractKey,
+  method: string,
+  args: Record<string, unknown>,
+  call: () => Promise<AssembledTransaction<unknown>>,
+  signal?: AbortSignal,
+): Promise<WriteResult<T>> {
   // Live: build, simulate, sign and send inside the per-source-account critical
   // section so the sequence number is collision-free across writers (#36). The
   // lock is released as soon as sendTransaction returns, not after confirmation.
@@ -224,33 +310,26 @@ async function submitWrite<T>(
         return { mode: 'live', method, value, txHash: finalHash };
       } catch (err: any) {
         if (err instanceof SequenceLockLost) {
-          throw new ChainError(`${method} not submitted: source-account lock was lost`, null, { account }, 'SEQUENCE_LOCK_LOST');
-        }
-        if (err instanceof TimeoutError || err?.code === 'UPSTREAM_TIMEOUT') {
-          // The submission may have been applied: re-read before the next build.
+          // Aborted before send: safe to retry on a fresh sequence.
           await ctx.resync().catch(() => undefined);
-          throw new ChainError(
-            `${method} submission timed out`,
-            null,
-            { outcome: 'unknown', txHash },
-            'CHAIN_SUBMISSION_TIMEOUT',
+          throw new ChainWriteFailure(
+            { class: 'TRANSIENT_RPC', txCode: null, opCode: null, contractError: null, txHash, submitted: false },
+            err,
           );
         }
-        const text = err instanceof Error ? err.message : String(err);
-        const contractError = contractErrorName(contract, err);
-        if (/bad.?seq|txBadSeq/i.test(`${text} ${contractError ?? ''}`)) {
+        if (err instanceof TimeoutError || err?.code === 'UPSTREAM_TIMEOUT') {
+          // The submission may have been applied: re-read and never rebuild it.
           await ctx.resync().catch(() => undefined);
-          throw new ChainError(`${method} rejected with a bad sequence; resynced`, contractError, {
-            method,
-            retriable: true,
-            txHash,
-          }, 'BAD_SEQ_RESYNCED');
+          throw new ChainWriteFailure(
+            { class: 'UNKNOWN_OUTCOME', txCode: null, opCode: null, contractError: null, txHash, submitted: true },
+            err,
+          );
         }
-        throw new ChainError(`${method} submission failed`, contractError, {
-          method,
-          cause: text,
-          txHash,
-        });
+        const failure = classifyFailure({ contract, err, send: extractSendResponse(err) });
+        if (failure.class === 'BAD_SEQUENCE' || failure.class === 'UNKNOWN_OUTCOME') {
+          await ctx.resync().catch(() => undefined);
+        }
+        throw new ChainWriteFailure({ ...failure, txHash: failure.txHash ?? txHash }, err);
       }
     },
     { waitMs: config.SEQ_LOCK_WAIT_MS, signal },
@@ -384,8 +463,18 @@ export const agentCreateMarket = (args: CreateMarketArgs, signal?: AbortSignal) 
     agentClients.treasury().agent_create_market(args), signal,
   );
 
-export const agentBuy = (args: { market_id: bigint; outcome: Outcome; collateral_in: bigint; min_shares_out: bigint }, signal?: AbortSignal) =>
-  write<bigint>('TRADER', 'treasury', 'agent_buy', args, async () => agentClients.treasury().agent_buy(args), signal);
+export type AgentBuyArgs = { market_id: bigint; outcome: Outcome; collateral_in: bigint; min_shares_out: bigint };
+
+/**
+ * Buys through the treasury. The argument source may be a thunk so a retried
+ * attempt (#40) re-quotes `min_shares_out` against the live price instead of
+ * reusing the first attempt's stale bound.
+ */
+export const agentBuy = (args: AgentBuyArgs | (() => Promise<AgentBuyArgs>), signal?: AbortSignal) => {
+  const resolver = typeof args === 'function' ? args : async () => args;
+  return write<bigint>('TRADER', 'treasury', 'agent_buy', typeof args === 'function' ? {} : args, async () =>
+    agentClients.treasury().agent_buy(await resolver()), signal);
+};
 
 export const agentSell = (args: { market_id: bigint; outcome: Outcome; collateral_out: bigint; max_shares_in: bigint }, signal?: AbortSignal) =>
   write<bigint>('TRADER', 'treasury', 'agent_sell', args, async () => agentClients.treasury().agent_sell(args), signal);

@@ -130,6 +130,14 @@ const envSchema = z
     SEQ_LOCK_HEARTBEAT_MS: z.string().default('15000').transform(Number).pipe(z.number().int().min(1000)),
     SEQ_LOCK_WAIT_MS: z.string().default('120000').transform(Number).pipe(z.number().int().min(0)),
 
+    // ── Write retry policy (#40) ──────────────────────────────────────────
+    // Live writes are retried only for classes that are provably not applied.
+    // The deadline caps total time; attempts caps rebuilds.
+    CHAIN_RETRY_MAX_ATTEMPTS: z.string().default('3').transform(Number).pipe(z.number().int().min(1)),
+    CHAIN_RETRY_BASE_MS: z.string().default('250').transform(Number).pipe(z.number().int().min(1)),
+    CHAIN_RETRY_MAX_MS: z.string().default('5000').transform(Number).pipe(z.number().int().min(1)),
+    CHAIN_RETRY_DEADLINE_MS: z.string().default('30000').transform(Number).pipe(z.number().int().min(1)),
+
     // Resolution spec committed at market creation (ADR 0001). Signer mode:
     // RESOLUTION_SIGNERS attest the outcome on the resolver contract. Empty
     // means the agent account is the only signer.
