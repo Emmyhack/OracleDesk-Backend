@@ -3,7 +3,8 @@ import { logger } from '../lib/logger';
 import { writeAgentLog } from '../lib/agent-log';
 import { CONTRACTS } from '../config/contracts';
 import { getTransactionReader } from './stellar/tx-inspect';
-import { getOnChainMarket, marketCount, type OnChainMarket } from './chain.service';
+import { getOnChainMarket, marketCount } from './chain.service';
+import type { Market as OnChainMarket } from '../generated/market-core';
 import { readContractEvents } from './stellar/tx-inspect';
 
 export interface MarketCreationAttemptRow {

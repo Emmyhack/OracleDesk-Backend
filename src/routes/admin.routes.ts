@@ -20,7 +20,7 @@ import {
   getTraceAuditSummary,
   getTreasury,
   getTreasuryOperation,
-  listDisputes,
+  getDisputes,
   listReconciliationRuns,
   listTreasuryOperations,
   recordTreasuryOperation,
@@ -66,5 +66,27 @@ router.post('/trace-audit/run', requirePermission('trace_audit.run'), triggerTra
 router.get('/reconciliation/runs', requirePermission('reconciliation.run'), listReconciliationRuns);
 router.get('/reconciliation/runs/:id', requirePermission('reconciliation.run'), getReconciliationRun);
 router.post('/reconciliation/run', requirePermission('reconciliation.run'), triggerReconciliationRun);
+router.get('/treasury', getTreasury);
+router.get('/treasury/operations', listTreasuryOperations);
+router.post('/treasury/operations', createOperation);
+router.get('/treasury/operations/:id', getTreasuryOperation);
+router.post('/treasury/operations/:id/signatures', addOperationSignature);
+router.post('/treasury/operations/:id/submit', submitTreasuryOperation);
+router.post('/treasury/operations/:id/record', recordTreasuryOperation);
+router.post('/treasury/operations/:id/cancel', cancelTreasuryOperation);
+router.get('/agents/controls', getAgentControls);
+router.post('/agents/:agent/pause', pauseAgentControl);
+router.post('/agents/:agent/resume', resumeAgentControl);
+router.get('/status', getSystemStatus);
+router.get('/fees', getChainFeesReport);
+router.get('/disputes', getDisputes);
+router.post('/disputes/:id/ack', ackDispute);
+router.post('/disputes/:id/cancel-tx', cancelDisputeTx);
+router.post('/disputes/:id/void-tx', voidDisputeTx);
+router.get('/trace-audit', getTraceAuditSummary);
+router.post('/trace-audit/run', triggerTraceAuditRun);
+router.get('/reconciliation/runs', listReconciliationRuns);
+router.get('/reconciliation/runs/:id', getReconciliationRun);
+router.post('/reconciliation/run', triggerReconciliationRun);
 
 export default router;

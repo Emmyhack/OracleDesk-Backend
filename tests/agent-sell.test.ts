@@ -281,6 +281,12 @@ test('stop-loss in runTraderCycle calls exitPosition, not closePosition', async 
   (prisma.position.findMany as any) = async () => [{ id: 'p9' }];
   (prisma.market.findMany as any) = async () => [];
   (prisma.agentLog.create as any) = async () => ({});
+  // The cycle sizes from the treasury (#76) and skips entirely without it.
+  const budget = await import('../src/services/treasury-budget.service');
+  (budget as any).readTreasuryBudget = async () => ({
+    availableRaw: 100_000_000_000n, maxTradeRaw: 10n ** 12n, maxMarketRaw: 10n ** 12n, maxDailyRaw: 10n ** 12n,
+    dailyUsedRaw: 0n, dailyRemainingRaw: 10n ** 12n, dailyWindowStart: new Date(), dailyResetsAt: new Date(), readAt: new Date(),
+  });
 
   await runTraderCycle();
   assert.deepEqual(exited, [{ id: 'p9', opts: { reason: 'STOP_LOSS' } }]);

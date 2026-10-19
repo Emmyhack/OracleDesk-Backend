@@ -221,6 +221,37 @@ event deadline ──► source publishes ──► close_time ──► attesta
 - If only the close time is off and the deadline is unambiguous, it is clamped into `[max(earliestClose, now + 1 day), latestClose]` (`PROPOSAL_EXPIRY_REPAIRED`); otherwise the proposal is rejected (`PROPOSAL_UNRESOLVABLE`, with reason codes). Repair happens before `pinJson`, so the pinned document carries the final `closeTime`. The resolution hash does not cover close time and is unaffected.
 - The resolution block is stored in `Market.resolutionDetails` and pinned in question document v2 (see `docs/api.md`).
 
+## Signal store (#73)
+
+Every market and trade is justified by signals (NewsAPI articles, FRED observations, GDELT events). They are stored as normalised rows with stable identities, so a pinned trace can be audited against the exact evidence long after the fetch. `src/services/ingestion.service.ts` fetches; `signal-normalize.ts` holds the pure rules; `signal-store.service.ts` holds the store (`prismaSignalStore`, and `MemorySignalStore` for tests).
+
+| Table | Role |
+|---|---|
+| `signals` | One row per article or observation. `dedupKey` is unique: sha256 of the canonical URL, or of `FRED:<series>:<observation date>`. Keeps `url`, `publisher`, `publishedAt`, `firstSeenAt` / `lastSeenAt` / `seenCount`, `category` + `categoryConfidence`, `clusterId`, `numericValue` (FRED) and a 64-bit `simhash`. Title and summary are stored already sanitised (#70). |
+| `signal_fetches` | One row per provider call: request fingerprint (credentials removed), status `ok` / `error` / `timeout` / `skipped_no_key`, duration, item and rejected counts. |
+| `signal_raw_payloads` | The provider response with credential-named keys stripped, kept `SIGNAL_RAW_RETENTION_DAYS` (default 7). |
+
+`signal_cache` is no longer written and is dropped in a follow-up migration.
+
+**Identity.** The canonical URL lowercases scheme and host, drops `www.`, the fragment and tracking parameters (`utm_*`, `fbclid`, `gclid`, `ref`), and sorts the remaining parameters. NewsAPI `[Removed]` placeholders and articles without a URL are dropped; GDELT `seendate` (`YYYYMMDDTHHMMSSZ`) is parsed as UTC and an unparseable date is rejected, never stored as "now"; FRED `"."` (missing) observations are skipped. Rejections are counted in `signal_fetches.rejectedCount`. FRED's `api_key` is sent in `params` (the request URL is unchanged), so it can be stripped from every stored echo; no stored row contains a key (`tests/ingestion.test.ts`).
+
+**Writes.** One `INSERT … ON CONFLICT ("dedupKey") DO UPDATE SET "lastSeenAt" = …, "seenCount" = "seenCount" + 1` per 100 rows via `$queryRaw`, safe across replicas. There is no per-row Prisma upsert.
+
+**Near-duplicates.** Syndicated copies have different URLs, so they are different rows that share a `clusterId`. A new signal is compared with signals of the same category published in the last 48 h: SimHash Hamming distance ≤ 3, or Jaccard ≥ 0.6 over 5-word shingles of `title + first 200 chars of summary`, makes it a near-duplicate. Including the summary keeps templated headlines ("Stocks rise as …") apart. Cluster assignment is not atomic across replicas, so it is made idempotent: a signal always joins the oldest matching cluster (earliest `firstSeenAt`, then smallest id), and only rows without a `clusterId` are updated. FRED observations never cluster.
+
+**Reads.** A source is fetched only when its last `ok` fetch is older than `SIGNAL_REFRESH_MINUTES` (default 15); otherwise the agents read the store. `aggregateSignals()` takes signals last seen in the past 24 h and returns one representative per cluster (highest source weight, then newest; for FRED, the latest observation per series), each with `signalId`, `url`, `publisher` and `clusterSize`, sorted by
+
+```
+relevanceScore = sourceWeight × recencyDecay × log2(1 + clusterSize)
+recencyDecay   = 0.5 ^ (ageHours / 12)
+```
+
+`sourceWeight` is `SOURCE_WEIGHTS` (NEWSAPI 0.7, GDELT 0.6, FRED 0.9). Age is measured from `publishedAt`, except for FRED, whose observation date is the start of the reporting period: it ages from `lastSeenAt`. Syndication raises a story's score only logarithmically.
+
+**Traces.** `sourcesUsed` entries carry `signalId`, `url`, `publisher` and `publishedAt` (built by `evidenceFromSignals`), and their `weight` is the relevance score instead of a constant. The market maker records the signals its proposal cited in `grounding_signal_ids`. The free `previewSources` keep only `{source, publisher, signal}`. Traces written before #73 have no `signalId`; readers treat these fields as optional, and pinned payloads are never rewritten.
+
+**Retention.** Nightly at 03:41 (`startMonitorCron`): raw payloads older than `SIGNAL_RAW_RETENTION_DAYS`, fetch rows older than 30 days, and signals last seen more than 30 days ago that no trace cites. "Cited" is `reasoning_traces."sourcesUsed" @> '[{"signalId": …}]'`, served by a GIN `jsonb_path_ops` index on `sourcesUsed` (chosen over a `trace_signals` join table: the containment probe is an index lookup and needs no second write path). Deletes run in batches of 1 000.
+
 ## Reasoning traces
 
 A trace is canonicalised once (sorted keys, same rules as `agents/core/trace.ts`), pinned byte for byte with Pinata's `pinFileToIPFS`, and `trace_hash` is the sha256 of those bytes. It is published to reasoning-registry once its market is on-chain. `POST /traces/verify` re-fetches the bytes by the on-chain CID and compares them with the on-chain hash, like `x402/trace-verification.ts`.
@@ -438,6 +469,32 @@ The trader caps correlated exposure before opening a position (5% of the bankrol
 - **Scope.** Markets with open positions plus ACTIVE markets expiring within 14 days (≤ 100); pairs use backend ids with `a < b`. The newest 48 snapshots are kept.
 - **Sizing.** A snapshot older than two hours is ignored (`CORRELATION_SNAPSHOT_STALE` is logged) and any pair it lacks falls back to the matrix; each pair records which one was used. A pair counts when |ρ| ≥ 0.60 and contributes `ρ_eff × size`, with `ρ_eff = ρ` for holdings on the same side and `−ρ` on opposite sides: positive ρ on the same side adds risk, positive ρ on opposite sides hedges, negative ρ on the same side (YES+YES on complements) hedges, negative ρ on opposite sides adds risk. Net exposure never goes below zero.
 - **Reporting.** `GET /portfolio` also returns the full matrix projected onto the nearest PSD matrix (eigenvalue clipping with a small Jacobi solver, ≤ 50 positions); sizing keeps the raw pairwise values.
+
+## Trader forecasts (#75)
+
+The trader trades where its own probability differs from the price by at least 0.08. That estimate comes from `forecast.service.ts`, and no forecaster ever sees the price: `ForecastInput` has no current or initial YES probability and no creator interval. (Before #75 the "estimate" was a weighted mean of signals whose `rawValue` *was* the price, so the edge was always zero.)
+
+- **Inputs.** The question, category, close time, resolution source, up to eight relevant signals (sharing meaningful tokens with the question, or of its category; the dedup tokeniser) and the pinned question document. The document is fetched by `metaUri` and used only if its bytes hash to `questionHash` (`verifyTraceHash`); only `question`, `category`, `closeTime`, `resolutionSource`, `resolution` and `priceResolution` are kept. A failed fetch or a mismatch forecasts without it.
+- **LLM forecaster** (prompt `forecast` v1, task `forecasting`, schema-constrained): base rate, per-signal adjustments citing signal ids, `p`, a 50% interval and a rationale. σ = (p_high_50 − p_low_50) / 1.349, p clamped to [0.02, 0.98]. `FORECAST_LLM_SAMPLES` > 1 takes the median p and adds the samples' variance. Untrusted text is sanitised and nonce-delimited as in #70; an instruction-like question document is dropped.
+- **Base-rate forecaster.** `forecast.base-rates.json`: reference-class frequencies by category and question pattern, each with its source and a deliberately wide σ (≥ 0.15). Unmatched questions get p = 0.5, σ = 0.25. The figures are approximate tallies; change them as a reviewed code change.
+- **Ensemble.** Log-odds, weights ∝ 1/s² with s = σ/(p(1−p)) and σ floored at 0.05 (so no member dominates by claiming certainty), pooled variance 1/Σ(1/s²), mean multiplied by (1 − `FORECAST_SHRINK`, default 0.15), `ci = logistic(μ ± 1.645·σ)` (90%). The trace's `forecast` block holds every member's p, σ, weight, rationale and `inputsDigest`; the trace's `confidenceInterval` is the ensemble's, not the jackknife over sources.
+- **Sizing.** Kelly runs on the conservative end of the interval *for the side being bought*: YES uses `ci.lower` against the YES price; NO uses `1 − ci.upper` against the NO price `1 − p_market` (the NO side used to be compared with the YES price). A point edge above 0.08 whose conservative end is not 0.08 better than the price sizes to zero; that is intended and logged as `SIZE_ZERO_WIDE_CI`.
+- **Cost.** At most `FORECAST_MAX_MARKETS_PER_CYCLE` (5) markets and `FORECAST_MAX_LLM_CALLS_PER_CYCLE` (10) LLM calls per cycle; candidates without a recent forecast go first, soonest close first. Results are cached in Redis under `forecast:{marketId}:{digest}` (question hash + relevant signals) for `FORECAST_CACHE_TTL_HOURS` (6). A forecast with no LLM member (budget, cap or provider failure) is not traded on.
+- **Residual risk.** A model can still read a price out of news ("traders see 70% odds"). The prompt tells it to ignore quoted odds, and the recorded adjustments show which signal moved the estimate.
+
+## Treasury-aware sizing (#76)
+
+The treasury contract enforces `max_trade` per call, cumulative `max_market` per market and a rolling `max_daily` on every agent spend. The trader sizes from the same numbers (`treasury-budget.service.ts`), read once per cycle with `available_capital()`, `get_config()` and `daily_usage()`:
+
+- **Bankroll** = `available_capital()` (the treasury's free USDC: it includes subscription revenue paid to the treasury and excludes capital locked in markets). Kelly, the daily drawdown check and the correlated-exposure cap all use it. A failed read skips the cycle (`TREASURY_READ_FAILED`): there is no constant to fall back to.
+- **Daily headroom** = `max_daily − daily_usage().amount`. The view already rolls the window over (a window anchored at the first spend after expiry, not UTC midnight), so an expired window reads as 0 used; it resets at `day_start + 86 400`.
+- **Market headroom** = `max_market −` the market's cumulative treasury spend: the latest indexed `TradeAuthorized.market_total` when present, otherwise executed trades plus the seed for agent-created markets (marked `estimated`). Sells never reduce it.
+- **Clamp.** In 7-decimal base units, before any trace exists: `final = min(kelly → correlation, max_trade, market headroom, daily headroom, available)`, with `TREASURY_HEADROOM_SAFETY_BPS` (default 5%) taken off the market and daily headroom for races with market creation and window rollover. Orders below 1 USDC are skipped. A budget older than 60 s is re-read, and each buy is debited from the cycle's copy so later orders see it.
+- **Trace.** `sizing: { kellyRaw, correlationRaw, marketExposureRaw, marketExposureEstimated, finalRaw, binding, safetyBps, budget }`, with `binding` one of `KELLY | CORRELATION | MAX_TRADE | MAX_MARKET | DAILY | AVAILABLE`.
+- **Execution.** `executeTrade` submits `amountRaw` as `collateral_in` (no float round trip). A `TradeCapExceeded` / `MarketCapExceeded` / `DailyCapExceeded` from the chain is logged as `TREASURY_CAP_REJECTED` with the budget snapshot, so drift between estimate and chain is visible.
+- **Backtests** answer `budget()` and `marketExposure()` from the simulated treasury, so the replay sizes against the same caps.
+
+`GET /portfolio` reports the same budget (see `docs/api.md`).
 
 ## Seed policy (#82)
 

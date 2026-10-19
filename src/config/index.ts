@@ -362,6 +362,35 @@ const envSchema = z
     INDEXER_ENABLED: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
     INDEXER_POLL_MS: z.string().default('5000').transform(Number),
 
+    // ── Event bus and socket fan-out (#93) ────────────────────────────────
+    // Redis Streams bus between the indexer and the socket fan-out. When
+    // false, events go through an in-process bus (single instance only).
+    EVENT_BUS_ENABLED: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
+    // Approximate stream cap (XADD MAXLEN ~). chain_events stays the durable history.
+    EVENT_BUS_MAXLEN: z.string().default('100000').transform(Number)
+      .pipe(z.number().int().min(1000)),
+    // Identifies this process as fan-out leader candidate and in logs.
+    INSTANCE_ID: z.string().default('').transform((v) => v.trim() || `${os.hostname()}-${process.pid}`),
+
+    // ── Dispute monitor (#92) ─────────────────────────────────────────────
+    DISPUTE_MONITOR_ENABLED: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
+    // Independent confidence needed for an AGREE or DISAGREE verdict.
+    DISPUTE_AGREE_MIN_CONFIDENCE: z.string().default('0.8').transform(Number)
+      .pipe(z.number().gt(0).max(1)),
+    // Markets holding at least this much liquidity (USDC) need a cited primary
+    // (non-news) source before the review may say AGREE.
+    DISPUTE_HIGH_VALUE_LIQUIDITY: z.string().default('10000').transform(Number)
+      .pipe(z.number().nonnegative()),
+    // The resolver admin (guardian). The resolver has no admin view, so this
+    // is configuration; cancel_proposal / guardian_void_market are simulated as it.
+    RESOLVER_GUARDIAN_ADDRESS: optionalAddress,
+    // Comma-separated generic JSON webhooks and one Slack-compatible webhook.
+    // The URLs usually embed tokens: never logged.
+    ALERT_WEBHOOK_URLS: commaList(z.string().url()),
+    ALERT_SLACK_WEBHOOK_URL: optionalString.refine((v) => v === '' || URL.canParse(v), 'must be a URL'),
+    // HMAC-SHA256 key for the X-OracleDesk-Signature header on generic webhooks.
+    ALERT_WEBHOOK_SECRET: optionalString,
+
     // ── Health probes (#111) ──────────────────────────────────────────────
     // Dependencies that make /readyz fail. RPC is non-critical by default so
     // cached DB reads can still be served while chain reads return 502.
@@ -384,6 +413,24 @@ const envSchema = z
     DEDUP_SIM_THRESHOLD: z.string().default('0.85').transform(Number).pipe(z.number().min(0).max(1)),
     // Two markets whose resolution dates are within this many days are "the same date".
     DEDUP_DATE_WINDOW_DAYS: z.string().default('3').transform(Number).pipe(z.number().min(0)),
+
+    // ── Trader forecaster (#75) ───────────────────────────────────────────
+    // LLM samples per forecast; with more than one the median p is used and
+    // the spread is added to the variance.
+    FORECAST_LLM_SAMPLES: z.string().default('1').transform(Number)
+      .pipe(z.number().int().min(1).max(5)),
+    // Shrink the ensemble's log-odds toward 0.5 by this factor.
+    FORECAST_SHRINK: z.string().default('0.15').transform(Number)
+      .pipe(z.number().min(0).max(0.9)),
+    // Markets forecast (not served from cache) per trader cycle.
+    FORECAST_MAX_MARKETS_PER_CYCLE: z.string().default('5').transform(Number)
+      .pipe(z.number().int().min(0).max(100)),
+    // Forecasting LLM calls per trader cycle (samples included).
+    FORECAST_MAX_LLM_CALLS_PER_CYCLE: z.string().default('10').transform(Number)
+      .pipe(z.number().int().min(0).max(500)),
+    // A forecast is reused while the market and its relevant signals are unchanged.
+    FORECAST_CACHE_TTL_HOURS: z.string().default('6').transform(Number)
+      .pipe(z.number().positive().max(72)),
 
     // ── Calibration (#68) ─────────────────────────────────────────────────
     // Slices with fewer resolved markets report insufficientData instead of noise.
@@ -455,6 +502,12 @@ const envSchema = z
     // Optional stricter backend policy for withdraw operations.
     TREASURY_WITHDRAW_MIN_SIGNERS: z.string().default('0').transform(Number)
       .pipe(z.number().int().min(0).max(20)),
+    // ── Treasury-aware sizing (#76) ───────────────────────────────────────
+    // Share of the daily and per-market headroom the trader leaves unused
+    // (basis points): the daily window can roll and other writers (market
+    // creation) share the caps between the budget read and the submit.
+    TREASURY_HEADROOM_SAFETY_BPS: z.string().default('500').transform(Number)
+      .pipe(z.number().int().min(0).max(9_999)),
     // #147 — development-only local IPFS stub selected explicitly.
     IPFS_TRANSPORT: z.enum(['pinata', 'local']).default('pinata'),
     IPFS_LOCAL_DIR: z.string().default('.ipfs-local'),
@@ -462,6 +515,13 @@ const envSchema = z
     // ── Data sources ──────────────────────────────────────────────────────
     NEWSAPI_KEY: optionalString,
     FRED_API_KEY: optionalString,
+    // ── Signal store (#73) ────────────────────────────────────────────────
+    // A source is re-fetched once its last successful fetch is older than this.
+    SIGNAL_REFRESH_MINUTES: z.string().default('15').transform(Number)
+      .pipe(z.number().int().min(1).max(24 * 60)),
+    // Raw provider payloads are deleted after this many days.
+    SIGNAL_RAW_RETENTION_DAYS: z.string().default('7').transform(Number)
+      .pipe(z.number().int().min(1).max(365)),
 
     // ── Resilience & Timeouts ─────────────────────────────────────────────
     TIMEOUT_RPC_READ_MS: z.string().default('8000').transform(Number),
@@ -648,6 +708,8 @@ const envSchema = z
       }
       if (env.FEE_PAYER_SECRET === env.AUTH_SIGNING_SECRET) {
         ctx.addIssue({ code: 'custom', path: ['FEE_PAYER_SECRET'], message: 'must differ from AUTH_SIGNING_SECRET' });
+      }
+    }
 
     // ── Channel Accounts validation (#37) ──
     const channelKeys: string[] = [];

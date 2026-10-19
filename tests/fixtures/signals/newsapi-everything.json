@@ -1,0 +1,70 @@
+{
+  "_comment": "Synthetic /v2/everything page shaped like a real response (#73). Headlines are invented. Three outlets syndicate one wire story; two templated headlines must not merge; one [Removed] placeholder must be dropped.",
+  "status": "ok",
+  "totalResults": 7,
+  "articles": [
+    {
+      "source": { "id": "reuters", "name": "Reuters" },
+      "author": "Wire staff",
+      "title": "Federal Reserve holds rates steady as inflation cools toward target",
+      "description": "The Federal Reserve kept its benchmark rate unchanged on Wednesday, citing cooling inflation and a resilient labour market, and signalled it could cut later this year.",
+      "url": "https://www.reuters.com/markets/us/fed-holds-rates-2026-10-14/?utm_source=newsapi&utm_medium=feed",
+      "publishedAt": "2026-10-18T09:00:00Z",
+      "content": "WASHINGTON (Reuters) - The Federal Reserve kept its benchmark rate unchanged…"
+    },
+    {
+      "source": { "id": null, "name": "Yahoo Finance" },
+      "author": null,
+      "title": "Federal Reserve holds rates steady as inflation cools toward target",
+      "description": "The Federal Reserve kept its benchmark rate unchanged on Wednesday, citing cooling inflation and a resilient labour market, and signalled it could cut later this year.",
+      "url": "https://finance.yahoo.com/news/fed-holds-rates-steady-090000123.html?fbclid=abc",
+      "publishedAt": "2026-10-18T09:05:00Z",
+      "content": null
+    },
+    {
+      "source": { "id": null, "name": "MarketWatch" },
+      "author": null,
+      "title": "Federal Reserve holds rates steady as inflation cools toward target",
+      "description": "The Federal Reserve kept its benchmark rate unchanged on Wednesday, citing cooling inflation and a resilient labour market, and signalled it could cut later this year.",
+      "url": "https://www.marketwatch.com/story/fed-holds-rates-steady-11697270400#comments",
+      "publishedAt": "2026-10-18T09:12:00Z",
+      "content": null
+    },
+    {
+      "source": { "id": null, "name": "Example Business" },
+      "author": null,
+      "title": "Stocks rise as investors cheer strong bank earnings",
+      "description": "Large lenders beat profit forecasts, lifting financial shares and pushing the broad index to a weekly gain.",
+      "url": "https://business.example.com/stocks-rise-bank-earnings",
+      "publishedAt": "2026-10-18T08:30:00Z",
+      "content": null
+    },
+    {
+      "source": { "id": null, "name": "Example Business" },
+      "author": null,
+      "title": "Stocks rise as investors shrug off oil price slump",
+      "description": "Energy shares fell after crude dropped below sixty dollars a barrel, but technology names carried the market higher.",
+      "url": "https://business.example.com/stocks-rise-oil-slump",
+      "publishedAt": "2026-10-18T07:45:00Z",
+      "content": null
+    },
+    {
+      "source": { "id": null, "name": "[Removed]" },
+      "author": null,
+      "title": "[Removed]",
+      "description": "[Removed]",
+      "url": null,
+      "publishedAt": "1970-01-01T00:00:00Z",
+      "content": "[Removed]"
+    },
+    {
+      "source": { "id": null, "name": "Example Crypto" },
+      "author": null,
+      "title": "Bitcoin ETF inflows reach a three-month high",
+      "description": "Spot bitcoin funds took in more than a billion dollars over the week as crypto prices recovered.",
+      "url": "https://crypto.example.org/bitcoin-etf-inflows?ref=homepage&b=2&a=1",
+      "publishedAt": "2026-10-18T06:00:00Z",
+      "content": null
+    }
+  ]
+}

@@ -64,6 +64,11 @@
       "adding-not-nullable-field"
     ],
     "reason": "payment_intents is a new table, so its indexes are created on empty data while the table is still invisible; the NUMERIC and enum columns are added with defaults on the new table only. CREATE INDEX CONCURRENTLY cannot run in Prisma's migration transaction.",
+    "migration": "20261019020000_signal_store",
+    "rules": [
+      "require-concurrent-index-creation"
+    ],
+    "reason": "The signals, signal_fetches and signal_raw_payloads indexes are created on new, empty tables. The reasoning_traces GIN index cannot use CREATE INDEX CONCURRENTLY inside Prisma's migration transaction; reasoning_traces is append-mostly and lock_timeout = 5s bounds the wait.",
     "approvedBy": "pending maintainer review on the PR that adds this migration"
   }
 ]

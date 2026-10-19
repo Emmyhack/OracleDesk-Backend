@@ -234,6 +234,12 @@ model Market {
   lastReconciledAt   DateTime?          @db.Timestamptz(3)
   /// Resolvability block pinned in question document v2 (source id, URL, measurable, comparator, threshold, deadline, instructions). Null for markets created before #74.
   resolutionDetails  Json?
+  /// LlmProvenance of the call that proposed this market (#66). Null for older rows.
+  generationProvenance Json?
+  /// Embedding of the normalised question (#69), vector(768). Read and written with raw SQL only.
+  questionEmbedding  Unsupported("vector(768)")?
+  /// Model that produced questionEmbedding; vectors are compared only within one model.
+  embeddingModel     String?
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
 
@@ -253,6 +259,7 @@ model Market {
   @@index([settlementCurrency])
   @@index([resolvedAt])
   @@index([lastReconciledAt])
+  @@index([resolutionSpec], type: Gin)
   @@map("markets")
 }
 
@@ -465,6 +472,8 @@ model ReasoningTrace {
   @@index([traceHash])
   @@index([createdAt])
   @@index([marketId, createdAt])
+  /// Retention (#73) keeps signals cited by a trace: `sourcesUsed @> [{"signalId": …}]`.
+  @@index([sourcesUsed(ops: JsonbPathOps)], type: Gin)
   @@map("reasoning_traces")
 }
 
@@ -682,6 +691,74 @@ model SignalCache {
 
   @@index([source, expiresAt])
   @@map("signal_cache")
+}
+
+/// Normalised evidence with a stable identity (#73). One row per article URL
+/// (or FRED observation), however often it is fetched; syndicated copies share
+/// a clusterId. Trace payloads cite rows by id. Replaces SignalCache, which is
+/// no longer written and is dropped in a follow-up migration.
+model Signal {
+  id                 String          @id @default(uuid())
+  /// NEWSAPI | FRED | GDELT
+  source             String
+  /// sha256 of the canonical URL, or of FRED:<series>:<observation date>.
+  dedupKey           String          @unique
+  externalId         String?
+  url                String?
+  publisher          String?
+  title              String
+  summary            String?
+  publishedAt        DateTime        @db.Timestamptz(3)
+  firstSeenAt        DateTime        @default(now()) @db.Timestamptz(3)
+  lastSeenAt         DateTime        @default(now()) @db.Timestamptz(3)
+  seenCount          Int             @default(1)
+  category           MarketCategory?
+  categoryConfidence Float?
+  /// Id of the oldest signal in this near-duplicate cluster (its own id when it started one).
+  clusterId          String?
+  /// FRED observation value.
+  numericValue       Float?
+  /// 64-bit SimHash of title + summary prefix, signed.
+  simhash            BigInt?
+
+  @@index([publishedAt])
+  @@index([clusterId])
+  @@index([source, lastSeenAt])
+  @@index([category, publishedAt])
+  @@map("signals")
+}
+
+/// One provider call (#73): when, how long, outcome and item counts.
+model SignalFetch {
+  id                 String   @id @default(uuid())
+  source             String
+  /// sha256 of the canonical request with credentials removed.
+  requestFingerprint String
+  startedAt          DateTime @default(now()) @db.Timestamptz(3)
+  durationMs         Int
+  /// ok | error | timeout | skipped_no_key
+  status             String
+  itemCount          Int      @default(0)
+  /// Provider items dropped before storage (no URL, unparseable date, missing value).
+  rejectedCount      Int      @default(0)
+  error              String?
+  rawPayloadId       String?
+
+  @@index([source, startedAt])
+  @@index([startedAt])
+  @@map("signal_fetches")
+}
+
+/// Provider response as received, credentials stripped, kept for
+/// SIGNAL_RAW_RETENTION_DAYS (#73).
+model SignalRawPayload {
+  id        String   @id @default(uuid())
+  source    String
+  payload   Json
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([createdAt])
+  @@map("signal_raw_payloads")
 }
 
 /// Ledger cursor for the Stellar event indexer, one row per network.
@@ -1037,7 +1114,7 @@ model ChainTransaction {
   /// Signed inner envelope (base64 XDR), wrapped unchanged by a fee bump.
   envelopeXdr String
   /// PENDING | SUBMITTED | SUCCESS | FAILED | EXPIRED
-  status      String @default('PENDING')
+  status      String @default("PENDING")
   submitLedger Int?
   /// Inner transaction maxTime (unix seconds); a bump cannot extend it.
   maxTime      BigInt?
@@ -1057,6 +1134,7 @@ model ChainTransaction {
   @@index([status])
   @@index([landedHash])
   @@index([kind, refId])
+  @@index([feeBumpHashes], type: Gin)
   @@map("chain_transactions")
 }
 
@@ -1218,3 +1296,74 @@ model PaymentIntent {
   @@map("payment_intents")
 }
 
+/// External resolution signer attestations coordinated through the signer API (#91).
+/// `status`: PREPARED | SUBMITTED | CONFIRMED | FAILED.
+model SignerAttestation {
+  id              String   @id @default(uuid())
+  marketId        String
+  onChainMarketId BigInt
+  signer          String
+  /// YES | NO
+  outcome         String
+  status          String
+  preparedXdr     String
+  /// Hash of the prepared envelope (network-bound); signatures do not change it.
+  preparedHash    String
+  validUntil      DateTime
+  txHash          String?
+  ledger          Int?
+  error           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([onChainMarketId, signer, outcome])
+  @@index([marketId])
+  @@map("signer_attestations")
+}
+
+/// Independent review of one ResolutionProposed event (#92).
+/// `verdict`: PENDING | AGREE | DISAGREE | INSUFFICIENT | ERROR.
+model DisputeReview {
+  id                 String    @id @default(uuid())
+  onChainMarketId    BigInt
+  /// chain_events.id of the ResolutionProposed event (or `missed:<market>` for the polling fallback).
+  proposalEventId    String    @unique
+  proposedOutcome    String
+  /// Ledger seconds. Null when the proposal was found by polling and its time is unknown.
+  proposedAt         BigInt?
+  windowEndsAt       BigInt?
+  verdict            String
+  independentOutcome String?
+  confidence         Float?
+  evidence           Json?
+  evidenceHash       String?
+  acknowledgedBy     String?
+  acknowledgedAt     DateTime?
+  /// FINALIZED | CANCELLED | null
+  resolvedAs         String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([verdict])
+  @@index([onChainMarketId])
+  @@map("dispute_reviews")
+}
+
+/// One alert sent (or attempted) for a review, deduplicated by `dedupeKey`.
+model AlertDelivery {
+  id        String    @id @default(uuid())
+  reviewId  String
+  /// INFO | WARN | CRITICAL
+  level     String
+  sink      String
+  /// reviewId:level:sink
+  dedupeKey String    @unique
+  /// SENT | FAILED
+  status    String
+  attempts  Int       @default(0)
+  sentAt    DateTime?
+  error     String?
+
+  @@index([reviewId])
+  @@map("alert_deliveries")
+}

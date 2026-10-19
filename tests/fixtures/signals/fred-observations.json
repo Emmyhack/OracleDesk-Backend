@@ -1,0 +1,7 @@
+{
+  "_comment": "Synthetic FRED series/observations responses (#73), keyed by series_id. limit=2, sort_order=desc. UNRATE's latest value is the '.' missing marker.",
+  "FEDFUNDS": { "observations": [ { "date": "2026-09-01", "value": "4.33" }, { "date": "2026-08-01", "value": "4.33" } ] },
+  "CPIAUCSL": { "observations": [ { "date": "2026-09-01", "value": "321.465" }, { "date": "2026-08-01", "value": "320.580" } ] },
+  "UNRATE":   { "observations": [ { "date": "2026-09-01", "value": "." }, { "date": "2026-08-01", "value": "4.2" } ] },
+  "T10Y2Y":   { "observations": [ { "date": "2026-10-16", "value": "." }, { "date": "2026-10-15", "value": "." } ] }
+}
