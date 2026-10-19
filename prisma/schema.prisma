@@ -96,6 +96,17 @@ enum PaymentEventStatus {
   REFUNDED
 }
 
+/// Server-issued payment intents (#52). OPEN -> PENDING_PAYMENT -> CONFIRMED,
+/// with FAILED / EXPIRED / REFUND_REQUIRED as terminal or manual-review states.
+enum PaymentIntentStatus {
+  OPEN
+  PENDING_PAYMENT
+  CONFIRMED
+  FAILED
+  EXPIRED
+  REFUND_REQUIRED
+}
+
 /// Admin refund lifecycle (#57). Transitions are enforced in the service:
 /// REQUESTED -> APPROVED -> PREPARED -> SUBMITTED -> CONFIRMED, plus REJECTED
 /// from REQUESTED and FAILED from PREPARED/SUBMITTED.
@@ -526,7 +537,15 @@ model Subscription {
   currency   SettlementCurrency @default(USDC)
   /// CHECK: subscriptions_tx_hash_format (txHash IS NULL OR 64 hex chars)
   txHash     String?            @unique
+  /// Ledger that contained the payment transaction (#54).
+  purchaseLedger Int?
+  /// Ledger-close-anchored coverage window (#54). expiresAt is kept for
+  /// backwards compatibility and always mirrors endsAt for new rows.
+  startsAt   DateTime?
+  endsAt     DateTime?
   expiresAt  DateTime?
+  /// Server-issued intent that settled this subscription (#52).
+  paymentIntentId String?       @unique
   /// Set when the PASS_EXPIRING socket event was claimed for this pass (#94).
   expiryNotifiedAt DateTime?
   createdAt  DateTime           @default(now())
@@ -538,6 +557,7 @@ model Subscription {
   @@index([userId])
   @@index([status])
   @@index([expiresAt])
+  @@index([userId, status, endsAt])
   @@map("subscriptions")
 }
 
@@ -712,6 +732,14 @@ model PaymentEvent {
   currency      SettlementCurrency @default(USDC)
   status        PaymentEventStatus @default(PENDING)
   traceId       String?
+  /// Ledger / close time of the verified transfer (#53/#54).
+  ledger        Int?
+  ledgerCloseTime DateTime?
+  /// Set when the verified amount exceeded the remaining spending approval.
+  allowanceOverage Boolean         @default(false)
+  allowanceOverageRaw Decimal?     @db.Decimal(39, 0)
+  /// Server-issued intent that settled this payment (#52).
+  paymentIntentId String?          @unique
   metadata      Json?
   createdAt     DateTime           @default(now())
   confirmedAt   DateTime?
@@ -735,6 +763,15 @@ model SpendingAllowance {
   perTraceLimit Float
   /// CHECK: spending_allowances_spent_today_nonneg (spentToday >= 0)
   spentToday    Float              @default(0)
+  /// Exact base-unit accounting (#53). The Float columns above are display
+  /// mirrors; limits and spend are never enforced from them.
+  dailyLimitRaw    Decimal          @default(0) @db.Decimal(39, 0)
+  perTraceLimitRaw Decimal          @default(0) @db.Decimal(39, 0)
+  spentTodayRaw    Decimal          @default(0) @db.Decimal(39, 0)
+  /// Amount accepted while already at the limit; never silently discarded.
+  overageRaw       Decimal          @default(0) @db.Decimal(39, 0)
+  /// UTC day the raw counters belong to.
+  windowStartedAt  DateTime         @default(now())
   currency      SettlementCurrency @default(USDC)
   lastResetAt   DateTime           @default(now())
   isActive      Boolean            @default(true)
@@ -1021,6 +1058,8 @@ model ChainTransaction {
   @@index([landedHash])
   @@index([kind, refId])
   @@map("chain_transactions")
+}
+
 /// On-chain fees recorded per transaction (#39).
 model ChainFee {
   txHash       String   @id @map("tx_hash")
@@ -1076,5 +1115,106 @@ model MarketCreationAttempt {
   @@index([questionHash])
   @@index([status, claimedAt])
   @@map("market_creation_attempts")
+}
+
+/// Database-backed admin RBAC (#49). Roles are fixed values seeded on first
+/// boot; assignments are the source of truth after that. JWT claims never
+/// carry permissions.
+model AdminPermission {
+  key         String   @id
+  description String?
+  createdAt   DateTime @default(now())
+  roles       AdminRolePermission[]
+  @@map("admin_permissions")
+}
+
+model AdminRole {
+  name        String   @id
+  description String?
+  createdAt   DateTime @default(now())
+  permissions AdminRolePermission[]
+  assignments AdminRoleAssignment[]
+  @@map("admin_roles")
+}
+
+model AdminRolePermission {
+  roleName      String
+  permissionKey String
+  role          AdminRole       @relation(fields: [roleName], references: [name], onDelete: Cascade)
+  permission    AdminPermission @relation(fields: [permissionKey], references: [key], onDelete: Cascade)
+  createdAt     DateTime        @default(now())
+
+  @@id([roleName, permissionKey])
+  @@index([permissionKey])
+  @@map("admin_role_permissions")
+}
+
+model AdminRoleAssignment {
+  id            String   @id @default(uuid())
+  walletAddress String   @unique
+  roleName      String
+  assignedBy    String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  role          AdminRole @relation(fields: [roleName], references: [name], onDelete: Restrict)
+
+  @@index([roleName])
+  @@map("admin_role_assignments")
+}
+
+/// Append-only audit trail for admin actions (#49). The migration adds a
+/// trigger that rejects UPDATE and DELETE.
+model AdminAuditLog {
+  id         String   @id @default(uuid())
+  actor      String
+  action     String
+  target     String?
+  roleName   String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([actor, createdAt])
+  @@index([target])
+  @@map("admin_audit_logs")
+}
+
+/// A server-issued payment intent (#52): the server fixes the amount, memo,
+/// recipient and expiry so a pending transaction can be confirmed without the
+/// client resubmitting arbitrary details.
+model PaymentIntent {
+  id              String              @id @default(uuid())
+  userId          String
+  /// Base account that must be the verified sender.
+  walletAddress   String
+  status          PaymentIntentStatus @default(OPEN)
+  type            SubscriptionType    @default(DAILY_PASS)
+  amountRaw       Decimal             @db.Decimal(39, 0)
+  currency        SettlementCurrency  @default(USDC)
+  recipient       String
+  token           String
+  memo            String              @unique
+  nonce           String              @unique
+  txHash          String?             @unique
+  subscriptionId  String?             @unique
+  paymentEventId  String?             @unique
+  overpaymentRaw  Decimal?            @db.Decimal(39, 0)
+  underpaymentRaw Decimal?            @db.Decimal(39, 0)
+  latePayment     Boolean             @default(false)
+  refundRequired  Boolean             @default(false)
+  attempts        Int                 @default(0)
+  nextAttemptAt   DateTime?
+  expiresAt       DateTime
+  submittedAt     DateTime?
+  confirmedAt     DateTime?
+  expiredAt       DateTime?
+  failureCode     String?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  @@index([userId, status])
+  @@index([status, nextAttemptAt])
+  @@index([expiresAt])
+  @@map("payment_intents")
 }
 

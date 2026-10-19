@@ -31,6 +31,26 @@ Ship additive migrations first, deploy both versions, then remove old columns
 in a later release. `--allow-breaking` exists only for an explicitly approved
 maintenance window.
 
+## Admin RBAC first deploy (#49)
+
+Ship the `20261019110000_admin_rbac` migration before the new image. On first
+boot the process seeds the fixed permission/role catalogue and assigns every
+`ADMIN_ADDRESSES` entry as `super_admin` under an advisory lock. After that the
+database is authoritative: removing an address from the environment does **not**
+revoke it, and the env list is never consulted per request. Grant/revoke and
+treasury writes require a wallet proof no older than `STEP_UP_MAX_AGE_SECONDS`.
+If the seed cannot complete, the process refuses to boot rather than serve
+without an admin role catalogue.
+
+## Payment intent confirmer (#52)
+
+`startPaymentIntentCron` runs every `PAYMENT_INTENT_CONFIRM_CRON` (default
+`*/20 * * * * *`) and uses the same per-hash advisory lock as the legacy unlock,
+so all replicas can schedule it safely. It is bounded by
+`PAYMENT_INTENT_CONFIRM_BATCH` and backs off up to
+`PAYMENT_INTENT_MAX_ATTEMPTS`. Set `PAYMENT_INTENT_CONFIRM_ENABLED=false` to
+pause it without blocking interactive `POST /…/submit` calls.
+
 ## Rollback
 
 Roll back the Helm release to the previous revision. If the new release added

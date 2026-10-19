@@ -172,8 +172,13 @@ const envSchema = z
     // Public keys of previous server signing keys that may still verify
     // challenges they issued (#48). Format: G…[@ISO-8601-retirement].
     AUTH_PREVIOUS_SIGNING_KEYS: previousSigningKeys,
-    // G… addresses allowed to call admin endpoints.
+    // G… addresses seeded as super admins on first deploy. After the RBAC
+    // tables exist the database is authoritative; this list is not consulted
+    // for per-request authorization.
     ADMIN_ADDRESSES: commaList(stellarAccount),
+    // Sensitive admin actions require a wallet proof no older than this (#49).
+    STEP_UP_MAX_AGE_SECONDS: z.string().default('300').transform(Number)
+      .pipe(z.number().int().min(30).max(3600)),
 
     // ── Challenge issuance hardening (#50) ───────────────────────────────
     AUTH_MAX_OUTSTANDING_PER_ADDRESS: z.string().default('5').transform(Number)

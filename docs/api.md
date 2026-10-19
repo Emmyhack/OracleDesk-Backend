@@ -246,6 +246,14 @@ signature, address or memo mismatch).
 Multisig accounts: only a signature from `address`'s own key is accepted.
 Threshold-based SEP-10 verification is a backlog item.
 
+#### `POST /auth/refresh` (auth)
+
+Issues a new access token with the same `userId`, `walletAddress` and identity
+claims. It **copies** `auth_time` from the presented token, so a refresh never
+resets the wallet-proof age used by admin step-up (#49). Response:
+`{ token, userId, walletAddress }`. Errors: `401 UNAUTHORIZED`,
+`401 TOKEN_EXPIRED`, `401 INVALID_TOKEN`.
+
 ### Auth for contract accounts (SEP-45, #47)
 
 A smart-wallet account is a `C…` contract, not a `G…` key, so the SEP-10
@@ -861,7 +869,29 @@ Once confirmed, the copy trade is stored with `status: "EXECUTED"`, and records 
 
 ### Admin (admin auth)
 
-Admin routes require a valid JWT whose `walletAddress` is present in `ADMIN_ADDRESSES`.
+Admin routes require a valid JWT for a `G…` base account that holds an
+assignment in the database RBAC tables (#49). `ADMIN_ADDRESSES` only seeds the
+first deploy as `super_admin`; after that the database is authoritative and a
+revoked address loses access immediately. JWT claims never carry permissions.
+
+Two roles' permissions matter for step-up: sensitive routes require an
+`auth_time` no older than `STEP_UP_MAX_AGE_SECONDS` (default 300) and return
+`403 STEP_UP_REQUIRED` otherwise. Sensitive routes are admin management
+(grant/revoke/list, audit) and all treasury writes.
+
+Admin-management endpoints:
+
+- `GET /admin/admins` (`admin.read`, step-up)
+- `GET /admin/roles` (`admin.read`)
+- `POST /admin/admins/grant` `{ walletAddress: "G…", roleName }` (`admin.manage`, step-up)
+- `POST /admin/admins/revoke` `{ walletAddress: "G…" }` (`admin.manage`, step-up; refuses `409 LAST_SUPER_ADMIN`)
+- `GET /admin/audit?page&limit` (`admin.audit.read`, step-up)
+
+All other admin routes map to `treasury.read`/`treasury.operate`,
+`agents.manage`, `disputes.manage`, `trace_audit.run`,
+`reconciliation.run`, `markets.generate` and `calibration.recompute`.
+Unsafe requests that pass a permission check are appended to `admin_audit_logs`;
+the table rejects `UPDATE`/`DELETE` at the database level.
 
 #### `GET /admin/trace-audit` (admin)
 

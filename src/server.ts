@@ -14,9 +14,10 @@ import { startMonitorCron } from './cron/monitor.cron';
 import { startReportCron } from './cron/report.cron';
 import { startReconcileCron } from './cron/reconcile.cron';
 import { startPriceResolutionCron } from './cron/price-resolution.cron';
-import { isAdminToken } from './middlewares/auth.middleware';
+import { bootstrapAdminRbac, isAdminToken } from './middlewares/auth.middleware';
 import { startTraceAuditCron } from './cron/trace-audit.cron';
 import { startTracePublicationCron } from './cron/trace-publication.cron';
+import { startPaymentIntentCron } from './cron/payment-intent.cron';
 import { startEventListener } from './services/indexer.service';
 import { closeRedis, getRedis, checkRedisPolicy } from './lib/redis';
 import { memoryEventBus, redisEventBus } from './lib/event-bus';
@@ -62,6 +63,14 @@ async function bootstrap(): Promise<void> {
       'Generated ephemeral secrets for this process; sessions and challenges end on restart. Set them in .env.',
     );
   }
+  // Seed the fixed RBAC catalogue and first-deploy admins from ADMIN_ADDRESSES.
+  try {
+    await bootstrapAdminRbac();
+  } catch (err) {
+    logger.fatal({ err }, 'Failed to initialise admin RBAC');
+    process.exit(1);
+  }
+
   logger.info({ mode: config.CHAIN_EXECUTION_MODE }, 'Chain execution mode');
 
   // #50: challenges must not be evicted before their TTL, and non-TTL data
