@@ -43,6 +43,17 @@ export function errorMiddleware(
       { code: err.code, path: req.path, details: err.details, requestId: currentContext()?.requestId },
       err.message,
     );
+    // #50: degraded dependencies tell clients when to retry.
+    const retryAfter = err.details?.retryAfterSecs;
+    if (typeof retryAfter === 'number' && Number.isFinite(retryAfter) && retryAfter >= 0) {
+      res.setHeader('Retry-After', String(Math.ceil(retryAfter)));
+    }
+    // #50: advertise the PoW parameters alongside the 429.
+    const powBits = err.details?.bits;
+    if (err.code === 'POW_REQUIRED' && typeof powBits === 'number') {
+      const salt = typeof err.details?.salt === 'string' ? err.details.salt : '';
+      res.setHeader('X-Auth-PoW', `bits=${powBits}${salt ? `; salt=${salt}` : ''}`);
+    }
     sendError(res, err.statusCode, err.code, err.message, err.details);
     return;
   }
