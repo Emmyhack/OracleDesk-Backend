@@ -11,11 +11,12 @@ export async function withRedisPrefix(label: string) {
   return {
     prefix,
     store: {
-      async put(hash: string, address: string, ttl: number) {
-        await getRedis().set(`${prefix}auth:challenge:${hash}`, address, 'EX', ttl);
+      async put(hash: string, record: import('../../src/services/auth.service').ChallengeRecord, ttl: number) {
+        await getRedis().set(`${prefix}auth:challenge:${hash}`, JSON.stringify(record), 'EX', ttl);
       },
       async take(hash: string) {
-        return getRedis().getdel(`${prefix}auth:challenge:${hash}`);
+        const raw = await getRedis().getdel(`${prefix}auth:challenge:${hash}`);
+        return raw ? (JSON.parse(raw) as import('../../src/services/auth.service').ChallengeRecord) : null;
       },
     },
     /** Deletes this file's keys with SCAN + UNLINK. */

@@ -831,6 +831,78 @@ model IdempotencyKey {
   @@map("idempotency_keys")
 }
 
+/// External resolution signer attestations coordinated through the signer API (#91).
+/// `status`: PREPARED | SUBMITTED | CONFIRMED | FAILED.
+model SignerAttestation {
+  id              String   @id @default(uuid())
+  marketId        String
+  onChainMarketId BigInt
+  signer          String
+  /// YES | NO
+  outcome         String
+  status          String
+  preparedXdr     String
+  /// Hash of the prepared envelope (network-bound); signatures do not change it.
+  preparedHash    String
+  validUntil      DateTime
+  txHash          String?
+  ledger          Int?
+  error           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([onChainMarketId, signer, outcome])
+  @@index([marketId])
+  @@map("signer_attestations")
+}
+
+/// Independent review of one ResolutionProposed event (#92).
+/// `verdict`: PENDING | AGREE | DISAGREE | INSUFFICIENT | ERROR.
+model DisputeReview {
+  id                 String    @id @default(uuid())
+  onChainMarketId    BigInt
+  /// chain_events.id of the ResolutionProposed event (or `missed:<market>` for the polling fallback).
+  proposalEventId    String    @unique
+  proposedOutcome    String
+  /// Ledger seconds. Null when the proposal was found by polling and its time is unknown.
+  proposedAt         BigInt?
+  windowEndsAt       BigInt?
+  verdict            String
+  independentOutcome String?
+  confidence         Float?
+  evidence           Json?
+  evidenceHash       String?
+  acknowledgedBy     String?
+  acknowledgedAt     DateTime?
+  /// FINALIZED | CANCELLED | null
+  resolvedAs         String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([verdict])
+  @@index([onChainMarketId])
+  @@map("dispute_reviews")
+}
+
+/// One alert sent (or attempted) for a review, deduplicated by `dedupeKey`.
+model AlertDelivery {
+  id        String    @id @default(uuid())
+  reviewId  String
+  /// INFO | WARN | CRITICAL
+  level     String
+  sink      String
+  /// reviewId:level:sink
+  dedupeKey String    @unique
+  /// SENT | FAILED
+  status    String
+  attempts  Int       @default(0)
+  sentAt    DateTime?
+  error     String?
+
+  @@index([reviewId])
+  @@map("alert_deliveries")
+}
+
 
 /// Empirical pairwise market correlations, recomputed on a schedule (#80).
 model CorrelationSnapshot {
@@ -891,7 +963,7 @@ model ChainTransaction {
   /// Signed inner envelope (base64 XDR), wrapped unchanged by a fee bump.
   envelopeXdr String
   /// PENDING | SUBMITTED | SUCCESS | FAILED | EXPIRED
-  status      String @default('PENDING')
+  status      String @default("PENDING")
   submitLedger Int?
   /// Inner transaction maxTime (unix seconds); a bump cannot extend it.
   maxTime      BigInt?
@@ -912,6 +984,8 @@ model ChainTransaction {
   @@index([landedHash])
   @@index([kind, refId])
   @@map("chain_transactions")
+}
+
 /// On-chain fees recorded per transaction (#39).
 model ChainFee {
   txHash       String   @id @map("tx_hash")

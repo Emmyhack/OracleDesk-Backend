@@ -149,7 +149,7 @@ async function simulate(contract: string, fn: string, args: xdr.ScVal[]): Promis
     .build();
   const sim = (await rpcServer.simulateTransaction(tx)) as rpc.Api.SimulateTransactionResponse;
   if (sim && typeof sim === 'object' && 'error' in sim && sim.error) {
-    throw new ChainError(`reflector ${fn} simulation failed`, undefined, { method: fn, cause: String(sim.error) });
+    throw new ChainError(`reflector ${fn} simulation failed`, null, { method: fn, cause: String(sim.error) });
   }
   const retval = (sim as { result?: { retval?: xdr.ScVal } }).result?.retval;
   return retval ?? null;
@@ -448,7 +448,7 @@ export async function runPriceResolutionTick(deps: ResolutionTickDeps = {}): Pro
       } catch (err) {
         const code = err instanceof ChainError ? err.contractError : undefined;
         if (code === 'AlreadyFinalized') break;
-        const action = nextResolutionAction(code, elapsedSecs, config.PRICE_RESOLUTION_MAX_WAIT_SECS, attempt);
+        const action = nextResolutionAction(code ?? undefined, elapsedSecs, config.PRICE_RESOLUTION_MAX_WAIT_SECS, attempt);
         if (!action.retry) {
           if (action.escalate) {
             escalated.push(market.onChainMarketId);

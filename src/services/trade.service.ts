@@ -4,10 +4,9 @@ import { logger } from '../lib/logger';
 import { AppError } from '../middlewares/error.middleware';
 import { AgentPausedError } from './agent-controls.service';
 import type { KellyResult, TradePayload, KellyInput } from '../types';
-import { agentBuy, getOnChainMarket, Outcomes, quoteBuy } from './chain.service';
-import { TransactionError } from './stellar/errors';
-import { isPermanentFailure, type FailureClass } from './stellar/failures';
 import { agentBuy, getOnChainMarket, Outcomes, quoteBuy, ExpiredError } from './chain.service';
+import { TransactionError } from './stellar/errors';
+import { isPermanentFailure } from './stellar/failures';
 import { enqueueTracePublication } from './trace-publish.service';
 import { tradeTraceAction } from '../lib/trace-actions';
 import { bigintToDecimalString, mulDivCeil, usdcFromNumber } from '../lib/amounts';
@@ -142,49 +141,37 @@ export async function executeTrade(payload: TradePayload): Promise<{
         continue;
       }
 
-      // Mark as FAILED — no position created
-      await prisma.trade.update({
-        where: { id: trade.id },
-        data:  { status: 'FAILED', errorMessage: String(err) },
-      });
-      await logAgentAction('TRADER', 'INFO', 'TRADE_SKIPPED_PAUSED', payload.marketId, { tradeId: trade.id });
-      throw err;
-    }
+      // #40: only a permanent classification marks the trade FAILED. A retryable
+      // failure that exhausted its attempts, and an ambiguous outcome (the
+      // transaction may have been applied), are left PENDING for a later retry or
+      // reconciliation instead of being recorded as a definite failure.
+      const failure = err instanceof TransactionError
+        ? (err.details as { failureClass?: string } | undefined)?.failureClass
+        : null;
+      const permanent = failure ? isPermanentFailure(failure as any) : !(err instanceof TransactionError);
 
-    // #40: only a permanent classification marks the trade FAILED. A retryable
-    // failure that exhausted its attempts, and an ambiguous outcome (the
-    // transaction may have been applied), are left PENDING for a later retry or
-    // reconciliation instead of being recorded as a definite failure.
-    const failure = err instanceof TransactionError
-      ? (err.details as { failureClass?: string } | undefined)?.failureClass
-      : null;
-    const permanent = failure ? isPermanentFailure(failure as any) : !(err instanceof TransactionError);
+      if (permanent) {
+        await prisma.trade.update({
+          where: { id: trade.id },
+          data:  { status: 'FAILED', errorMessage: String(err) },
+        });
+        await logAgentAction('TRADER', 'ERROR', 'TRADE_EXECUTION_FAILED', payload.marketId, {
+          tradeId: trade.id,
+          error:   String(err),
+        });
+      } else {
+        await prisma.trade.update({
+          where: { id: trade.id },
+          data:  { errorMessage: String(err) },
+        });
+        await logAgentAction('TRADER', 'WARN', 'TRADE_DEFERRED', payload.marketId, {
+          tradeId: trade.id,
+          failureClass: failure,
+          error:   String(err),
+        });
+      }
 
-    if (permanent) {
-      await prisma.trade.update({
-        where: { id: trade.id },
-        data:  { status: 'FAILED', errorMessage: String(err) },
-      });
-
-      await logAgentAction('TRADER', 'ERROR', 'TRADE_EXECUTION_FAILED', payload.marketId, {
-        tradeId: trade.id,
-        error:   String(err),
-      });
-    } else {
-      await prisma.trade.update({
-        where: { id: trade.id },
-        data:  { errorMessage: String(err) },
-      });
-      await logAgentAction('TRADER', 'WARN', 'TRADE_DEFERRED', payload.marketId, {
-        tradeId: trade.id,
-        failureClass: failure,
-        error:   String(err),
-      });
-    }
-
-    throw new AppError(502, 'TRADE_FAILED', 'On-chain trade execution failed', { error: String(err), failureClass: failure });
-
-      throw new AppError(502, 'TRADE_FAILED', 'On-chain trade execution failed', { error: String(err) });
+      throw new AppError(502, 'TRADE_FAILED', 'On-chain trade execution failed', { error: String(err), failureClass: failure });
     }
   }
 
@@ -354,24 +341,21 @@ async function submitTradeTransaction(
   );
   // The min_shares_out bound is recomputed from a fresh quote on every attempt,
   // so a retry never reuses a bound that a moved price has invalidated (#40).
-  const result = await agentBuy(async () => {
-    const quoted = await quoteBuy(market.onChainMarketId!, outcome, collateralIn);
-    const minSharesOut = (quoted * (10_000n - AGENT_SLIPPAGE_BPS)) / 10_000n;
-    return {
-      market_id: market.onChainMarketId!,
-      outcome,
-      collateral_in: collateralIn,
-      min_shares_out: minSharesOut,
-    };
-  });
-  const result = await agentBuy({
-    market_id: market.onChainMarketId,
-    outcome,
-    collateral_in: collateralIn,
-    min_shares_out: minSharesOut,
-    ...(attemptId ? { attemptId } : {}),
-    ...(rebuildCount ? { rebuildCount } : {}),
-  } as any);
+  // attemptId and rebuildCount tag the submission for idempotency tracking (#41/#42).
+  const result = await agentBuy(
+    async () => {
+      const quoted = await quoteBuy(market.onChainMarketId!, outcome, collateralIn);
+      const minSharesOut = (quoted * (10_000n - AGENT_SLIPPAGE_BPS)) / 10_000n;
+      return {
+        market_id: market.onChainMarketId!,
+        outcome,
+        collateral_in: collateralIn,
+        min_shares_out: minSharesOut,
+      };
+    },
+    undefined,
+    { ...(attemptId ? { attemptId } : {}), ...(rebuildCount ? { rebuildCount } : {}) },
+  );
   return {
     txHash: result.txHash,
     dryRun: result.mode === 'dry-run',

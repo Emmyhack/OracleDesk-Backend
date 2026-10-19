@@ -26,10 +26,11 @@ import { getFeeOracle } from '../services/stellar/fees';
 import { getLlmUsage } from '../lib/llm-budget';
 import { getCronStatus } from '../cron/registry';
 import { AppError } from '../middlewares/error.middleware';
+import { z } from 'zod';
 import {
   acknowledge,
   buildGuardianTx,
-  listDisputes,
+  listDisputes as listDisputeReviews,
 } from '../services/dispute-monitor.service';
 import {
   addSignature,
@@ -333,3 +334,38 @@ export async function getChainFeesReport(req: Request, res: Response): Promise<v
   });
 }
 
+
+// ─── Dispute monitor (#92) ───────────────────────────────────────────────
+
+const disputeIdSchema = z.object({ id: z.string().uuid('id must be a dispute review UUID') });
+const disputeListSchema = z.object({ status: z.enum(['open', 'all']).default('open') });
+
+function disputeId(req: Request): string {
+  const parsed = disputeIdSchema.safeParse(req.params);
+  if (!parsed.success) throw new AppError(400, 'VALIDATION_ERROR', 'Invalid dispute id', parsed.error.flatten().fieldErrors as any);
+  return parsed.data.id;
+}
+
+/** GET /admin/disputes?status=open|all — reviews with the window left on the ledger clock. */
+export async function listDisputes(req: Request, res: Response): Promise<void> {
+  const parsed = disputeListSchema.safeParse(req.query);
+  if (!parsed.success) throw new AppError(400, 'VALIDATION_ERROR', 'status must be open or all', parsed.error.flatten().fieldErrors as any);
+  const { page, limit } = parsePagination(req.query as any);
+  const { items, total, ledgerTime } = await listDisputeReviews({ status: parsed.data.status, page, limit });
+  sendSuccess(res, items, 200, { ...(buildPaginationMeta(page, limit, total) as any), ledgerTime });
+}
+
+/** POST /admin/disputes/:id/ack */
+export async function ackDispute(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await acknowledge(disputeId(req), actor(req)));
+}
+
+/** POST /admin/disputes/:id/cancel-tx — unsigned cancel_proposal for the guardian's wallet. */
+export async function cancelDisputeTx(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await buildGuardianTx(disputeId(req), 'cancel_proposal'));
+}
+
+/** POST /admin/disputes/:id/void-tx — unsigned guardian_void_market. */
+export async function voidDisputeTx(req: Request, res: Response): Promise<void> {
+  sendSuccess(res, await buildGuardianTx(disputeId(req), 'guardian_void_market'));
+}
