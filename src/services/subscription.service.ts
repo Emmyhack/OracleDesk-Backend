@@ -19,11 +19,10 @@ import { summarizeProvenance } from '../lib/llm/provenance';
 import { withAdvisoryLocksWait } from '../lib/advisory-lock';
 import { DAY_MS, ledgerCloseDate, utcDayStart } from '../lib/time';
 import { notifyUser } from '../lib/socket-auth';
+import { discoverTracePrice } from './x402-discovery.service';
 
 /** Daily pass price in 7-decimal USDC base units (DAILY_PASS_PRICE_RAW). */
 export const DAILY_PASS_PRICE_RAW = BigInt(config.DAILY_PASS_PRICE_RAW);
-/** Per-trace unlocks are sold by the x402 service, not this backend (docs/api.md). */
-const PER_TRACE_PRICE_RAW = 50_000n; // 0.005 USDC, shown in previews only
 
 /**
  * Checks whether a user has access to a specific reasoning trace.
@@ -486,6 +485,10 @@ export async function getTracWithAccessControl(
     return { ...trace, audit, accessLevel: access.accessType };
   }
 
+  // Discover live x402 trace price (#63)
+  const discovered = await discoverTracePrice(trace.onChainTraceId ?? trace.id);
+  const isDiscovered = discovered.status === 'discovered';
+
   // Return free preview — strip full sources
   return {
     id:                  trace.id,
@@ -508,7 +511,10 @@ export async function getTracWithAccessControl(
     createdAt:           trace.createdAt,
     accessLevel:         'FREE_PREVIEW',
     lockedFields:        ['fullSources', 'hedgeConditions', 'betFraction', 'betSizeUsdc', 'provenance.llm', 'provenance.generator'],
-    unlockPriceRaw:      PER_TRACE_PRICE_RAW.toString(),
+    unlockPriceRaw:      isDiscovered ? discovered.amountRaw : null,
+    unlockPrice:         isDiscovered ? discovered.amountUsdc : null,
+    unlockPriceStatus:   discovered.status,
+    paymentRequirements: isDiscovered ? discovered.requirements : null,
     dailyPassPriceRaw:   DAILY_PASS_PRICE_RAW.toString(),
     dailyPassPrice:      formatUsdc(DAILY_PASS_PRICE_RAW),
   };

@@ -259,6 +259,15 @@ const envSchema = z
     // during rotation, in addition to the current signing key.
     ENTITLEMENT_PREVIOUS_PUBLIC_KEYS: commaList(z.string()),
 
+    // ── x402 trace price discovery (#63) ──────────────────────────────────
+    // The authoritative x402 service URL. Empty disables discovery (reported as unknown).
+    X402_SERVICE_URL: optionalString,
+    // Request timeout for price discovery queries.
+    X402_DISCOVERY_TIMEOUT_MS: z.string().default('5000').transform(Number)
+      .pipe(z.number().int().min(100)),
+    // In-memory cache TTL for validated payment requirements.
+    X402_PRICE_CACHE_TTL_MS: z.string().default('60000').transform(Number)
+      .pipe(z.number().int().min(1000)),
     // ── Server-issued payment intents (#52) ──────────────────────────────
     // How long a client may take to submit a transaction for an open intent.
     PAYMENT_INTENT_TTL_SECONDS: z.string().default('900').transform(Number)
@@ -324,6 +333,25 @@ const envSchema = z
     RESOLUTION_SIGNERS: commaList(stellarAccount),
     RESOLUTION_THRESHOLD: z.string().default('1').transform(Number),
     RESOLUTION_DISPUTE_WINDOW_SECS: z.string().default('86400').transform(Number),
+
+    // ── Evidence-backed attestation (#88) ─────────────────────────────────
+    RESOLUTION_ATTESTATION_ENABLED: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
+    RESOLUTION_AUTO_APPROVE_ENABLED: z.enum(['true', 'false']).default('false').transform((v) => v === 'true'),
+    RESOLUTION_AUTO_APPROVE_MIN_CONFIDENCE: z.string().default('0.90').transform(Number).pipe(z.number().min(0).max(1)),
+    RESOLUTION_HIGH_VALUE_THRESHOLD_USDC: z.string().default('10000').transform(Number).pipe(z.number().positive()),
+    RESOLUTION_ATTESTATION_POLL_MS: z.string().default('300000').transform(Number).pipe(z.number().int().min(1000)),
+
+    // ── Permissionless finalization keeper (#89) ──────────────────────────
+    KEEPER_ENABLED: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
+    KEEPER_POLL_MS: z.string().default('60000').transform(Number).pipe(z.number().int().min(1000)),
+    KEEPER_BATCH_SIZE: z.string().default('10').transform(Number).pipe(z.number().int().min(1).max(100)),
+    KEEPER_MAX_RETRIES: z.string().default('3').transform(Number).pipe(z.number().int().min(1)),
+
+    // ── Resumable SSE event stream (#95) ──────────────────────────────────
+    SSE_HEARTBEAT_INTERVAL_MS: z.string().default('15000').transform(Number).pipe(z.number().int().min(1000)),
+    SSE_POLL_INTERVAL_MS: z.string().default('2000').transform(Number).pipe(z.number().int().min(500)),
+    SSE_MAX_CONCURRENT_STREAMS: z.string().default('500').transform(Number).pipe(z.number().int().min(1)),
+    SSE_REPLAY_PAGE_SIZE: z.string().default('100').transform(Number).pipe(z.number().int().min(1).max(500)),
 
     // ── Price-mode markets (#90) ──────────────────────────────────────────
     // Cited Reflector (SEP-40) feeds; see src/config/reflector-feeds.ts.
