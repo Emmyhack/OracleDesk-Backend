@@ -25,9 +25,10 @@ Every response carries an `X-Request-Id` header (exposed via CORS), and error en
 ### Auth
 
 Protected routes take `Authorization: Bearer <jwt>`. The JWT comes from
-`POST /auth/verify` and lasts 7 days. Errors: `401 UNAUTHORIZED`,
-`401 INVALID_TOKEN`, `401 TOKEN_EXPIRED` (the frontend clears its session on
-the last one).
+`POST /auth/verify` (or `POST /auth/contract/verify` for a `C…` smart wallet)
+and lasts 7 days. A contract session carries `accountType: "contract"` and is
+never treated as an admin. Errors: `401 UNAUTHORIZED`, `401 INVALID_TOKEN`,
+`401 TOKEN_EXPIRED` (the frontend clears its session on the last one).
 
 Routes marked **optional auth** work without a token and return more when
 one is present.
@@ -179,10 +180,28 @@ Response `200`:
 }
 ```
 
-The challenge is stored in Redis under its transaction hash with a 300 s TTL.
+The challenge is stored in Redis under its transaction hash with a 300 s TTL
+(`AUTH_CHALLENGE_TTL_SECONDS`). At most `AUTH_MAX_OUTSTANDING_PER_ADDRESS`
+unused challenges per address and `AUTH_MAX_OUTSTANDING_PER_IP` per network may
+be outstanding at once (#50).
 
 Errors: `400 INVALID_ADDRESS`, `400 INVALID_MEMO` (bad id, or a memo combined
-with an `M…` address), `429 RATE_LIMITED`.
+with an `M…` address), `429 RATE_LIMITED`, `429 AUTH_IP_LIMIT`.
+
+#### `GET /auth/challenge/pow`
+
+Returns a single-use proof-of-work salt:
+
+```json
+{ "salt": "…", "bits": 18, "expiresAt": "2026-10-07T15:05:00.000Z" }
+```
+
+When more than `AUTH_POW_THRESHOLD_PER_MIN` challenges are issued in one minute,
+`POST /auth/challenge` answers `429 POW_REQUIRED` and returns a fresh `salt` and
+the required `bits`. The client must find a `nonce` such that
+`SHA-256(address || ":" || nonce || ":" || salt)` starts with `bits` zero bits,
+then retry with `{"pow": {"nonce": "…", "salt": "…"}}`. The salt is consumed on
+use. Errors: `429 POW_REQUIRED`, `429 POW_INVALID`.
 
 #### `POST /auth/verify`
 
@@ -197,12 +216,16 @@ that was sent to `/auth/challenge` must be repeated here.
 
 The server checks, in order:
 
-1. `readChallengeTx` passes: signed by the server key, time bounds still
-   valid, home domain and web-auth domain match.
-2. The challenge's client account and memo match the requested identity.
-3. The challenge exists in Redis and is deleted atomically (`GETDEL`), so a
-   challenge works once. It's consumed even if a later check fails.
-4. `verifyChallengeTxSigners(..., [baseAccount], ...)` returns exactly
+1. The challenge exists in Redis and is deleted atomically (`GETDEL`), so a
+   challenge works once. It's consumed even if a later check fails, and the
+   record names the key that issued it.
+2. That issuing key is still trusted (#48): the current `AUTH_SIGNING_SECRET`
+   or a key in `AUTH_PREVIOUS_SIGNING_KEYS` that has not passed its retirement
+   time. An unknown or retired key is `401 INVALID_CHALLENGE`.
+3. `readChallengeTx` passes with that key: signed by the issuer, time bounds
+   still valid, home domain and web-auth domain match.
+4. The challenge's client account and memo match the requested identity.
+5. `verifyChallengeTxSigners(..., [baseAccount], ...)` returns exactly
    `[baseAccount]`.
 
 Response `200`:
@@ -222,6 +245,57 @@ signature, address or memo mismatch).
 
 Multisig accounts: only a signature from `address`'s own key is accepted.
 Threshold-based SEP-10 verification is a backlog item.
+
+### Auth for contract accounts (SEP-45, #47)
+
+A smart-wallet account is a `C…` contract, not a `G…` key, so the SEP-10
+challenge does not apply. When `SEP45_ENABLED=true`, contract accounts log in
+with SEP-45 authorization entries. The JWT carries `accountType: "contract"` and
+such a token is never treated as an admin.
+
+#### `GET /auth/contract/challenge?account=C…&home_domain=…`
+
+`account` must be a `C…` contract address. `home_domain`, when present, must
+match `AUTH_HOME_DOMAIN`. Response `200`:
+
+```json
+{
+  "authorization_entries": "<base64 SorobanAuthorizationEntries XDR>",
+  "network_passphrase": "Test SDF Network ; September 2015",
+  "expires_at": "2026-10-07T15:05:00.000Z"
+}
+```
+
+The XDR contains two entries for `web_auth_verify` on `WEB_AUTH_CONTRACT_ID`
+with the same argument map (`account`, `home_domain`, `web_auth_domain`,
+`web_auth_domain_account`, `nonce`): an unsigned client entry (empty signature)
+and the server's own entry, already signed by `AUTH_SIGNING_SECRET`. The nonce
+is stored for 300 s and is single-use.
+
+Errors: `503 SEP45_UNAVAILABLE` (feature off), `400 INVALID_ADDRESS`,
+`400 INVALID_HOME_DOMAIN`.
+
+#### `POST /auth/contract/verify`
+
+```json
+{ "authorization_entries": "<base64 XDR signed by the wallet>" }
+```
+
+The server decodes the entries, requires exactly one server and one client
+entry with identical arguments, verifies the server's ed25519 signature, spends
+the nonce (`GETDEL`), checks the expirations, and simulates the
+`web_auth_verify` invocation in `enforce` auth mode. Only a successful
+simulation issues a JWT:
+
+```json
+{ "token": "<jwt>", "userId": "<uuid>", "walletAddress": "C…" }
+```
+
+Errors: `400 INVALID_CHALLENGE` (bad base64/XDR or oversized),
+`401 CHALLENGE_NOT_FOUND`, `401 CHALLENGE_EXPIRED`,
+`401 CHALLENGE_SIGNATURE_INVALID` (bad server signature, mismatched arguments,
+or the contract rejected the authorization), `503 AUTH_UNAVAILABLE` /
+`503 SEP45_UNAVAILABLE`.
 
 ### Markets
 

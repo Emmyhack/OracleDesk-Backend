@@ -96,3 +96,33 @@ document and treat `provenance` as optional: traces pinned earlier do not have
 it. `agents/core/trace.ts` `canonicalize` needs no change; the block holds only
 strings, numbers, booleans, `null` and plain objects. The former
 `llm: { provider, model }` key is gone.
+
+## 8. A minimal SEP-45 web-auth contract (#47)
+
+The backend's contract-account login (`GET /auth/contract/challenge`,
+`POST /auth/contract/verify`) needs a deployed web-auth contract to simulate.
+Please provide the smallest contract that satisfies
+[SEP-45](https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0045.md):
+
+```rust
+pub fn web_auth_verify(env: Env, args: Map<Symbol, String>) {
+    // No side effects, no state. Both parties must authorize.
+    let account: Address = args.get(symbol_short!("account")).unwrap().into();
+    let server: Address = args.get(symbol_short!("web_auth_domain_account")).unwrap().into();
+    account.require_auth();
+    server.require_auth();
+}
+```
+
+Requests:
+
+- Deploy it to testnet and record its `C…` id in
+  `deployments/testnet.json` so `scripts/sync-contracts.mjs` exposes it.
+- Keep the argument map keys exactly `account`, `home_domain`, `web_auth_domain`,
+  `web_auth_domain_account`, `nonce` (the backend sends them as a sorted
+  `ScMap<Symbol, String>` and rejects entries whose args disagree).
+
+Until it exists, `WEB_AUTH_CONTRACT_ID` can point at a community SEP-45
+web-auth contract on testnet. Risk to document: a hostile account contract can
+make `__check_auth` always succeed, but that only proves control of the contract
+being logged in, which is the identity under test.

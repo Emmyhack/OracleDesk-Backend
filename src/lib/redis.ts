@@ -6,13 +6,93 @@ import { logger } from './logger';
 let client: Redis | null = null;
 const blocking = new Set<Redis>();
 
-/** Shared lazy Redis connection. */
+/**
+ * Thrown when Redis is down, slow or otherwise unable to serve a command.
+ * Callers on the auth path map this to `503 AUTH_UNAVAILABLE` (#50).
+ */
+export class RedisUnavailableError extends Error {
+  constructor(message = 'Redis is unavailable', public readonly cause?: unknown) {
+    super(message);
+    this.name = 'RedisUnavailableError';
+  }
+}
+
+/** True when the shared client is connected and ready to serve commands. */
+export function redisHealthy(): boolean {
+  return client?.status === 'ready';
+}
+
+function isConnectionError(err: unknown): boolean {
+  const name = (err as { name?: string } | null)?.name ?? '';
+  const code = (err as { code?: string } | null)?.code ?? '';
+  const message = err instanceof Error ? err.message : String(err);
+  return (
+    name === 'MaxRetriesPerRequestError' ||
+    name === 'RedisUnavailableError' ||
+    code === 'ECONNREFUSED' ||
+    code === 'ECONNRESET' ||
+    code === 'ETIMEDOUT' ||
+    code === 'NR_CLOSED' ||
+    /connection is closed|stream isn't writeable|command timed out|max retries/i.test(message)
+  );
+}
+
+/**
+ * Runs a Redis command, mapping connection/timeout failures to
+ * {@link RedisUnavailableError}. Application errors (wrong type, script bugs)
+ * pass through unchanged.
+ */
+export async function withRedis<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof RedisUnavailableError) throw err;
+    if (isConnectionError(err)) throw new RedisUnavailableError('Redis is unavailable', err);
+    throw err;
+  }
+}
+
+/**
+ * Shared lazy Redis connection.
+ *
+ * `enableOfflineQueue: false` makes commands fail fast while disconnected
+ * instead of piling up in memory; the auth path turns that into a 503 rather
+ * than hanging a request handler.
+ */
 export function getRedis(): Redis {
   if (!client) {
-    client = new Redis(config.REDIS_URL, { maxRetriesPerRequest: 2, lazyConnect: false });
+    client = new Redis(config.REDIS_URL, {
+      maxRetriesPerRequest: 1,
+      enableOfflineQueue: false,
+      commandTimeout: config.REDIS_COMMAND_TIMEOUT_MS,
+      connectTimeout: config.REDIS_CONNECT_TIMEOUT_MS,
+      lazyConnect: false,
+    });
     client.on('error', (err) => logger.error({ err: err.message }, 'Redis error'));
   }
   return client;
+}
+
+/**
+ * Warns when `maxmemory-policy` could evict non-TTL data (BullMQ, locks) to
+ * make room for challenges. `NOPERM` on managed Redis is ignored.
+ */
+export async function checkRedisPolicy(): Promise<void> {
+  try {
+    const reply = await getRedis().config('GET', 'maxmemory-policy');
+    const policy = Array.isArray(reply) ? String(reply[1]) : '';
+    if (policy && !['volatile-ttl', 'volatile-lru', 'volatile-lfu', 'noeviction'].includes(policy)) {
+      logger.warn(
+        { policy },
+        'Redis maxmemory-policy may evict non-TTL data (locks, queues); use volatile-ttl, volatile-lru or noeviction',
+      );
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!/NOPERM|unknown command|not allowed/i.test(message)) {
+      logger.warn({ err: message }, 'Could not read Redis maxmemory-policy');
+    }
+  }
 }
 
 /**

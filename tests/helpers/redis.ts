@@ -7,6 +7,7 @@ import { randomBytes } from 'node:crypto';
  */
 export async function withRedisPrefix(label: string) {
   const { getRedis } = await import('../../src/lib/redis');
+  type ChallengeRecord = import('../../src/services/auth.service').ChallengeRecord;
   const prefix = `test:${label}:${randomBytes(3).toString('hex')}:`;
   return {
     prefix,

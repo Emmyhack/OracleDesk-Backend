@@ -14,6 +14,12 @@ Express 5 with helmet, hpp, an env CORS allowlist, rate limits (global, `/auth/*
 
 `auth.service.ts` builds a challenge transaction with `WebAuth.buildChallengeTx`, signed by `AUTH_SIGNING_SECRET` (a key that holds nothing and is not the agent key). It stores the transaction hash in Redis for 5 minutes. `/auth/verify` reads the challenge, enforces its time bounds without the SDK's grace period, consumes it atomically (`GETDEL`), checks the user's signature with `verifyChallengeTxSigners`, and issues a JWT. Admin rights are an env allowlist of G-addresses checked server-side.
 
+Three hardening layers sit around this (#48, #50). Every stored challenge names its issuing key; verification looks that key up in the current `AUTH_SIGNING_SECRET` plus `AUTH_PREVIOUS_SIGNING_KEYS`, so a signing key can rotate with an overlap and a retired key stops being accepted (an unknown or retired issuer is `INVALID_CHALLENGE`, and the record is still consumed). Issuance is bounded per address and per hashed client IP by a single Lua script (`redis-scripts.ts`) that prunes expired entries and evicts the oldest, and above `AUTH_POW_THRESHOLD_PER_MIN` per minute clients must present a hashcash-style proof of work over a single-use salt. Keys live in one Redis Cluster slot under the `auth:{auth}:` hash tag — `challenge:<hash>`, `outstanding:addr:<address>`, `outstanding:ip:<sha256>`, `issued:<minute>`, `pow:<salt>` — and every one carries a TTL. All of this is fail-closed: with Redis down, `checkRedisPolicy()` at boot logs the degraded state and challenge issuance/verification returns `503 AUTH_UNAVAILABLE` rather than accepting an unverifiable challenge.
+
+## Login for contract accounts (SEP-45, #47)
+
+`sep45.service.ts` serves `C…` (smart-wallet) accounts. `GET /auth/contract/challenge` builds two `web_auth_verify` authorization entries with a shared argument map and a random single-use nonce, signs the server entry with `authorizeEntry`, stores the nonce, and returns the pair as base64 XDR. `POST /auth/contract/verify` re-decodes the pair, checks the arguments and the server's ed25519 signature, spends the nonce with `GETDEL`, checks expirations, then simulates the invocation in `enforce` auth mode; only a successful simulation issues a JWT tagged `accountType: "contract"`, which is rejected by the admin check. Disabled unless `SEP45_ENABLED=true` and `WEB_AUTH_CONTRACT_ID` is set.
+
 ## Chain access
 
 `services/stellar/clients.ts` builds the generated binding clients. Reads are simulations. Writes go through `chain.service.ts`:

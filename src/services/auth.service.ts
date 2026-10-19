@@ -10,16 +10,56 @@
  * M… muxed account (CAP-27 / SEP-23). The signature always comes from the base
  * G… key; the sub-identity is bound into the challenge and stored with it.
  */
+import crypto from 'node:crypto';
 import { Keypair, MuxedAccount, StrKey, TransactionBuilder, WebAuth } from '@stellar/stellar-sdk';
 import type { SubIdKind } from '@prisma/client';
 import { config } from '../config';
 import { secret } from '../config/secrets';
 import { prisma } from '../lib/prisma';
-import { getRedis } from '../lib/redis';
+import { getRedis, RedisUnavailableError, withRedis } from '../lib/redis';
+import {
+  AUTH_CHALLENGE_PREFIX,
+  ISSUE_CHALLENGE_SCRIPT,
+  authAddressKey,
+  authChallengeKey,
+  authIpKey,
+  authIssuedKey,
+  authPowKey,
+} from '../lib/redis-scripts';
+import { logger } from '../lib/logger';
 import { AppError } from '../middlewares/error.middleware';
 import { signToken } from '../middlewares/auth.middleware';
 
-export const CHALLENGE_TTL_SECONDS = 300;
+export const CHALLENGE_TTL_SECONDS = config.AUTH_CHALLENGE_TTL_SECONDS;
+
+/** A server signing key: the current one, or a previous one in its overlap. */
+export interface ServerKey {
+  publicKey: string;
+  /** Present only for the current key; previous keys are verify-only. */
+  keypair?: Keypair;
+  retireAt: Date | null;
+  current: boolean;
+}
+
+/** The key that signs every new challenge (#48). */
+export function currentServerKey(): ServerKey {
+  const keypair = Keypair.fromSecret(secret('AUTH_SIGNING_SECRET'));
+  return { publicKey: keypair.publicKey(), keypair, retireAt: null, current: true };
+}
+
+/**
+ * Looks up a key that may verify a challenge. Returns null for unknown keys
+ * and for previous keys past their retirement time. The current key is always
+ * accepted.
+ */
+export function serverKeyByPublic(publicKey: string, now: Date = new Date()): ServerKey | null {
+  const current = currentServerKey();
+  if (publicKey === current.publicKey) return current;
+  const previous = config.AUTH_PREVIOUS_SIGNING_KEYS.find((k) => k.publicKey === publicKey);
+  if (!previous) return null;
+  if (previous.retireAt && now.getTime() >= previous.retireAt.getTime()) return null;
+  return { publicKey: previous.publicKey, retireAt: previous.retireAt, current: false };
+}
 
 /** Largest valid uint64 sub-identity id (2^64 - 1). */
 export const MAX_SUB_ID = 18446744073709551615n;
@@ -52,6 +92,10 @@ export interface ChallengeRecord {
   subIdKind: SubIdKind | null;
   challengeAccount: string;
   display: string;
+  /** Public key that signed the challenge (#48). */
+  issuer: string;
+  /** When the challenge was issued (ms since epoch). */
+  issuedAt: number;
 }
 
 /** Storage for issued challenges, keyed by transaction hash. */
@@ -59,10 +103,26 @@ export interface ChallengeStore {
   put(hash: string, record: ChallengeRecord, ttlSeconds: number): Promise<void>;
   /** Atomically returns and deletes the entry (single use). */
   take(hash: string): Promise<ChallengeRecord | null>;
+  /**
+   * Atomically stores a challenge and updates the per-address and per-IP
+   * outstanding counters (#50). The address cap evicts the oldest challenge;
+   * the IP cap refuses issuance. Falls back to `put` when not implemented.
+   */
+  issue?(
+    hash: string,
+    record: ChallengeRecord,
+    ttlSeconds: number,
+    accounting: { address: string; ipHash: string },
+  ): Promise<{ ipLimited: boolean; globalCount: number }>;
 }
 
-/** Values written before #46 were the plain address string. */
-function parseStoredChallenge(raw: string): ChallengeRecord {
+/**
+ * Parses a stored challenge. Values written before #46 were the plain address
+ * string; values written before #48 had no `issuer`. Legacy entries fall back
+ * to the current key, which is correct for challenges issued before the first
+ * rotation and expire within CHALLENGE_TTL_SECONDS.
+ */
+function parseStoredChallenge(raw: string): ChallengeRecord | null {
   try {
     const parsed = JSON.parse(raw) as Partial<ChallengeRecord> | null;
     if (parsed && typeof parsed === 'object' && typeof parsed.account === 'string') {
@@ -72,26 +132,65 @@ function parseStoredChallenge(raw: string): ChallengeRecord {
         subIdKind: parsed.subIdKind === 'MUXED' || parsed.subIdKind === 'MEMO' ? parsed.subIdKind : null,
         challengeAccount: typeof parsed.challengeAccount === 'string' ? parsed.challengeAccount : parsed.account,
         display: typeof parsed.display === 'string' ? parsed.display : parsed.account,
+        issuer: typeof parsed.issuer === 'string' ? parsed.issuer : currentServerKey().publicKey,
+        issuedAt: typeof parsed.issuedAt === 'number' ? parsed.issuedAt : Date.now(),
       };
     }
   } catch {
     // Not JSON: a legacy plain address value.
   }
-  return { account: raw, subId: null, subIdKind: null, challengeAccount: raw, display: raw };
+  if (StrKey.isValidEd25519PublicKey(raw) || StrKey.isValidMed25519PublicKey(raw)) {
+    return {
+      account: raw,
+      subId: null,
+      subIdKind: null,
+      challengeAccount: raw,
+      display: raw,
+      issuer: currentServerKey().publicKey,
+      issuedAt: Date.now(),
+    };
+  }
+  // Unexpected shape: treat as not found rather than throwing a 500.
+  return null;
 }
 
 export const redisChallengeStore: ChallengeStore = {
   async put(hash, record, ttl) {
-    await getRedis().set(`auth:challenge:${hash}`, JSON.stringify(record), 'EX', ttl);
+    await withRedis(() => getRedis().set(authChallengeKey(hash), JSON.stringify(record), 'EX', ttl));
   },
   async take(hash) {
-    const raw = await getRedis().getdel(`auth:challenge:${hash}`);
+    const raw = await withRedis(() => getRedis().getdel(authChallengeKey(hash)));
     return raw === null ? null : parseStoredChallenge(raw);
+  },
+  async issue(hash, record, ttl, { address, ipHash }) {
+    const minute = Math.floor(Date.now() / 60_000);
+    const result = (await withRedis(() =>
+      getRedis().eval(
+        ISSUE_CHALLENGE_SCRIPT,
+        4,
+        authChallengeKey(hash),
+        authAddressKey(address),
+        authIpKey(ipHash),
+        authIssuedKey(minute),
+        JSON.stringify(record),
+        String(ttl),
+        String(Date.now()),
+        String(config.AUTH_MAX_OUTSTANDING_PER_ADDRESS),
+        String(config.AUTH_MAX_OUTSTANDING_PER_IP),
+        AUTH_CHALLENGE_PREFIX,
+        hash,
+      ),
+    )) as [number, number];
+    return { ipLimited: Number(result?.[0]) === -1, globalCount: Number(result?.[1] ?? 0) };
   },
 };
 
 export class MemoryChallengeStore implements ChallengeStore {
   private readonly entries = new Map<string, { record: ChallengeRecord; expires: number }>();
+  private readonly byAddress = new Map<string, string[]>();
+  private readonly byIp = new Map<string, string[]>();
+  private issued = 0;
+
   async put(hash: string, record: ChallengeRecord, ttl: number) {
     this.entries.set(hash, { record, expires: Date.now() + ttl * 1000 });
   }
@@ -99,6 +198,36 @@ export class MemoryChallengeStore implements ChallengeStore {
     const entry = this.entries.get(hash);
     this.entries.delete(hash);
     return entry && entry.expires > Date.now() ? entry.record : null;
+  }
+  async issue(
+    hash: string,
+    record: ChallengeRecord,
+    ttl: number,
+    { address, ipHash }: { address: string; ipHash: string },
+  ) {
+    this.issued += 1;
+    const now = Date.now();
+    const live = (list: string[]) => list.filter((h) => (this.entries.get(h)?.expires ?? 0) > now);
+    const ipList = live(this.byIp.get(ipHash) ?? []);
+    if (ipList.length >= config.AUTH_MAX_OUTSTANDING_PER_IP) {
+      this.byIp.set(ipHash, ipList);
+      return { ipLimited: true, globalCount: this.issued };
+    }
+    const addrList = live(this.byAddress.get(address) ?? []);
+    while (addrList.length >= config.AUTH_MAX_OUTSTANDING_PER_ADDRESS) {
+      const oldest = addrList.shift();
+      if (oldest) {
+        this.entries.delete(oldest);
+        const idx = ipList.indexOf(oldest);
+        if (idx >= 0) ipList.splice(idx, 1);
+      }
+    }
+    this.entries.set(hash, { record, expires: now + ttl * 1000 });
+    addrList.push(hash);
+    ipList.push(hash);
+    this.byAddress.set(address, addrList);
+    this.byIp.set(ipHash, ipList);
+    return { ipLimited: false, globalCount: this.issued };
   }
 }
 
@@ -108,8 +237,6 @@ export function setChallengeStore(next: ChallengeStore): ChallengeStore {
   store = next;
   return prev;
 }
-
-const serverKeypair = () => Keypair.fromSecret(secret('AUTH_SIGNING_SECRET'));
 
 export function assertStellarAccount(address: unknown): asserts address is string {
   if (typeof address !== 'string' || !StrKey.isValidEd25519PublicKey(address)) {
@@ -185,15 +312,145 @@ export function identityKeyFor(identity: LoginIdentity): string {
   return `${identity.account}#${kind}:${identity.subId}`;
 }
 
-export async function createChallenge(address: unknown, memo?: unknown): Promise<{
+export interface CreateChallengeOptions {
+  /** Client IP as Express computed it (`req.ip`). */
+  ip?: string | null;
+  /** Proof-of-work solution when the global burst threshold is exceeded. */
+  pow?: { nonce: string; salt: string } | null;
+}
+
+export interface IssuedChallenge {
   transaction: string;
   networkPassphrase: string;
   expiresAt: string;
-}> {
+  /** Present when PoW is currently required (also sent as `X-Auth-PoW`). */
+  pow?: { bits: number; salt: string };
+}
+
+/** Hashes an IP (or its /64 for IPv6) so Redis never stores raw addresses. */
+export function hashClientIp(ip: string | null | undefined): string {
+  const raw = (ip ?? 'unknown').trim().toLowerCase();
+  const normalized = raw.includes(':') ? raw.split(':').slice(0, 4).join(':') : raw;
+  return crypto.createHash('sha256').update(`${config.AUTH_IP_HASH_SALT}:${normalized}`).digest('hex');
+}
+
+const powPayload = (address: string, nonce: string, salt: string) =>
+  `oracledesk-auth:${address}:${nonce}:${salt}`;
+
+/** Leading zero bits of a SHA-256 digest. */
+export function leadingZeroBits(digest: Buffer): number {
+  let bits = 0;
+  for (const byte of digest) {
+    if (byte === 0) {
+      bits += 8;
+      continue;
+    }
+    bits += Math.clz32(byte) - 24;
+    break;
+  }
+  return bits;
+}
+
+/** Checks a PoW solution; returns false when it does not meet the threshold. */
+export function verifyPow(address: string, nonce: string, salt: string, bits = config.AUTH_POW_BITS): boolean {
+  if (!nonce || !salt) return false;
+  const digest = crypto.createHash('sha256').update(powPayload(address, nonce, salt)).digest();
+  return leadingZeroBits(digest) >= bits;
+}
+
+/** Issues a single-use PoW salt, valid for AUTH_POW_TTL_SECONDS. */
+export async function createPowSalt(): Promise<{ salt: string; bits: number; expiresAt: string }> {
+  const salt = crypto.randomBytes(16).toString('hex');
+  try {
+    await withRedis(() =>
+      getRedis().set(authPowKey(salt), '1', 'EX', config.AUTH_POW_TTL_SECONDS),
+    );
+  } catch (err) {
+    throw authUnavailable(err);
+  }
+  return {
+    salt,
+    bits: config.AUTH_POW_BITS,
+    expiresAt: new Date(Date.now() + config.AUTH_POW_TTL_SECONDS * 1000).toISOString(),
+  };
+}
+
+/** Consumes a PoW salt; false when it is unknown or already used. */
+async function consumePowSalt(salt: string): Promise<boolean> {
+  const raw = await withRedis(() => getRedis().getdel(authPowKey(salt)));
+  return raw !== null;
+}
+
+/** The global per-minute issuance counter (0 when Redis is unavailable). */
+async function issuedThisMinute(): Promise<number> {
+  const minute = Math.floor(Date.now() / 60_000);
+  try {
+    const raw = await withRedis(() => getRedis().get(authIssuedKey(minute)));
+    return Number(raw ?? 0);
+  } catch (err) {
+    // PoW is a burst throttle, not a correctness gate: if the counter cannot be
+    // read, treat the burst as low and keep issuing (issuance itself still
+    // fails closed in redisChallengeStore when Redis is down).
+    if (err instanceof RedisUnavailableError) return 0;
+    throw err;
+  }
+}
+
+function authUnavailable(err: unknown): AppError {
+  if (err instanceof AppError) return err;
+  if (err instanceof RedisUnavailableError || err instanceof Error) {
+    logger.error({ err: err.message }, 'Auth store unavailable');
+  }
+  return new AppError(503, 'AUTH_UNAVAILABLE', 'Login is temporarily unavailable', {
+    retryAfterSecs: 5,
+  });
+}
+
+export async function createChallenge(
+  address: unknown,
+  memo?: unknown,
+  options: CreateChallengeOptions = {},
+): Promise<IssuedChallenge> {
   const identity = parseLoginIdentity(address, memo);
   const memoArg = identity.subIdKind === 'MEMO' ? identity.subId : null;
+  const key = currentServerKey();
+
+  // Proof-of-work switches on only above the configured burst rate. The
+  // counter is read before building, so normal traffic never pays for it.
+  let requiredPow: { bits: number; salt: string } | null = null;
+  if (config.AUTH_POW_THRESHOLD_PER_MIN > 0) {
+    const count = await issuedThisMinute();
+    if (count >= config.AUTH_POW_THRESHOLD_PER_MIN) {
+      const solution = options.pow;
+      if (!solution || !solution.nonce || !solution.salt) {
+        // Hand the client a fresh single-use salt so it can solve immediately.
+        const challenge = await createPowSalt();
+        throw new AppError(429, 'POW_REQUIRED', 'Proof of work is required during a login burst', {
+          bits: challenge.bits,
+          salt: challenge.salt,
+          retryAfterSecs: 1,
+        });
+      }
+      if (!verifyPow(identity.account, solution.nonce, solution.salt)) {
+        throw new AppError(429, 'POW_INVALID', 'The proof-of-work solution is invalid', {
+          bits: config.AUTH_POW_BITS,
+        });
+      }
+      let consumed: boolean;
+      try {
+        consumed = await consumePowSalt(solution.salt);
+      } catch (err) {
+        throw authUnavailable(err);
+      }
+      if (!consumed) {
+        throw new AppError(429, 'POW_INVALID', 'The proof-of-work salt is unknown or already used');
+      }
+      requiredPow = { bits: config.AUTH_POW_BITS, salt: solution.salt };
+    }
+  }
+
   const transaction = WebAuth.buildChallengeTx(
-    serverKeypair(),
+    key.keypair!,
     identity.challengeAccount,
     config.AUTH_HOME_DOMAIN,
     CHALLENGE_TTL_SECONDS,
@@ -208,12 +465,33 @@ export async function createChallenge(address: unknown, memo?: unknown): Promise
     subIdKind: identity.subIdKind,
     challengeAccount: identity.challengeAccount,
     display: identity.display,
+    issuer: key.publicKey,
+    issuedAt: Date.now(),
   };
-  await store.put(tx.hash().toString('hex'), record, CHALLENGE_TTL_SECONDS);
+
+  const hash = tx.hash().toString('hex');
+  const ipHash = hashClientIp(options.ip);
+  try {
+    if (store.issue) {
+      const result = await store.issue(hash, record, CHALLENGE_TTL_SECONDS, { address: identity.account, ipHash });
+      if (result.ipLimited) {
+        throw new AppError(429, 'AUTH_IP_LIMIT', 'Too many outstanding challenges from this network', {
+          retryAfterSecs: 30,
+        });
+      }
+    } else {
+      await store.put(hash, record, CHALLENGE_TTL_SECONDS);
+    }
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+    throw authUnavailable(err);
+  }
+
   return {
     transaction,
     networkPassphrase: config.STELLAR_NETWORK_PASSPHRASE,
     expiresAt: new Date(Date.now() + CHALLENGE_TTL_SECONDS * 1000).toISOString(),
+    ...(requiredPow ? { pow: requiredPow } : {}),
   };
 }
 
@@ -226,11 +504,48 @@ export async function verifyChallenge(address: unknown, signed: unknown, memo?: 
   if (typeof signed !== 'string' || signed.length === 0) {
     throw new AppError(400, 'INVALID_CHALLENGE', 'signed must be a base64 transaction envelope');
   }
-  const serverAccount = serverKeypair().publicKey();
+
+  // The challenge hash does not depend on signatures, so the store entry can
+  // be consumed (single use) before any trust decision. The record names the
+  // key that issued the challenge; that key is the only one allowed to verify.
+  let hash: string;
+  try {
+    hash = TransactionBuilder.fromXDR(signed, config.STELLAR_NETWORK_PASSPHRASE).hash().toString('hex');
+  } catch (err) {
+    throw new AppError(400, 'INVALID_CHALLENGE', 'The signed challenge could not be read', {
+      reason: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  // Never fall back to accepting a challenge without a successful GETDEL.
+  let record: ChallengeRecord | null;
+  try {
+    record = await store.take(hash);
+  } catch (err) {
+    throw authUnavailable(err);
+  }
+  if (!record) {
+    throw new AppError(401, 'CHALLENGE_NOT_FOUND', 'Unknown or already used challenge. Request a new one.');
+  }
+
+  const issuerKey = serverKeyByPublic(record.issuer);
+  if (!issuerKey) {
+    // A key we no longer trust (retired or unknown) cannot verify a challenge
+    // it claims to have issued. The record is already consumed.
+    throw new AppError(401, 'INVALID_CHALLENGE', 'The challenge was signed by a key that is no longer accepted', {
+      issuer: record.issuer,
+    });
+  }
+  if (!issuerKey.current) {
+    logger.info(
+      { issuer: issuerKey.publicKey, retireAt: issuerKey.retireAt?.toISOString() ?? null },
+      'Challenge verified with a previous signing key',
+    );
+  }
+  const serverAccount = issuerKey.publicKey;
 
   let clientAccountID: string;
   let challengeMemo: string | null;
-  let hash: string;
   try {
     const read = WebAuth.readChallengeTx(
       signed,
@@ -241,7 +556,6 @@ export async function verifyChallenge(address: unknown, signed: unknown, memo?: 
     );
     clientAccountID = read.clientAccountID;
     challengeMemo = read.memo ?? null;
-    hash = read.tx.hash().toString('hex');
     // readChallengeTx allows a grace period past the time bounds; we don't.
     const maxTime = Number(read.tx.timeBounds?.maxTime ?? 0);
     if (!maxTime || Math.floor(Date.now() / 1000) > maxTime) {
@@ -256,11 +570,6 @@ export async function verifyChallenge(address: unknown, signed: unknown, memo?: 
     throw new AppError(400, 'INVALID_CHALLENGE', 'The signed challenge could not be read', { reason: message });
   }
 
-  // Single use: consumed here even if a later check fails.
-  const record = await store.take(hash);
-  if (!record) {
-    throw new AppError(401, 'CHALLENGE_NOT_FOUND', 'Unknown or already used challenge. Request a new one.');
-  }
   // The account and the sub-identity that come back from the challenge must be
   // the ones that were issued and stored.
   if (

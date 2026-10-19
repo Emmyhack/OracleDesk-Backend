@@ -17,6 +17,15 @@ import { health } from './services/health.service';
 
 const app = express();
 
+// #50: behind a proxy, `req.ip` must be the client, not the load balancer.
+// TRUST_PROXY is an Express `trust proxy` value ("true", a hop count, or a
+// comma list of addresses/subnets). Left unset, Express uses the socket peer.
+if (config.TRUST_PROXY) {
+  const raw = config.TRUST_PROXY.trim();
+  const value = raw === 'true' ? true : /^\d+$/.test(raw) ? Number(raw) : raw.split(',').map((s) => s.trim()).filter(Boolean);
+  app.set('trust proxy', value);
+}
+
 // BigInt (u64 market ids, i128 amounts) serialises as a decimal string.
 app.set('json replacer', (_key: string, value: unknown) => (typeof value === 'bigint' ? value.toString() : value));
 
