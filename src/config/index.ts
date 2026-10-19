@@ -259,6 +259,28 @@ const envSchema = z
     // during rotation, in addition to the current signing key.
     ENTITLEMENT_PREVIOUS_PUBLIC_KEYS: commaList(z.string()),
 
+    // ── Server-issued payment intents (#52) ──────────────────────────────
+    // How long a client may take to submit a transaction for an open intent.
+    PAYMENT_INTENT_TTL_SECONDS: z.string().default('900').transform(Number)
+      .pipe(z.number().int().min(60).max(86_400)),
+    // Bounded open/pending intents per user; prevents intent-table spam.
+    PAYMENT_INTENT_MAX_OPEN: z.string().default('3').transform(Number)
+      .pipe(z.number().int().min(1).max(100)),
+    PAYMENT_INTENT_CONFIRM_ENABLED: boolDefault('true'),
+    // Six-field cron (seconds field). Each tick is bounded by the batch size.
+    PAYMENT_INTENT_CONFIRM_CRON: z.string().default('*/20 * * * * *'),
+    PAYMENT_INTENT_CONFIRM_BATCH: z.string().default('20').transform(Number)
+      .pipe(z.number().int().min(1).max(500)),
+    PAYMENT_INTENT_MAX_ATTEMPTS: z.string().default('60').transform(Number)
+      .pipe(z.number().int().min(1).max(10_000)),
+    PAYMENT_INTENT_RETRY_BASE_MS: z.string().default('5000').transform(Number)
+      .pipe(z.number().int().min(1000).max(3_600_000)),
+    PAYMENT_INTENT_RETRY_MAX_MS: z.string().default('300000').transform(Number)
+      .pipe(z.number().int().min(1000).max(86_400_000)),
+    // Extra time after expiresAt before a still-pending tx is abandoned.
+    PAYMENT_INTENT_LATE_GRACE_SECONDS: z.string().default('120').transform(Number)
+      .pipe(z.number().int().min(0).max(86_400)),
+
     // ── Refund workflow (#57) ─────────────────────────────────────────────
     // How long a prepared refund XDR stays valid before it must be rebuilt.
     REFUND_PREPARE_TTL_SECONDS: z.string().default('600').transform(Number)

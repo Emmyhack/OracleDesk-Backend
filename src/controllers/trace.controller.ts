@@ -168,14 +168,23 @@ export async function setSpendingAllowance(req: Request, res: Response): Promise
     return;
   }
 
-  const { dailyLimit, perTraceLimit, currency } = req.body as {
+  const { dailyLimit, perTraceLimit, dailyLimitRaw, perTraceLimitRaw, currency } = req.body as {
     dailyLimit?: number;
     perTraceLimit?: number;
+    dailyLimitRaw?: string;
+    perTraceLimitRaw?: string;
     currency?: string;
   };
 
   if (typeof dailyLimit !== 'number' || typeof perTraceLimit !== 'number') {
     sendError(res, 400, 'MISSING_ALLOWANCE_FIELDS', 'dailyLimit and perTraceLimit are required numbers');
+    return;
+  }
+  if (
+    (dailyLimitRaw !== undefined && !/^\d+$/.test(dailyLimitRaw)) ||
+    (perTraceLimitRaw !== undefined && !/^\d+$/.test(perTraceLimitRaw))
+  ) {
+    sendError(res, 400, 'VALIDATION_ERROR', 'dailyLimitRaw and perTraceLimitRaw must be integer base-unit strings');
     return;
   }
 
@@ -201,6 +210,8 @@ export async function setSpendingAllowance(req: Request, res: Response): Promise
     userId: req.user.userId,
     dailyLimit,
     perTraceLimit,
+    dailyLimitRaw,
+    perTraceLimitRaw,
     currency,
   });
 

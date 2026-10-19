@@ -125,6 +125,7 @@ async function bootstrap(): Promise<void> {
   startReportCron();
   startTraceAuditCron();
   startTracePublicationCron();
+  startPaymentIntentCron();
   // Drift reports reach admins only: sockets join the room with an admin JWT.
   // Agent pause / resume notifications (#79).
   setControlEmitter((event, payload) => io.emit(event, payload));
@@ -134,7 +135,7 @@ async function bootstrap(): Promise<void> {
 
   io.on('connection', (socket) => {
     logger.info({ socketId: socket.id }, 'New client connected to socket.io');
-    if (isAdminToken(socket.handshake.auth?.token)) void socket.join('admins');
+    if (await isAdminToken(socket.handshake.auth?.token)) void socket.join('admins');
     
     socket.on('disconnect', () => {
       logger.info({ socketId: socket.id }, 'Client disconnected from socket.io');

@@ -90,6 +90,7 @@ the same key on every retry of it.
 | `PUT /traces/access/allowance` | optional |
 | `POST /traces/verify` | optional |
 | `POST /traces/:id/unlock` | optional |
+| `POST /traces/payment-intents/:id/submit` | optional (idempotent by txHash) |
 | `POST /auth/challenge`, `POST /auth/verify` | not supported (the handshake is single-use, and `/auth/verify` returns a JWT that is never stored) |
 
 - **Format:** 1–255 printable ASCII characters. A UUID (`crypto.randomUUID()`) is recommended.
@@ -641,7 +642,7 @@ Response `201`: `{ subscription, trace }`.
 Errors: `400 VALIDATION_ERROR`, `402 PAYMENT_NOT_FOUND`,
 `402 PAYMENT_FAILED`, `402 PAYMENT_WRONG_TOKEN`, `402 PAYMENT_WRONG_SENDER`,
 `402 PAYMENT_WRONG_RECIPIENT`, `402 PAYMENT_INSUFFICIENT`,
-`409 PAYMENT_ALREADY_USED`, `402 ALLOWANCE_DAILY_LIMIT`.
+`409 PAYMENT_ALREADY_USED`. Over-allowance payments are still granted and flagged (#53).
 
 > **Product decision for a human:** `PAYMENTS_RECIPIENT` defaults to the
 > treasury contract. The treasury's trading capital *is* its USDC balance,

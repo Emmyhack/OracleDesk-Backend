@@ -60,6 +60,8 @@ export interface ExpectedTransfer {
   /** Sub-identity id (muxed or memo) that the payment must prove, if any. */
   subId?: string | null;
   subIdKind?: 'MUXED' | 'MEMO' | null;
+  /** Exact transaction memo required by a payment intent (#52). */
+  memo?: { type: 'id' | 'text'; value: string } | null;
 }
 
 const fail = (code: string, message: string, details?: Record<string, unknown>) =>
@@ -250,6 +252,17 @@ export async function verifyUsdcTransfer(
         },
         'Payment envelope disagrees with SAC transfer events; trusting the events',
       );
+    }
+  }
+
+  if (expected.memo) {
+    if (memo.type !== expected.memo.type || memo.value !== expected.memo.value) {
+      throw fail('PAYMENT_MEMO_MISMATCH', 'The payment memo does not match this payment intent', {
+        expectedType: expected.memo.type,
+        expectedValue: expected.memo.value,
+        actualType: memo.type,
+        actualValue: memo.value,
+      });
     }
   }
 
