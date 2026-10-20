@@ -40,6 +40,6 @@ export function formatPrice(priceBaseUnits: bigint): string {
   const whole = priceBaseUnits / divisor;
   const fraction = priceBaseUnits % divisor;
   const fractionStr = fraction.toString().padStart(7, '0').replace(/0+$/, '');
-  return fractionStr ?  : ;
+  return fractionStr ? `${whole}.${fractionStr}` : `${whole}`;
 }
 

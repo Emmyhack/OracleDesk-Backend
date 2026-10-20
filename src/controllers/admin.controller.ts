@@ -398,6 +398,8 @@ export async function getAdminAudit(req: Request, res: Response): Promise<void> 
   const { page, limit, skip } = parsePagination(req.query as any);
   const { rows, total } = await listAdminAudit(limit, skip);
   sendSuccess(res, rows, 200, buildPaginationMeta(page, limit, total) as any);
+}
+
 // ─── Dispute monitor (#92) ───────────────────────────────────────────────
 
 const disputeIdSchema = z.object({ id: z.string().uuid('id must be a dispute review UUID') });

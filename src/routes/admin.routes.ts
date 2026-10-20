@@ -58,7 +58,7 @@ router.post('/agents/:agent/pause', requirePermission('agents.manage'), pauseAge
 router.post('/agents/:agent/resume', requirePermission('agents.manage'), resumeAgentControl);
 router.get('/status', requirePermission('admin.read'), getSystemStatus);
 router.get('/fees', requirePermission('admin.read'), getChainFeesReport);
-router.get('/disputes', requirePermission('disputes.manage'), listDisputes);
+router.get('/disputes', requirePermission('disputes.manage'), getDisputes);
 router.post('/disputes/:id/ack', requirePermission('disputes.manage'), ackDispute);
 router.post('/disputes/:id/cancel-tx', requirePermission('disputes.manage'), cancelDisputeTx);
 router.post('/disputes/:id/void-tx', requirePermission('disputes.manage'), voidDisputeTx);

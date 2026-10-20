@@ -143,7 +143,7 @@ async function bootstrap(): Promise<void> {
   // Price-mode reveal + resolve loop (#90).
   startPriceResolutionCron();
 
-  io.on('connection', (socket) => {
+  io.on('connection', async (socket) => {
     logger.info({ socketId: socket.id }, 'New client connected to socket.io');
     if (await isAdminToken(socket.handshake.auth?.token)) void socket.join('admins');
     

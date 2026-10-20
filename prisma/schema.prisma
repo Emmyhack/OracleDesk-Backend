@@ -820,7 +820,7 @@ model PaymentEvent {
   metadata      Json?
   createdAt     DateTime           @default(now())
   confirmedAt   DateTime?
-+  reconciled    Boolean            @default(false) // #56 reconciliation flag
+  reconciled    Boolean            @default(false) // #56 reconciliation flag
   
   user  User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   trace ReasoningTrace? @relation(fields: [traceId], references: [id], onDelete: SetNull)
@@ -852,11 +852,6 @@ model SpendingAllowance {
   currency      SettlementCurrency @default(USDC)
   lastResetAt   DateTime           @default(now())
   isActive      Boolean            @default(true)
-
-  // Exact‑unit raw fields (base‑unit integers stored as Decimal)
-  dailyLimitRaw    Decimal? @db.Decimal(39, 0)
-  perTraceLimitRaw Decimal? @db.Decimal(39, 0)
-  spentTodayRaw    Decimal? @db.Decimal(39, 0)
 
   createdAt     DateTime           @default(now())
   updatedAt     DateTime           @updatedAt
@@ -1069,78 +1064,6 @@ model IdempotencyKey {
   @@unique([scope, method, route, key])
   @@index([expiresAt])
   @@map("idempotency_keys")
-}
-
-/// External resolution signer attestations coordinated through the signer API (#91).
-/// `status`: PREPARED | SUBMITTED | CONFIRMED | FAILED.
-model SignerAttestation {
-  id              String   @id @default(uuid())
-  marketId        String
-  onChainMarketId BigInt
-  signer          String
-  /// YES | NO
-  outcome         String
-  status          String
-  preparedXdr     String
-  /// Hash of the prepared envelope (network-bound); signatures do not change it.
-  preparedHash    String
-  validUntil      DateTime
-  txHash          String?
-  ledger          Int?
-  error           String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-
-  @@unique([onChainMarketId, signer, outcome])
-  @@index([marketId])
-  @@map("signer_attestations")
-}
-
-/// Independent review of one ResolutionProposed event (#92).
-/// `verdict`: PENDING | AGREE | DISAGREE | INSUFFICIENT | ERROR.
-model DisputeReview {
-  id                 String    @id @default(uuid())
-  onChainMarketId    BigInt
-  /// chain_events.id of the ResolutionProposed event (or `missed:<market>` for the polling fallback).
-  proposalEventId    String    @unique
-  proposedOutcome    String
-  /// Ledger seconds. Null when the proposal was found by polling and its time is unknown.
-  proposedAt         BigInt?
-  windowEndsAt       BigInt?
-  verdict            String
-  independentOutcome String?
-  confidence         Float?
-  evidence           Json?
-  evidenceHash       String?
-  acknowledgedBy     String?
-  acknowledgedAt     DateTime?
-  /// FINALIZED | CANCELLED | null
-  resolvedAs         String?
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
-
-  @@index([verdict])
-  @@index([onChainMarketId])
-  @@map("dispute_reviews")
-}
-
-/// One alert sent (or attempted) for a review, deduplicated by `dedupeKey`.
-model AlertDelivery {
-  id        String    @id @default(uuid())
-  reviewId  String
-  /// INFO | WARN | CRITICAL
-  level     String
-  sink      String
-  /// reviewId:level:sink
-  dedupeKey String    @unique
-  /// SENT | FAILED
-  status    String
-  attempts  Int       @default(0)
-  sentAt    DateTime?
-  error     String?
-
-  @@index([reviewId])
-  @@map("alert_deliveries")
 }
 
 

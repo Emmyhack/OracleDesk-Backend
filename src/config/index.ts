@@ -427,34 +427,6 @@ const envSchema = z
     INDEXER_ENABLED: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
     INDEXER_POLL_MS: z.string().default('5000').transform(Number),
 
-    // ── Event bus and socket fan-out (#93) ────────────────────────────────
-    // Redis Streams bus between the indexer and the socket fan-out. When
-    // false, events go through an in-process bus (single instance only).
-    EVENT_BUS_ENABLED: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
-    // Approximate stream cap (XADD MAXLEN ~). chain_events stays the durable history.
-    EVENT_BUS_MAXLEN: z.string().default('100000').transform(Number)
-      .pipe(z.number().int().min(1000)),
-    // Identifies this process as fan-out leader candidate and in logs.
-    INSTANCE_ID: z.string().default('').transform((v) => v.trim() || `${os.hostname()}-${process.pid}`),
-
-    // ── Dispute monitor (#92) ─────────────────────────────────────────────
-    DISPUTE_MONITOR_ENABLED: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
-    // Independent confidence needed for an AGREE or DISAGREE verdict.
-    DISPUTE_AGREE_MIN_CONFIDENCE: z.string().default('0.8').transform(Number)
-      .pipe(z.number().gt(0).max(1)),
-    // Markets holding at least this much liquidity (USDC) need a cited primary
-    // (non-news) source before the review may say AGREE.
-    DISPUTE_HIGH_VALUE_LIQUIDITY: z.string().default('10000').transform(Number)
-      .pipe(z.number().nonnegative()),
-    // The resolver admin (guardian). The resolver has no admin view, so this
-    // is configuration; cancel_proposal / guardian_void_market are simulated as it.
-    RESOLVER_GUARDIAN_ADDRESS: optionalAddress,
-    // Comma-separated generic JSON webhooks and one Slack-compatible webhook.
-    // The URLs usually embed tokens: never logged.
-    ALERT_WEBHOOK_URLS: commaList(z.string().url()),
-    ALERT_SLACK_WEBHOOK_URL: optionalString.refine((v) => v === '' || URL.canParse(v), 'must be a URL'),
-    // HMAC-SHA256 key for the X-OracleDesk-Signature header on generic webhooks.
-    ALERT_WEBHOOK_SECRET: optionalString,
 
     // ── Health probes (#111) ──────────────────────────────────────────────
     // Dependencies that make /readyz fail. RPC is non-critical by default so
