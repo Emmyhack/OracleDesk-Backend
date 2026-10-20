@@ -508,6 +508,7 @@ export async function verifyContractChallenge(encoded: unknown): Promise<Sep45Ve
     token: signToken(user.id, clientEntry.address, {
       account: clientEntry.address,
       accountType: 'contract',
+      authTime: Math.floor(Date.now() / 1000),
     }),
     userId: user.id,
     walletAddress: clientEntry.address,

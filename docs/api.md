@@ -90,6 +90,7 @@ the same key on every retry of it.
 | `PUT /traces/access/allowance` | optional |
 | `POST /traces/verify` | optional |
 | `POST /traces/:id/unlock` | optional |
+| `POST /traces/payment-intents/:id/submit` | optional (idempotent by txHash) |
 | `POST /auth/challenge`, `POST /auth/verify` | not supported (the handshake is single-use, and `/auth/verify` returns a JWT that is never stored) |
 
 - **Format:** 1–255 printable ASCII characters. A UUID (`crypto.randomUUID()`) is recommended.
@@ -247,6 +248,14 @@ signature, address or memo mismatch).
 
 Multisig accounts: only a signature from `address`'s own key is accepted.
 Threshold-based SEP-10 verification is a backlog item.
+
+#### `POST /auth/refresh` (auth)
+
+Issues a new access token with the same `userId`, `walletAddress` and identity
+claims. It **copies** `auth_time` from the presented token, so a refresh never
+resets the wallet-proof age used by admin step-up (#49). Response:
+`{ token, userId, walletAddress }`. Errors: `401 UNAUTHORIZED`,
+`401 TOKEN_EXPIRED`, `401 INVALID_TOKEN`.
 
 ### Auth for contract accounts (SEP-45, #47)
 
@@ -497,10 +506,22 @@ was simulated, not submitted.
   "traceHash": "64-hex",
   "onChainTraceId": "3",
   "publishTxHash": "…",
-  "previewSources": [{ "source": "FRED", "weight": 0.9, "signal": "…" }],
+  "previewSources": [{ "source": "NEWSAPI", "publisher": "Reuters", "signal": "…" }],
   "market": { "question": "…", "category": "CRYPTO", "settlementCurrency": "USDC" },
   "createdAt": "…"
 }
+```
+
+`previewSources` names the source, publisher and headline only (#73). Traces
+created before #73 carry `{ source, weight, signal }` instead. The full trace
+(paid) lists `sourcesUsed`; entries written since #73 also carry the evidence's
+`signalId`, `url`, `publisher` and `publishedAt`, and `weight` is its relevance
+score. Treat all four as optional when reading older traces:
+
+```json
+{ "source": "NEWSAPI", "weight": 0.8812, "signal": "Federal Reserve holds rates steady…",
+  "signalId": "uuid", "url": "https://reuters.com/markets/…", "publisher": "Reuters",
+  "publishedAt": "2026-10-18T09:00:00.000Z" }
 ```
 
 `traceHash` is the sha256 of the exact bytes pinned to IPFS (renamed from
@@ -572,7 +593,11 @@ pagination in `meta`.
 #### `GET /traces/:id` (optional auth)
 
 Without access: the preview (first two sources) plus
-`{ accessLevel: "FREE_PREVIEW", lockedFields, unlockPriceRaw, dailyPassPriceRaw }`.
+`{ accessLevel: "FREE_PREVIEW", lockedFields, unlockPriceRaw, unlockPrice, unlockPriceStatus, paymentRequirements, dailyPassPriceRaw, dailyPassPrice }`.
+The trace unlock price is discovered live from the authoritative x402 service (#63)
+and validated against deployment network and USDC asset rules. If the x402 service
+is unavailable or requirements fail validation, `unlockPriceStatus` is `"unknown"`,
+`unlockPriceRaw` is `null`, and no fallback price is invented.
 With a daily pass: the full trace and `accessLevel: "DAILY_PASS"`.
 (Previously the route never read the token, so subscribers always got the
 preview. Fixed.)
@@ -635,7 +660,7 @@ Response `201`: `{ subscription, trace }`.
 Errors: `400 VALIDATION_ERROR`, `402 PAYMENT_NOT_FOUND`,
 `402 PAYMENT_FAILED`, `402 PAYMENT_WRONG_TOKEN`, `402 PAYMENT_WRONG_SENDER`,
 `402 PAYMENT_WRONG_RECIPIENT`, `402 PAYMENT_INSUFFICIENT`,
-`409 PAYMENT_ALREADY_USED`, `402 ALLOWANCE_DAILY_LIMIT`.
+`409 PAYMENT_ALREADY_USED`. Over-allowance payments are still granted and flagged (#53).
 
 > **Product decision for a human:** `PAYMENTS_RECIPIENT` defaults to the
 > treasury contract. The treasury's trading capital *is* its USDC balance,
@@ -645,8 +670,70 @@ Errors: `400 VALIDATION_ERROR`, `402 PAYMENT_NOT_FOUND`,
 
 #### `GET /traces/access/allowance`, `PUT /traces/access/allowance` (auth)
 
-Unchanged. `PUT` body `{ dailyLimit: number, perTraceLimit: number, currency?: "USDC" }`
-(display USDC). Response: `SpendingAllowance | null`.
+`PUT` body `{ dailyLimit: number, perTraceLimit: number, dailyLimitRaw?: "base units", perTraceLimitRaw?: "base units", currency?: "USDC" }`.
+The float fields are display mirrors; enforcement uses the raw `NUMERIC(39,0)`
+columns (#53). Response: `SpendingAllowance | null`.
+
+#### `POST /traces/access/preauthorize` (auth)
+
+Advisory-only allowance check (#53). Body
+`{ type?: "DAILY_PASS" | "PER_TRACE", amountRaw?: "base units" }`; for
+`DAILY_PASS` the price defaults to `DAILY_PASS_PRICE_RAW` and for `PER_TRACE`
+`amountRaw` is required. It never writes or reserves budget. Response:
+
+```json
+{
+  "type": "DAILY_PASS",
+  "amountRaw": "5000000",
+  "active": true,
+  "allowed": false,
+  "reason": "ALLOWANCE_DAILY_LIMIT",
+  "dailyLimitRaw": "5000000",
+  "perTraceLimitRaw": "5000000",
+  "spentTodayRaw": "4000000",
+  "remainingRaw": "1000000",
+  "overageRaw": "0",
+  "wouldOverflowRaw": "4000000"
+}
+```
+
+An over-limit payment is still accepted on-chain and flagged
+(`allowanceOverage` on the `PaymentEvent`, `overageRaw` on the allowance); it is
+never refused and never silently dropped.
+
+#### `POST /traces/payment-intents` (auth)
+
+Issues a server-priced `DAILY_PASS` intent (#52): the server fixes `amountRaw`,
+`recipient`, `token`, a unique `memo`, and `expiresAt`. Clients should pay that
+exact transfer and then `POST` the hash. Response `201`:
+`{ intent, allowance }` where `allowance` is the preauthorization above.
+Errors: `429 TOO_MANY_PAYMENT_INTENTS`.
+
+#### `GET /traces/payment-intents/:id` (auth)
+
+The caller's own intent. Errors: `404 PAYMENT_INTENT_NOT_FOUND`.
+
+#### `POST /traces/payment-intents/:id/submit` (auth)
+
+Body `{ txHash: "64-hex" }`. Verifies the transfer's sender, recipient, token,
+memo and amount. A transaction not yet visible moves the intent to
+`PENDING_PAYMENT` and a background confirmer retries with backoff; a confirmed
+payment returns `201` with the intent `CONFIRMED` and its `subscriptionId`.
+Response `202` when still pending. Underpayments and payments whose ledger
+close time is after `expiresAt` are recorded as `PaymentEvent`s with no
+coverage and the intent becomes `REFUND_REQUIRED`. Errors:
+`400 VALIDATION_ERROR`, `409 PAYMENT_ALREADY_USED`,
+`409 PAYMENT_INTENT_CLOSED`, `409 PAYMENT_INTENT_TX_MISMATCH`,
+`409 PAYMENT_CLAIM_IN_PROGRESS`, `402 PAYMENT_MEMO_MISMATCH`.
+
+#### Pass windows and stacking (#54)
+
+New subscriptions store `startsAt`, `endsAt`, `purchaseLedger` and keep
+`expiresAt = endsAt`. Coverage is `[startsAt, endsAt)` anchored to the payment
+transaction's ledger close time. A second pass stacks: it starts at the later
+of the ledger close time and the last active/queued pass's `endsAt`. A payment
+whose computed window is already in the past is recorded but grants no
+coverage (`EXPIRED`).
 
 #### `GET /traces/payments` (auth)
 
@@ -753,11 +840,39 @@ Not verified: the contracts repo has no known x402-on-Stellar facilitator URL
 #### `GET /portfolio`
 
 The agent's (treasury's) portfolio. Response:
-`{ totalUsdc, deployedCapital, availableCapital, openPositions, totalPnl, dailyPnl, builderFeesEarned, correlationRisk, availableCapitalRaw }`.
-`availableCapitalRaw` is `treasury.available_capital()` read live (`null` if
-the RPC read fails). The float fields are the DB's view.
+`{ totalUsdc, deployedCapital, availableCapital, openPositions, totalPnl, dailyPnl, builderFeesEarned, treasury, correlationRisk, availableCapitalRaw, latestReport }`.
+
+Capital comes from the treasury contract, read live on every request (#76):
+
+```json
+"treasury": {
+  "availableRaw": "8000000000",
+  "maxTradeRaw": "5000000000",
+  "maxMarketRaw": "10000000000",
+  "maxDailyRaw": "20000000000",
+  "dailyUsedRaw": "1500000000",
+  "dailyRemainingRaw": "18500000000",
+  "dailyResetsAt": "2026-10-19T08:14:05.000Z"
+}
+```
+
+All `*Raw` values are 7-decimal USDC base units as decimal strings.
+`availableRaw` is `available_capital()`, the treasury's free USDC (it includes
+subscription revenue paid to the treasury and excludes capital locked in
+markets). `maxTradeRaw` / `maxMarketRaw` / `maxDailyRaw` are `get_config()`'s
+caps; `dailyUsedRaw` and `dailyResetsAt` come from `daily_usage()`, a rolling
+24 h window that starts at the first spend after the previous window expired
+(not UTC midnight). `dailyRemainingRaw` = `maxDailyRaw − dailyUsedRaw`.
+
+The float fields are derived from it: `availableCapital` = `availableRaw` in
+USDC, `totalUsdc` = `availableCapital + deployedCapital`. If the chain read
+fails, `treasury`, `availableCapital`, `totalUsdc` and
+`correlationRisk.isOverExposed` are `null` and the database fields are still
+returned. `availableCapitalRaw` (= `treasury.availableRaw`) is kept for
+compatibility.
 
 `correlationRisk` (#80): `{ pairs, totalExposure, isOverExposed, matrix, method, snapshotId }`.
+`isOverExposed` compares open exposure with 10% of the treasury's free cash.
 Each pair is `{ marketIdA, marketIdB, correlationScore, relationship, method }`
 for open positions with `|correlationScore| ≥ 0.60`. `correlationScore` is the
 estimate used for sizing: the latest correlation snapshot's value for the pair
@@ -863,7 +978,29 @@ Once confirmed, the copy trade is stored with `status: "EXECUTED"`, and records 
 
 ### Admin (admin auth)
 
-Admin routes require a valid JWT whose `walletAddress` is present in `ADMIN_ADDRESSES`.
+Admin routes require a valid JWT for a `G…` base account that holds an
+assignment in the database RBAC tables (#49). `ADMIN_ADDRESSES` only seeds the
+first deploy as `super_admin`; after that the database is authoritative and a
+revoked address loses access immediately. JWT claims never carry permissions.
+
+Two roles' permissions matter for step-up: sensitive routes require an
+`auth_time` no older than `STEP_UP_MAX_AGE_SECONDS` (default 300) and return
+`403 STEP_UP_REQUIRED` otherwise. Sensitive routes are admin management
+(grant/revoke/list, audit) and all treasury writes.
+
+Admin-management endpoints:
+
+- `GET /admin/admins` (`admin.read`, step-up)
+- `GET /admin/roles` (`admin.read`)
+- `POST /admin/admins/grant` `{ walletAddress: "G…", roleName }` (`admin.manage`, step-up)
+- `POST /admin/admins/revoke` `{ walletAddress: "G…" }` (`admin.manage`, step-up; refuses `409 LAST_SUPER_ADMIN`)
+- `GET /admin/audit?page&limit` (`admin.audit.read`, step-up)
+
+All other admin routes map to `treasury.read`/`treasury.operate`,
+`agents.manage`, `disputes.manage`, `trace_audit.run`,
+`reconciliation.run`, `markets.generate` and `calibration.recompute`.
+Unsafe requests that pass a permission check are appended to `admin_audit_logs`;
+the table rejects `UPDATE`/`DELETE` at the database level.
 
 #### `GET /admin/trace-audit` (admin)
 

@@ -96,6 +96,17 @@ enum PaymentEventStatus {
   REFUNDED
 }
 
+/// Server-issued payment intents (#52). OPEN -> PENDING_PAYMENT -> CONFIRMED,
+/// with FAILED / EXPIRED / REFUND_REQUIRED as terminal or manual-review states.
+enum PaymentIntentStatus {
+  OPEN
+  PENDING_PAYMENT
+  CONFIRMED
+  FAILED
+  EXPIRED
+  REFUND_REQUIRED
+}
+
 /// Admin refund lifecycle (#57). Transitions are enforced in the service:
 /// REQUESTED -> APPROVED -> PREPARED -> SUBMITTED -> CONFIRMED, plus REJECTED
 /// from REQUESTED and FAILED from PREPARED/SUBMITTED.
@@ -223,6 +234,12 @@ model Market {
   lastReconciledAt   DateTime?          @db.Timestamptz(3)
   /// Resolvability block pinned in question document v2 (source id, URL, measurable, comparator, threshold, deadline, instructions). Null for markets created before #74.
   resolutionDetails  Json?
+  /// LlmProvenance of the call that proposed this market (#66). Null for older rows.
+  generationProvenance Json?
+  /// Embedding of the normalised question (#69), vector(768). Read and written with raw SQL only.
+  questionEmbedding  Unsupported("vector(768)")?
+  /// Model that produced questionEmbedding; vectors are compared only within one model.
+  embeddingModel     String?
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
 
@@ -242,6 +259,7 @@ model Market {
   @@index([settlementCurrency])
   @@index([resolvedAt])
   @@index([lastReconciledAt])
+  @@index([resolutionSpec], type: Gin)
   @@map("markets")
 }
 
@@ -454,6 +472,8 @@ model ReasoningTrace {
   @@index([traceHash])
   @@index([createdAt])
   @@index([marketId, createdAt])
+  /// Retention (#73) keeps signals cited by a trace: `sourcesUsed @> [{"signalId": …}]`.
+  @@index([sourcesUsed(ops: JsonbPathOps)], type: Gin)
   @@map("reasoning_traces")
 }
 
@@ -526,7 +546,15 @@ model Subscription {
   currency   SettlementCurrency @default(USDC)
   /// CHECK: subscriptions_tx_hash_format (txHash IS NULL OR 64 hex chars)
   txHash     String?            @unique
+  /// Ledger that contained the payment transaction (#54).
+  purchaseLedger Int?
+  /// Ledger-close-anchored coverage window (#54). expiresAt is kept for
+  /// backwards compatibility and always mirrors endsAt for new rows.
+  startsAt   DateTime?
+  endsAt     DateTime?
   expiresAt  DateTime?
+  /// Server-issued intent that settled this subscription (#52).
+  paymentIntentId String?       @unique
   /// Set when the PASS_EXPIRING socket event was claimed for this pass (#94).
   expiryNotifiedAt DateTime?
   createdAt  DateTime           @default(now())
@@ -538,6 +566,7 @@ model Subscription {
   @@index([userId])
   @@index([status])
   @@index([expiresAt])
+  @@index([userId, status, endsAt])
   @@map("subscriptions")
 }
 
@@ -664,6 +693,74 @@ model SignalCache {
   @@map("signal_cache")
 }
 
+/// Normalised evidence with a stable identity (#73). One row per article URL
+/// (or FRED observation), however often it is fetched; syndicated copies share
+/// a clusterId. Trace payloads cite rows by id. Replaces SignalCache, which is
+/// no longer written and is dropped in a follow-up migration.
+model Signal {
+  id                 String          @id @default(uuid())
+  /// NEWSAPI | FRED | GDELT
+  source             String
+  /// sha256 of the canonical URL, or of FRED:<series>:<observation date>.
+  dedupKey           String          @unique
+  externalId         String?
+  url                String?
+  publisher          String?
+  title              String
+  summary            String?
+  publishedAt        DateTime        @db.Timestamptz(3)
+  firstSeenAt        DateTime        @default(now()) @db.Timestamptz(3)
+  lastSeenAt         DateTime        @default(now()) @db.Timestamptz(3)
+  seenCount          Int             @default(1)
+  category           MarketCategory?
+  categoryConfidence Float?
+  /// Id of the oldest signal in this near-duplicate cluster (its own id when it started one).
+  clusterId          String?
+  /// FRED observation value.
+  numericValue       Float?
+  /// 64-bit SimHash of title + summary prefix, signed.
+  simhash            BigInt?
+
+  @@index([publishedAt])
+  @@index([clusterId])
+  @@index([source, lastSeenAt])
+  @@index([category, publishedAt])
+  @@map("signals")
+}
+
+/// One provider call (#73): when, how long, outcome and item counts.
+model SignalFetch {
+  id                 String   @id @default(uuid())
+  source             String
+  /// sha256 of the canonical request with credentials removed.
+  requestFingerprint String
+  startedAt          DateTime @default(now()) @db.Timestamptz(3)
+  durationMs         Int
+  /// ok | error | timeout | skipped_no_key
+  status             String
+  itemCount          Int      @default(0)
+  /// Provider items dropped before storage (no URL, unparseable date, missing value).
+  rejectedCount      Int      @default(0)
+  error              String?
+  rawPayloadId       String?
+
+  @@index([source, startedAt])
+  @@index([startedAt])
+  @@map("signal_fetches")
+}
+
+/// Provider response as received, credentials stripped, kept for
+/// SIGNAL_RAW_RETENTION_DAYS (#73).
+model SignalRawPayload {
+  id        String   @id @default(uuid())
+  source    String
+  payload   Json
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([createdAt])
+  @@map("signal_raw_payloads")
+}
+
 /// Ledger cursor for the Stellar event indexer, one row per network.
 model IndexerCursor {
   id         String   @id
@@ -712,17 +809,25 @@ model PaymentEvent {
   currency      SettlementCurrency @default(USDC)
   status        PaymentEventStatus @default(PENDING)
   traceId       String?
+  /// Ledger / close time of the verified transfer (#53/#54).
+  ledger        Int?
+  ledgerCloseTime DateTime?
+  /// Set when the verified amount exceeded the remaining spending approval.
+  allowanceOverage Boolean         @default(false)
+  allowanceOverageRaw Decimal?     @db.Decimal(39, 0)
+  /// Server-issued intent that settled this payment (#52).
+  paymentIntentId String?          @unique
   metadata      Json?
   createdAt     DateTime           @default(now())
   confirmedAt   DateTime?
-
+  reconciled    Boolean            @default(false) // #56 reconciliation flag
+  
   user  User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   trace ReasoningTrace? @relation(fields: [traceId], references: [id], onDelete: SetNull)
   refund Refund?
 
   @@index([userId])
-  @@index([txHash])
-  @@map("payment_events")
+
 }
 
 // User-defined spending approvals for nanopayment trace access
@@ -735,6 +840,15 @@ model SpendingAllowance {
   perTraceLimit Float
   /// CHECK: spending_allowances_spent_today_nonneg (spentToday >= 0)
   spentToday    Float              @default(0)
+  /// Exact base-unit accounting (#53). The Float columns above are display
+  /// mirrors; limits and spend are never enforced from them.
+  dailyLimitRaw    Decimal          @default(0) @db.Decimal(39, 0)
+  perTraceLimitRaw Decimal          @default(0) @db.Decimal(39, 0)
+  spentTodayRaw    Decimal          @default(0) @db.Decimal(39, 0)
+  /// Amount accepted while already at the limit; never silently discarded.
+  overageRaw       Decimal          @default(0) @db.Decimal(39, 0)
+  /// UTC day the raw counters belong to.
+  windowStartedAt  DateTime         @default(now())
   currency      SettlementCurrency @default(USDC)
   lastResetAt   DateTime           @default(now())
   isActive      Boolean            @default(true)
@@ -746,6 +860,18 @@ model SpendingAllowance {
 
   @@index([userId])
   @@map("spending_allowances")
+}
+
+// ─────────────────────────── PRICING SCHEDULE ───────────────────────────
+model PriceSchedule {
+  id                String   @id @default(cuid())
+  version           Int      @unique
+  dailyPassPriceRaw String   // USDC base‑unit integer stored as string
+  perTracePriceRaw  String   // USDC base‑unit integer stored as string
+  effectiveAt       DateTime // when this version becomes active
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  @@map("price_schedules")
 }
 
 /// Exact bytes of IPFS documents the backend pinned or verified (#100).
@@ -940,78 +1066,6 @@ model IdempotencyKey {
   @@map("idempotency_keys")
 }
 
-/// External resolution signer attestations coordinated through the signer API (#91).
-/// `status`: PREPARED | SUBMITTED | CONFIRMED | FAILED.
-model SignerAttestation {
-  id              String   @id @default(uuid())
-  marketId        String
-  onChainMarketId BigInt
-  signer          String
-  /// YES | NO
-  outcome         String
-  status          String
-  preparedXdr     String
-  /// Hash of the prepared envelope (network-bound); signatures do not change it.
-  preparedHash    String
-  validUntil      DateTime
-  txHash          String?
-  ledger          Int?
-  error           String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-
-  @@unique([onChainMarketId, signer, outcome])
-  @@index([marketId])
-  @@map("signer_attestations")
-}
-
-/// Independent review of one ResolutionProposed event (#92).
-/// `verdict`: PENDING | AGREE | DISAGREE | INSUFFICIENT | ERROR.
-model DisputeReview {
-  id                 String    @id @default(uuid())
-  onChainMarketId    BigInt
-  /// chain_events.id of the ResolutionProposed event (or `missed:<market>` for the polling fallback).
-  proposalEventId    String    @unique
-  proposedOutcome    String
-  /// Ledger seconds. Null when the proposal was found by polling and its time is unknown.
-  proposedAt         BigInt?
-  windowEndsAt       BigInt?
-  verdict            String
-  independentOutcome String?
-  confidence         Float?
-  evidence           Json?
-  evidenceHash       String?
-  acknowledgedBy     String?
-  acknowledgedAt     DateTime?
-  /// FINALIZED | CANCELLED | null
-  resolvedAs         String?
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
-
-  @@index([verdict])
-  @@index([onChainMarketId])
-  @@map("dispute_reviews")
-}
-
-/// One alert sent (or attempted) for a review, deduplicated by `dedupeKey`.
-model AlertDelivery {
-  id        String    @id @default(uuid())
-  reviewId  String
-  /// INFO | WARN | CRITICAL
-  level     String
-  sink      String
-  /// reviewId:level:sink
-  dedupeKey String    @unique
-  /// SENT | FAILED
-  status    String
-  attempts  Int       @default(0)
-  sentAt    DateTime?
-  error     String?
-
-  @@index([reviewId])
-  @@map("alert_deliveries")
-}
-
 
 /// Empirical pairwise market correlations, recomputed on a schedule (#80).
 model CorrelationSnapshot {
@@ -1125,6 +1179,7 @@ model ChainTransaction {
   @@index([status, updatedAt])
   @@index([landedHash])
   @@index([kind, refId])
+  @@index([feeBumpHashes], type: Gin)
   @@map("chain_transactions")
 }
 
@@ -1185,3 +1240,175 @@ model MarketCreationAttempt {
   @@map("market_creation_attempts")
 }
 
+/// Database-backed admin RBAC (#49). Roles are fixed values seeded on first
+/// boot; assignments are the source of truth after that. JWT claims never
+/// carry permissions.
+model AdminPermission {
+  key         String   @id
+  description String?
+  createdAt   DateTime @default(now())
+  roles       AdminRolePermission[]
+  @@map("admin_permissions")
+}
+
+model AdminRole {
+  name        String   @id
+  description String?
+  createdAt   DateTime @default(now())
+  permissions AdminRolePermission[]
+  assignments AdminRoleAssignment[]
+  @@map("admin_roles")
+}
+
+model AdminRolePermission {
+  roleName      String
+  permissionKey String
+  role          AdminRole       @relation(fields: [roleName], references: [name], onDelete: Cascade)
+  permission    AdminPermission @relation(fields: [permissionKey], references: [key], onDelete: Cascade)
+  createdAt     DateTime        @default(now())
+
+  @@id([roleName, permissionKey])
+  @@index([permissionKey])
+  @@map("admin_role_permissions")
+}
+
+model AdminRoleAssignment {
+  id            String   @id @default(uuid())
+  walletAddress String   @unique
+  roleName      String
+  assignedBy    String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  role          AdminRole @relation(fields: [roleName], references: [name], onDelete: Restrict)
+
+  @@index([roleName])
+  @@map("admin_role_assignments")
+}
+
+/// Append-only audit trail for admin actions (#49). The migration adds a
+/// trigger that rejects UPDATE and DELETE.
+model AdminAuditLog {
+  id         String   @id @default(uuid())
+  actor      String
+  action     String
+  target     String?
+  roleName   String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([actor, createdAt])
+  @@index([target])
+  @@map("admin_audit_logs")
+}
+
+/// A server-issued payment intent (#52): the server fixes the amount, memo,
+/// recipient and expiry so a pending transaction can be confirmed without the
+/// client resubmitting arbitrary details.
+model PaymentIntent {
+  id              String              @id @default(uuid())
+  userId          String
+  /// Base account that must be the verified sender.
+  walletAddress   String
+  status          PaymentIntentStatus @default(OPEN)
+  type            SubscriptionType    @default(DAILY_PASS)
+  amountRaw       Decimal             @db.Decimal(39, 0)
+  currency        SettlementCurrency  @default(USDC)
+  recipient       String
+  token           String
+  memo            String              @unique
+  nonce           String              @unique
+  txHash          String?             @unique
+  subscriptionId  String?             @unique
+  paymentEventId  String?             @unique
+  overpaymentRaw  Decimal?            @db.Decimal(39, 0)
+  underpaymentRaw Decimal?            @db.Decimal(39, 0)
+  latePayment     Boolean             @default(false)
+  refundRequired  Boolean             @default(false)
+  attempts        Int                 @default(0)
+  nextAttemptAt   DateTime?
+  expiresAt       DateTime
+  submittedAt     DateTime?
+  confirmedAt     DateTime?
+  expiredAt       DateTime?
+  failureCode     String?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  @@index([userId, status])
+  @@index([status, nextAttemptAt])
+  @@index([expiresAt])
+  @@map("payment_intents")
+}
+
+/// External resolution signer attestations coordinated through the signer API (#91).
+/// `status`: PREPARED | SUBMITTED | CONFIRMED | FAILED.
+model SignerAttestation {
+  id              String   @id @default(uuid())
+  marketId        String
+  onChainMarketId BigInt
+  signer          String
+  /// YES | NO
+  outcome         String
+  status          String
+  preparedXdr     String
+  /// Hash of the prepared envelope (network-bound); signatures do not change it.
+  preparedHash    String
+  validUntil      DateTime
+  txHash          String?
+  ledger          Int?
+  error           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([onChainMarketId, signer, outcome])
+  @@index([marketId])
+  @@map("signer_attestations")
+}
+
+/// Independent review of one ResolutionProposed event (#92).
+/// `verdict`: PENDING | AGREE | DISAGREE | INSUFFICIENT | ERROR.
+model DisputeReview {
+  id                 String    @id @default(uuid())
+  onChainMarketId    BigInt
+  /// chain_events.id of the ResolutionProposed event (or `missed:<market>` for the polling fallback).
+  proposalEventId    String    @unique
+  proposedOutcome    String
+  /// Ledger seconds. Null when the proposal was found by polling and its time is unknown.
+  proposedAt         BigInt?
+  windowEndsAt       BigInt?
+  verdict            String
+  independentOutcome String?
+  confidence         Float?
+  evidence           Json?
+  evidenceHash       String?
+  acknowledgedBy     String?
+  acknowledgedAt     DateTime?
+  /// FINALIZED | CANCELLED | null
+  resolvedAs         String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([verdict])
+  @@index([onChainMarketId])
+  @@map("dispute_reviews")
+}
+
+/// One alert sent (or attempted) for a review, deduplicated by `dedupeKey`.
+model AlertDelivery {
+  id        String    @id @default(uuid())
+  reviewId  String
+  /// INFO | WARN | CRITICAL
+  level     String
+  sink      String
+  /// reviewId:level:sink
+  dedupeKey String    @unique
+  /// SENT | FAILED
+  status    String
+  attempts  Int       @default(0)
+  sentAt    DateTime?
+  error     String?
+
+  @@index([reviewId])
+  @@map("alert_deliveries")
+}

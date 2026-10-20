@@ -6,6 +6,9 @@ import { AgentPausedError } from './agent-controls.service';
 import type { KellyResult, TradePayload, KellyInput } from '../types';
 import { agentBuy, getOnChainMarket, Outcomes, quoteBuy, ExpiredError } from './chain.service';
 import { ChainPendingError, TransactionError } from './stellar/errors';
+
+/** Collateral in base units: amountRaw when the trader sized in base units (#76), else the display amount. */
+const collateralOf = (payload: TradePayload): bigint => payload.amountRaw ?? usdcFromNumber(payload.amount);
 import { isPermanentFailure } from './stellar/failures';
 import { registerHandler, type ChainTransactionRow, type CompletionOutcome } from './stellar/outbox';
 import { Prisma } from '@prisma/client';
@@ -13,6 +16,8 @@ import { enqueueTracePublication } from './trace-publish.service';
 import { tradeTraceAction } from '../lib/trace-actions';
 import { bigintToDecimalString, mulDivCeil, usdcFromNumber } from '../lib/amounts';
 import { config } from '../config';
+import { TREASURY_CAP_ERRORS } from './treasury-budget.service';
+import { ChainError } from './stellar/errors';
 
 // ─── Risk constants ───
 const MAX_CORRELATED_EXPOSURE  = 0.05;   // 5% total correlated exposure
@@ -205,7 +210,7 @@ export async function executeTrade(payload: TradePayload): Promise<{
 
         // Re-quote market to verify edge
         const outcome = payload.direction === 'YES' ? Outcomes.Yes : Outcomes.No;
-        const collateralIn = usdcFromNumber(payload.amount);
+        const collateralIn = collateralOf(payload);
         const freshQuoted = await quoteBuy(market.onChainMarketId!, outcome, collateralIn);
         const freshPrice = Math.min(1, Number(collateralIn) / Number(freshQuoted));
         const freshEdge = Math.abs(payload.price - freshPrice);
@@ -244,6 +249,18 @@ export async function executeTrade(payload: TradePayload): Promise<{
         ? (err.details as { failureClass?: string } | undefined)?.failureClass
         : null;
       const permanent = failure ? isPermanentFailure(failure as any) : !(err instanceof TransactionError);
+
+      // The treasury refused the spend on a cap (#76): the budget estimate and
+      // the chain disagreed. Logged with the snapshot the size came from.
+      const contractError = err instanceof ChainError ? err.contractError : null;
+      if (contractError && TREASURY_CAP_ERRORS.has(contractError)) {
+        await logAgentAction('TRADER', 'WARN', 'TREASURY_CAP_REJECTED', payload.marketId, {
+          tradeId: trade.id,
+          contractError,
+          amountRaw: collateralOf(payload).toString(),
+          budget: payload.budget ?? null,
+        });
+      }
 
       if (permanent) {
         await prisma.trade.update({
@@ -400,7 +417,8 @@ async function submitTradeTransaction(
     throw new AppError(409, 'MARKET_NOT_ON_CHAIN', 'Market has no on-chain id yet');
   }
   const outcome = payload.direction === 'YES' ? Outcomes.Yes : Outcomes.No;
-  const collateralIn = usdcFromNumber(payload.amount);
+  // No float round trip when the trader sized in base units (#76).
+  const collateralIn = collateralOf(payload);
   // fee_bps is fixed at market creation; the fee is charged on collateral in.
   const onChain = await getOnChainMarket(market.onChainMarketId);
   const feeRaw = mulDivCeil(collateralIn, BigInt(onChain.fee_bps), 10_000n);

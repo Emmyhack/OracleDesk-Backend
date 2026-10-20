@@ -1,0 +1,222 @@
+{
+  "version": 1,
+  "synthetic": true,
+  "note": "Synthetic: authored from the scripted upstream in tests/agents-cycle.test.ts. Re-record with live keys per CONTRIBUTING.md.",
+  "interactions": [
+    {
+      "kind": "http",
+      "fingerprint": "b07c8e78d62bf2126f06b835ca47a06bb9330a3db20bb23f677a2b2ce276dbbf",
+      "request": {
+        "method": "GET",
+        "url": "https://newsapi.org/v2/everything",
+        "params": {
+          "language": "en",
+          "pageSize": "30",
+          "q": "Federal Reserve OR ECB OR inflation OR \"interest rates\" OR GDP OR election OR parliament OR \"political vote\" OR president OR senate OR geopolitical OR sanctions OR treaty OR conflict OR bitcoin OR ethereum OR crypto OR \"DeFi\" OR \"championship\" OR \"World Cup\" OR \"NBA Finals\" OR \"Super Bowl\" OR \"Premier League\" OR Oscar OR Grammy OR Emmy OR \"box office\" OR \"Billboard chart\"",
+          "sortBy": "publishedAt"
+        }
+      },
+      "response": {
+        "status": "ok",
+        "totalResults": 6,
+        "articles": [
+          {
+            "source": {
+              "id": null,
+              "name": "Example Wire"
+            },
+            "title": "Fed officials signal a rate cut at the December meeting",
+            "description": "Two Federal Reserve governors said inflation is close enough to target to cut rates at the December meeting.",
+            "url": "https://wire.example.com/fed-december-cut",
+            "publishedAt": "2026-10-18T11:00:00.000Z"
+          },
+          {
+            "source": {
+              "id": null,
+              "name": "Example Europe"
+            },
+            "title": "ECB holds deposit rate as eurozone growth stalls",
+            "description": "The European Central Bank left its deposit facility rate unchanged.",
+            "url": "https://europe.example.com/ecb-holds",
+            "publishedAt": "2026-10-18T10:00:00.000Z"
+          },
+          {
+            "source": {
+              "id": null,
+              "name": "Example Politics"
+            },
+            "title": "Senate schedules vote on the budget resolution",
+            "description": "Leaders set a procedural vote for next week.",
+            "url": "https://politics.example.com/senate-vote",
+            "publishedAt": "2026-10-18T09:30:00.000Z"
+          },
+          {
+            "source": {
+              "id": null,
+              "name": "Example Crypto"
+            },
+            "title": "Bitcoin steadies after a volatile week",
+            "description": "The largest cryptocurrency traded in a narrow range.",
+            "url": "https://crypto.example.com/btc-steadies",
+            "publishedAt": "2026-10-18T09:00:00.000Z"
+          },
+          {
+            "source": {
+              "id": null,
+              "name": "Example Sport"
+            },
+            "title": "Premier League leaders extend their unbeaten run",
+            "description": "A late goal kept the streak alive.",
+            "url": "https://sport.example.com/unbeaten",
+            "publishedAt": "2026-10-18T08:40:00.000Z"
+          },
+          {
+            "source": {
+              "id": null,
+              "name": "Example Arts"
+            },
+            "title": "Box office weekend led by an animated sequel",
+            "description": "The sequel opened above forecasts.",
+            "url": "https://arts.example.com/box-office",
+            "publishedAt": "2026-10-18T08:00:00.000Z"
+          }
+        ]
+      },
+      "recordedAt": "2026-10-19T10:18:48.375Z"
+    },
+    {
+      "kind": "http",
+      "fingerprint": "70c247b485c25042a7c15594a424d202aafaaa74b4d6f48f0872564cdae16b62",
+      "request": {
+        "method": "GET",
+        "url": "https://api.stlouisfed.org/fred/series/observations",
+        "params": {
+          "file_type": "json",
+          "limit": "2",
+          "series_id": "FEDFUNDS",
+          "sort_order": "desc"
+        }
+      },
+      "response": {
+        "observations": [
+          {
+            "date": "2026-09-01",
+            "value": "4.33"
+          },
+          {
+            "date": "2026-08-01",
+            "value": "4.33"
+          }
+        ]
+      },
+      "recordedAt": "2026-10-19T10:18:48.375Z"
+    },
+    {
+      "kind": "http",
+      "fingerprint": "91679c1276d9ffaa656581552e75536191ff65d4516d0b85d3f11a1bc5c58933",
+      "request": {
+        "method": "GET",
+        "url": "https://api.stlouisfed.org/fred/series/observations",
+        "params": {
+          "file_type": "json",
+          "limit": "2",
+          "series_id": "CPIAUCSL",
+          "sort_order": "desc"
+        }
+      },
+      "response": {
+        "observations": [
+          {
+            "date": "2026-09-01",
+            "value": "321.465"
+          },
+          {
+            "date": "2026-08-01",
+            "value": "320.580"
+          }
+        ]
+      },
+      "recordedAt": "2026-10-19T10:18:48.375Z"
+    },
+    {
+      "kind": "http",
+      "fingerprint": "543aa50d9c1db1fed4aab07e2f6067448de9630df926a3a1d51d5f02cb9bc9b1",
+      "request": {
+        "method": "GET",
+        "url": "https://api.stlouisfed.org/fred/series/observations",
+        "params": {
+          "file_type": "json",
+          "limit": "2",
+          "series_id": "UNRATE",
+          "sort_order": "desc"
+        }
+      },
+      "response": {
+        "observations": [
+          {
+            "date": "2026-09-01",
+            "value": "4.2"
+          },
+          {
+            "date": "2026-08-01",
+            "value": "4.1"
+          }
+        ]
+      },
+      "recordedAt": "2026-10-19T10:18:48.375Z"
+    },
+    {
+      "kind": "http",
+      "fingerprint": "23d801e3eaf45c8749d0e59c1342f18ce5a36b4e8223079ddc2b201fb86ecd44",
+      "request": {
+        "method": "GET",
+        "url": "https://api.stlouisfed.org/fred/series/observations",
+        "params": {
+          "file_type": "json",
+          "limit": "2",
+          "series_id": "T10Y2Y",
+          "sort_order": "desc"
+        }
+      },
+      "response": {
+        "observations": [
+          {
+            "date": "2026-10-16",
+            "value": "0.52"
+          },
+          {
+            "date": "2026-10-15",
+            "value": "0.50"
+          }
+        ]
+      },
+      "recordedAt": "2026-10-19T10:18:48.375Z"
+    },
+    {
+      "kind": "http",
+      "fingerprint": "49fd692f562a6ae7865b2bab4609d92eec4af0f008dcbd37242f552166d42d6a",
+      "request": {
+        "method": "GET",
+        "url": "https://api.gdeltproject.org/api/v2/doc/doc",
+        "params": {
+          "format": "json",
+          "maxrecords": "10",
+          "mode": "artlist",
+          "query": "\"central bank\" OR \"interest rate\" OR inflation OR election OR geopolitical",
+          "timespan": "1440"
+        }
+      },
+      "response": {
+        "articles": [
+          {
+            "url": "https://news.example.org/central-bank-pause",
+            "title": "Central bank signals pause after a year of hikes",
+            "seendate": "20261018T091500Z",
+            "domain": "news.example.org"
+          }
+        ]
+      },
+      "recordedAt": "2026-10-19T10:18:48.375Z"
+    }
+  ]
+}

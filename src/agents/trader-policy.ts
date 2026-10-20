@@ -5,14 +5,27 @@
  * history (#81).
  *
  * Full flow:
- *   1. Check daily drawdown — pause if limit hit
+ *   0. Read the treasury budget (capital and caps); skip the cycle if it
+ *      cannot be read (#76)
+ *   1. Check daily drawdown against the live bankroll — pause if limit hit
  *   2. Mark open positions to market, then stop-loss check (liquidation value)
  *   3. Check for hedge opportunities on deteriorating positions
  *   4. Scan active markets for +EV opportunities
- *   5. For each mispriced market: compute Kelly size, check correlation, execute
+ *   5. For each mispriced market: compute Kelly size, check correlation,
+ *      clamp to the treasury's headroom in base units, then trace and execute
  */
 import { calculateKellySize } from '../services/kelly';
 import { evaluateDailyDrawdown } from '../services/hedging.service';
+import {
+  MIN_TRADE_RAW,
+  budgetSnapshot,
+  clampSize,
+  spend,
+  type SizingBinding,
+  type TreasuryBudget,
+} from '../services/treasury-budget.service';
+import { toDisplayUsdc, usdcFromNumber } from '../lib/amounts';
+import { config } from '../config';
 import { logger } from '../lib/logger';
 import type { MarketView, TraderEnv } from './trader-env';
 import type { AggregatedSignals } from '../types';
@@ -21,15 +34,36 @@ export interface TraderParams {
   minEdge: number;
   minLiquidity: number;
   horizonDays: number;
-  bankroll: number;
+  /** Share of daily and per-market headroom left unused, in basis points (#76). */
+  headroomSafetyBps: number;
+  /** A budget older than this is re-read before the next order (#76). */
+  budgetMaxAgeMs: number;
 }
 
 export const DEFAULT_PARAMS: TraderParams = {
   minEdge: 0.08,
   minLiquidity: 500,
   horizonDays: 14,   // markets expiring within 14 days
-  bankroll: 10_000,  // $10,000 USDC starting bankroll
+  headroomSafetyBps: config.TREASURY_HEADROOM_SAFETY_BPS,
+  budgetMaxAgeMs: 60_000,
 };
+
+/** The sizing decision recorded in the trace: every intermediate size in base units (#76). */
+export interface SizingRecord {
+  kellyRaw: string;
+  correlationRaw: string;
+  marketExposureRaw: string;
+  marketExposureEstimated: boolean;
+  finalRaw: string;
+  binding: SizingBinding;
+  safetyBps: number;
+  budget: Record<string, string>;
+}
+
+/** Budget state shared by the orders of one cycle. */
+interface CycleBudget {
+  current: TreasuryBudget;
+}
 
 export async function runTraderPolicy(
   env: TraderEnv,
@@ -39,10 +73,23 @@ export async function runTraderPolicy(
   const { signal } = opts;
   signal?.throwIfAborted();
 
-  // Step 1: Check daily drawdown limit
+  // Step 0: The treasury is the source of truth for capital and caps (#76).
+  // Without it there is no safe size: fail closed, never fall back to a constant.
+  let budget: TreasuryBudget;
+  try {
+    budget = await env.budget();
+  } catch (err) {
+    logger.warn({ err: (err as Error)?.message }, 'Trader Agent: treasury budget read failed — skipping cycle');
+    await env.recordDecision({ kind: 'TREASURY_READ_FAILED', data: { error: String((err as Error)?.message ?? err).slice(0, 300) } });
+    return;
+  }
+  const cycle: CycleBudget = { current: budget };
+  const bankroll = toDisplayUsdc(budget.availableRaw);
+
+  // Step 1: Check daily drawdown limit against the live bankroll
   const now = env.clock.now();
   const closedToday = await env.closedPnlSince(env.clock.startOfDay());
-  const drawdown = evaluateDailyDrawdown(closedToday, params.bankroll, now);
+  const drawdown = evaluateDailyDrawdown(closedToday, bankroll, now);
   if (drawdown.isPaused) {
     await env.recordDecision({
       kind: 'DRAWDOWN_PAUSE',
@@ -97,7 +144,7 @@ export async function runTraderPolicy(
 
   for (const market of activeMarkets) {
     signal?.throwIfAborted();
-    await analyzeAndTradeMarket(env, params, market, signals, signal);
+    await analyzeAndTradeMarket(env, params, cycle, market, signals, signal);
   }
 
   logger.info('Trader Agent: cycle complete');
@@ -106,6 +153,7 @@ export async function runTraderPolicy(
 async function analyzeAndTradeMarket(
   env: TraderEnv,
   params: TraderParams,
+  cycle: CycleBudget,
   market: MarketView,
   signals: AggregatedSignals,
   signal?: AbortSignal,
@@ -126,27 +174,66 @@ async function analyzeAndTradeMarket(
     // Guard: insufficient edge
     if (Math.abs(edge) < params.minEdge) return;
 
-    // Kelly sizing — use conservative end of CI
+    // Kelly sizing — use conservative end of CI. Everything is from the side
+    // being bought: a NO bet compares P(NO) = 1 − ci.upper with the NO price
+    // 1 − marketProb, never with the YES price.
     const conservativeProb = edge > 0 ? confidenceInterval.lower : 1 - confidenceInterval.upper;
+    const sidePrice = edge > 0 ? marketProb : 1 - marketProb;
+    // A budget read more than budgetMaxAgeMs ago is re-read before sizing.
+    if (env.clock.now().getTime() - cycle.current.readAt.getTime() > params.budgetMaxAgeMs) {
+      cycle.current = await env.budget();
+    }
+    const budget = cycle.current;
+    const bankroll = toDisplayUsdc(budget.availableRaw);
+
     const kellyResult = calculateKellySize({
       agentProbability:  Math.max(0.01, conservativeProb),
-      marketProbability: marketProb,
-      bankroll:          params.bankroll,
-      netOdds:           edge > 0 ? (1 - marketProb) / marketProb : marketProb / (1 - marketProb),
+      marketProbability: sidePrice,
+      bankroll,
+      netOdds:           (1 - sidePrice) / sidePrice,
     });
-
-    if (kellyResult.betSize <= 0) return;
 
     // Correlation check — may reduce position size
     const direction = edge > 0 ? 'YES' : 'NO';
-    const correlation = await env.correlation(market.id, kellyResult.betSize, direction);
-    const finalSize = correlation.adjustedPositionSize;
 
-    if (finalSize < 1) {
-      logger.debug({ marketId: market.id }, 'Position size too small after correlation adjustment — skipping');
+    if (kellyResult.betSize <= 0) {
+      // The point edge clears minEdge but the conservative end of the interval
+      // does not: intended, the forecast is too uncertain to size (#75).
+      logger.debug({ marketId: market.id, edge, conservativeProb, sidePrice }, 'SIZE_ZERO_WIDE_CI: interval too wide to size');
+      await env.recordDecision({
+        kind: 'SKIP', marketId: market.id,
+        data: { reason: 'SIZE_ZERO_WIDE_CI', direction, edge, p: agentProb, ci: confidenceInterval },
+      });
+      return;
+    }
+    const correlation = await env.correlation(market.id, kellyResult.betSize, direction, bankroll);
+
+    // Treasury caps, in base units, before any trace exists (#76). Floats stop
+    // here: Kelly and correlation are display-USDC inputs, the order is raw.
+    const kellyRaw = usdcFromNumber(kellyResult.betSize);
+    const correlationRaw = usdcFromNumber(Math.max(0, correlation.adjustedPositionSize));
+    const exposure = await env.marketExposure(market.id);
+    const headroomRaw = budget.maxMarketRaw > exposure.totalRaw ? budget.maxMarketRaw - exposure.totalRaw : 0n;
+    const clamped = clampSize(correlationRaw, budget, headroomRaw, params.headroomSafetyBps);
+    const binding: SizingBinding = clamped.binding === 'KELLY' && correlationRaw < kellyRaw ? 'CORRELATION' : clamped.binding;
+    const sizing: SizingRecord = {
+      kellyRaw: kellyRaw.toString(),
+      correlationRaw: correlationRaw.toString(),
+      marketExposureRaw: exposure.totalRaw.toString(),
+      marketExposureEstimated: exposure.estimated,
+      finalRaw: clamped.sizeRaw.toString(),
+      binding,
+      safetyBps: params.headroomSafetyBps,
+      budget: budgetSnapshot(budget),
+    };
+
+    if (clamped.sizeRaw < MIN_TRADE_RAW) {
+      logger.debug({ marketId: market.id, binding, finalRaw: sizing.finalRaw }, 'Position size below minimum after caps — skipping');
+      await env.recordDecision({ kind: 'SKIP', marketId: market.id, data: { reason: 'SIZE_BELOW_MIN', direction, edge, sizing } });
       return;
     }
 
+    const amount = toDisplayUsdc(clamped.sizeRaw);
     const price = direction === 'YES' ? marketProb : 1 - marketProb;
 
     signal?.throwIfAborted();
@@ -154,21 +241,24 @@ async function analyzeAndTradeMarket(
     const result = await env.buy({
       marketId: market.id,
       direction,
-      amount: finalSize,
+      amount,
+      amountRaw: clamped.sizeRaw,
       price,
       marketProb,
       edge,
       kelly: kellyResult.halfKelly,
       forecast,
       correlation,
+      sizing,
     });
+    if (result.ok) cycle.current = spend(cycle.current, clamped.sizeRaw);
     await env.recordDecision({
       kind: result.ok ? 'BUY' : 'SKIP',
       marketId: market.id,
-      data: { direction, amount: finalSize, edge, ...(result.reason ? { reason: result.reason } : {}) },
+      data: { direction, amount, amountRaw: sizing.finalRaw, binding, edge, ...(result.reason ? { reason: result.reason } : {}) },
     });
 
-    if (result.ok) logger.info({ marketId: market.id, direction, amount: finalSize, edge }, 'Trader Agent: trade executed');
+    if (result.ok) logger.info({ marketId: market.id, direction, amount, binding, edge }, 'Trader Agent: trade executed');
   } catch (err) {
     logger.warn({ err, marketId: market.id }, 'Trader Agent: market analysis failed');
   }

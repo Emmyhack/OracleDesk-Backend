@@ -8,6 +8,7 @@ import { postgresContentStore } from '../services/content-store.service';
 import { correlation, newId, runWithContext } from '../lib/context';
 import { purgeExpiredIdempotencyKeys } from '../middlewares/idempotency.middleware';
 import { computeAndStoreSnapshots } from '../services/calibration.service';
+import { purgeSignalStore } from '../services/signal-store.service';
 import { recordCronRun } from './registry';
 
 let runningTraderCycleId: string | null = null;
@@ -78,6 +79,20 @@ export function startMonitorCron(): void {
     } catch (err) {
       recordCronRun('calibration', 'failure', startedAt, new Date(), err);
       logger.error({ err }, 'Monitor cron: calibration snapshots failed');
+    }
+  }));
+
+  // Signal store retention (#73) — nightly at 03:41: raw payloads after
+  // SIGNAL_RAW_RETENTION_DAYS, fetch logs after 30 days, and signals last seen
+  // over 30 days ago unless a reasoning trace cites them.
+  cron.schedule('41 3 * * *', () => tick('signal-retention', async () => {
+    const startedAt = new Date();
+    try {
+      await purgeSignalStore();
+      recordCronRun('signal-retention', 'success', startedAt, new Date());
+    } catch (err) {
+      recordCronRun('signal-retention', 'failure', startedAt, new Date(), err);
+      logger.error({ err }, 'Monitor cron: signal store retention failed');
     }
   }));
 

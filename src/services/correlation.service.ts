@@ -564,12 +564,14 @@ export async function checkCorrelation(
  * Returns all highly correlated pairs in the current open portfolio, plus the
  * full correlation matrix projected onto the nearest PSD matrix. Pair scores
  * are the raw pairwise values used for sizing; only `matrix` is projected.
- * Used by the portfolio endpoint to surface risk warnings.
+ * Used by the portfolio endpoint to surface risk warnings. `bankroll` is the
+ * treasury's free cash (#76); null when it could not be read, and then
+ * `isOverExposed` is null too.
  */
-export async function getPortfolioCorrelations(bankroll: number): Promise<{
+export async function getPortfolioCorrelations(bankroll: number | null): Promise<{
   pairs:         CorrelationPair[];
   totalExposure: number;
-  isOverExposed: boolean;
+  isOverExposed: boolean | null;
   matrix:        { marketIds: string[]; values: number[][] };
   method:        'snapshot' | 'matrix';
   snapshotId:    string | null;
@@ -606,7 +608,7 @@ export async function getPortfolioCorrelations(bankroll: number): Promise<{
   const values = nearestPsdCorrelation(raw).map((row) => row.map((v) => parseFloat(v.toFixed(4))));
 
   const totalExposure = openPositions.reduce((acc, p) => acc + p.size, 0);
-  const isOverExposed = totalExposure > bankroll * MAX_CORRELATED_EXPOSURE_PCT * 2;
+  const isOverExposed = bankroll === null ? null : totalExposure > bankroll * MAX_CORRELATED_EXPOSURE_PCT * 2;
 
   return {
     pairs,

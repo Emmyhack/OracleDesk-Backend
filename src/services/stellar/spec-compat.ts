@@ -69,7 +69,7 @@ export const USAGE: Record<BindingContract, UsageTable> = {
     events: [],
   },
   resolver: {
-    functions: ['state', 'finalize_signers', 'register_price_spec', 'resolve_price'],
+    functions: ['state', 'attest', 'finalize_signers', 'register_price_spec', 'register_signer_spec', 'resolve_price'],
     events: ['ResolutionProposed', 'ResolutionFinalized'],
   },
   reasoningRegistry: {

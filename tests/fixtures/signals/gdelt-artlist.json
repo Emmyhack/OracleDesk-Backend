@@ -1,0 +1,8 @@
+{
+  "_comment": "Synthetic GDELT DOC 2.0 artlist (#73). seendate is YYYYMMDDTHHMMSSZ; the third row's date is malformed and must be rejected.",
+  "articles": [
+    { "url": "https://www.example-news.com/world/central-bank-signals-pause", "url_mobile": "", "title": "Central bank signals pause after six hikes", "seendate": "20261018T091500Z", "socialimage": "", "domain": "example-news.com", "language": "English", "sourcecountry": "United Kingdom" },
+    { "url": "https://www.example-daily.com/politics/election-turnout-record", "url_mobile": "", "title": "Election turnout hits a record in early voting", "seendate": "20261018T073000Z", "socialimage": "", "domain": "example-daily.com", "language": "English", "sourcecountry": "United States" },
+    { "url": "https://www.example-wire.com/geo/sanctions-talks", "url_mobile": "", "title": "Sanctions talks resume in Geneva", "seendate": "2026-10-18 07:30", "socialimage": "", "domain": "example-wire.com", "language": "English", "sourcecountry": "Switzerland" }
+  ]
+}

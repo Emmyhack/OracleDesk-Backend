@@ -14,7 +14,7 @@ process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgresql://backtest:ba
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
-import { USDC_UNIT, toDisplayUsdc } from '../src/lib/amounts';
+import { USDC_UNIT } from '../src/lib/amounts';
 import { logger } from '../src/lib/logger';
 import { DEFAULT_PARAMS } from '../src/agents/trader-policy';
 import { runBacktest } from '../src/backtest/engine';
@@ -127,8 +127,8 @@ async function main(): Promise<void> {
     forecaster: values.forecaster ?? 'prior',
     seed: Number(values.seed ?? 1),
     feeBps: values['fee-bps'] === undefined ? undefined : Number(values['fee-bps']),
-    // The policy's bankroll is the simulated treasury's cash, in USDC.
-    params: { ...DEFAULT_PARAMS, bankroll: toDisplayUsdc(bankrollRaw) },
+    // The policy sizes from the simulated treasury's cash and caps (#76).
+    params: DEFAULT_PARAMS,
   };
   if (!Number.isInteger(cfg.seed)) throw new Error('--seed must be an integer');
 

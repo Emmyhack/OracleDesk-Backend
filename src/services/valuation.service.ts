@@ -15,6 +15,7 @@
  * `Trade` event (which carries the post-trade reserves) and fall back to
  * `get_market`; `fee_bps` is fixed at market creation and cached.
  */
+import { now as clockNow } from '../lib/clock';
 import { prisma } from '../lib/prisma';
 import { logger } from '../lib/logger';
 import { bigintToDecimalString, decimalToBigint, toDisplayUsdc } from '../lib/amounts';
@@ -182,7 +183,7 @@ export async function latestReserves(
  */
 export async function markOpenPositions(
   deps: ReserveDeps = defaultReserveDeps,
-  now = new Date(),
+  now = clockNow(),
 ): Promise<{ marked: number; skippedMarkets: number }> {
   const positions = await prisma.position.findMany({
     where: { status: 'OPEN', sharesRaw: { not: null } },

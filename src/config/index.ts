@@ -172,8 +172,13 @@ const envSchema = z
     // Public keys of previous server signing keys that may still verify
     // challenges they issued (#48). Format: G…[@ISO-8601-retirement].
     AUTH_PREVIOUS_SIGNING_KEYS: previousSigningKeys,
-    // G… addresses allowed to call admin endpoints.
+    // G… addresses seeded as super admins on first deploy. After the RBAC
+    // tables exist the database is authoritative; this list is not consulted
+    // for per-request authorization.
     ADMIN_ADDRESSES: commaList(stellarAccount),
+    // Sensitive admin actions require a wallet proof no older than this (#49).
+    STEP_UP_MAX_AGE_SECONDS: z.string().default('300').transform(Number)
+      .pipe(z.number().int().min(30).max(3600)),
 
     // ── Challenge issuance hardening (#50) ───────────────────────────────
     AUTH_MAX_OUTSTANDING_PER_ADDRESS: z.string().default('5').transform(Number)
@@ -254,6 +259,37 @@ const envSchema = z
     // during rotation, in addition to the current signing key.
     ENTITLEMENT_PREVIOUS_PUBLIC_KEYS: commaList(z.string()),
 
+    // ── x402 trace price discovery (#63) ──────────────────────────────────
+    // The authoritative x402 service URL. Empty disables discovery (reported as unknown).
+    X402_SERVICE_URL: optionalString,
+    // Request timeout for price discovery queries.
+    X402_DISCOVERY_TIMEOUT_MS: z.string().default('5000').transform(Number)
+      .pipe(z.number().int().min(100)),
+    // In-memory cache TTL for validated payment requirements.
+    X402_PRICE_CACHE_TTL_MS: z.string().default('60000').transform(Number)
+      .pipe(z.number().int().min(1000)),
+    // ── Server-issued payment intents (#52) ──────────────────────────────
+    // How long a client may take to submit a transaction for an open intent.
+    PAYMENT_INTENT_TTL_SECONDS: z.string().default('900').transform(Number)
+      .pipe(z.number().int().min(60).max(86_400)),
+    // Bounded open/pending intents per user; prevents intent-table spam.
+    PAYMENT_INTENT_MAX_OPEN: z.string().default('3').transform(Number)
+      .pipe(z.number().int().min(1).max(100)),
+    PAYMENT_INTENT_CONFIRM_ENABLED: boolDefault('true'),
+    // Six-field cron (seconds field). Each tick is bounded by the batch size.
+    PAYMENT_INTENT_CONFIRM_CRON: z.string().default('*/20 * * * * *'),
+    PAYMENT_INTENT_CONFIRM_BATCH: z.string().default('20').transform(Number)
+      .pipe(z.number().int().min(1).max(500)),
+    PAYMENT_INTENT_MAX_ATTEMPTS: z.string().default('60').transform(Number)
+      .pipe(z.number().int().min(1).max(10_000)),
+    PAYMENT_INTENT_RETRY_BASE_MS: z.string().default('5000').transform(Number)
+      .pipe(z.number().int().min(1000).max(3_600_000)),
+    PAYMENT_INTENT_RETRY_MAX_MS: z.string().default('300000').transform(Number)
+      .pipe(z.number().int().min(1000).max(86_400_000)),
+    // Extra time after expiresAt before a still-pending tx is abandoned.
+    PAYMENT_INTENT_LATE_GRACE_SECONDS: z.string().default('120').transform(Number)
+      .pipe(z.number().int().min(0).max(86_400)),
+
     // ── Refund workflow (#57) ─────────────────────────────────────────────
     // How long a prepared refund XDR stays valid before it must be rebuilt.
     REFUND_PREPARE_TTL_SECONDS: z.string().default('600').transform(Number)
@@ -297,6 +333,25 @@ const envSchema = z
     RESOLUTION_SIGNERS: commaList(stellarAccount),
     RESOLUTION_THRESHOLD: z.string().default('1').transform(Number),
     RESOLUTION_DISPUTE_WINDOW_SECS: z.string().default('86400').transform(Number),
+
+    // ── Evidence-backed attestation (#88) ─────────────────────────────────
+    RESOLUTION_ATTESTATION_ENABLED: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
+    RESOLUTION_AUTO_APPROVE_ENABLED: z.enum(['true', 'false']).default('false').transform((v) => v === 'true'),
+    RESOLUTION_AUTO_APPROVE_MIN_CONFIDENCE: z.string().default('0.90').transform(Number).pipe(z.number().min(0).max(1)),
+    RESOLUTION_HIGH_VALUE_THRESHOLD_USDC: z.string().default('10000').transform(Number).pipe(z.number().positive()),
+    RESOLUTION_ATTESTATION_POLL_MS: z.string().default('300000').transform(Number).pipe(z.number().int().min(1000)),
+
+    // ── Permissionless finalization keeper (#89) ──────────────────────────
+    KEEPER_ENABLED: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
+    KEEPER_POLL_MS: z.string().default('60000').transform(Number).pipe(z.number().int().min(1000)),
+    KEEPER_BATCH_SIZE: z.string().default('10').transform(Number).pipe(z.number().int().min(1).max(100)),
+    KEEPER_MAX_RETRIES: z.string().default('3').transform(Number).pipe(z.number().int().min(1)),
+
+    // ── Resumable SSE event stream (#95) ──────────────────────────────────
+    SSE_HEARTBEAT_INTERVAL_MS: z.string().default('15000').transform(Number).pipe(z.number().int().min(1000)),
+    SSE_POLL_INTERVAL_MS: z.string().default('2000').transform(Number).pipe(z.number().int().min(500)),
+    SSE_MAX_CONCURRENT_STREAMS: z.string().default('500').transform(Number).pipe(z.number().int().min(1)),
+    SSE_REPLAY_PAGE_SIZE: z.string().default('100').transform(Number).pipe(z.number().int().min(1).max(500)),
 
     // ── Price-mode markets (#90) ──────────────────────────────────────────
     // Cited Reflector (SEP-40) feeds; see src/config/reflector-feeds.ts.
@@ -381,6 +436,7 @@ const envSchema = z
     INDEXER_ENABLED: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
     INDEXER_POLL_MS: z.string().default('5000').transform(Number),
 
+
     // ── Health probes (#111) ──────────────────────────────────────────────
     // Dependencies that make /readyz fail. RPC is non-critical by default so
     // cached DB reads can still be served while chain reads return 502.
@@ -403,6 +459,24 @@ const envSchema = z
     DEDUP_SIM_THRESHOLD: z.string().default('0.85').transform(Number).pipe(z.number().min(0).max(1)),
     // Two markets whose resolution dates are within this many days are "the same date".
     DEDUP_DATE_WINDOW_DAYS: z.string().default('3').transform(Number).pipe(z.number().min(0)),
+
+    // ── Trader forecaster (#75) ───────────────────────────────────────────
+    // LLM samples per forecast; with more than one the median p is used and
+    // the spread is added to the variance.
+    FORECAST_LLM_SAMPLES: z.string().default('1').transform(Number)
+      .pipe(z.number().int().min(1).max(5)),
+    // Shrink the ensemble's log-odds toward 0.5 by this factor.
+    FORECAST_SHRINK: z.string().default('0.15').transform(Number)
+      .pipe(z.number().min(0).max(0.9)),
+    // Markets forecast (not served from cache) per trader cycle.
+    FORECAST_MAX_MARKETS_PER_CYCLE: z.string().default('5').transform(Number)
+      .pipe(z.number().int().min(0).max(100)),
+    // Forecasting LLM calls per trader cycle (samples included).
+    FORECAST_MAX_LLM_CALLS_PER_CYCLE: z.string().default('10').transform(Number)
+      .pipe(z.number().int().min(0).max(500)),
+    // A forecast is reused while the market and its relevant signals are unchanged.
+    FORECAST_CACHE_TTL_HOURS: z.string().default('6').transform(Number)
+      .pipe(z.number().positive().max(72)),
 
     // ── Calibration (#68) ─────────────────────────────────────────────────
     // Slices with fewer resolved markets report insufficientData instead of noise.
@@ -474,6 +548,12 @@ const envSchema = z
     // Optional stricter backend policy for withdraw operations.
     TREASURY_WITHDRAW_MIN_SIGNERS: z.string().default('0').transform(Number)
       .pipe(z.number().int().min(0).max(20)),
+    // ── Treasury-aware sizing (#76) ───────────────────────────────────────
+    // Share of the daily and per-market headroom the trader leaves unused
+    // (basis points): the daily window can roll and other writers (market
+    // creation) share the caps between the budget read and the submit.
+    TREASURY_HEADROOM_SAFETY_BPS: z.string().default('500').transform(Number)
+      .pipe(z.number().int().min(0).max(9_999)),
     // #147 — development-only local IPFS stub selected explicitly.
     IPFS_TRANSPORT: z.enum(['pinata', 'local']).default('pinata'),
     IPFS_LOCAL_DIR: z.string().default('.ipfs-local'),
@@ -481,6 +561,13 @@ const envSchema = z
     // ── Data sources ──────────────────────────────────────────────────────
     NEWSAPI_KEY: optionalString,
     FRED_API_KEY: optionalString,
+    // ── Signal store (#73) ────────────────────────────────────────────────
+    // A source is re-fetched once its last successful fetch is older than this.
+    SIGNAL_REFRESH_MINUTES: z.string().default('15').transform(Number)
+      .pipe(z.number().int().min(1).max(24 * 60)),
+    // Raw provider payloads are deleted after this many days.
+    SIGNAL_RAW_RETENTION_DAYS: z.string().default('7').transform(Number)
+      .pipe(z.number().int().min(1).max(365)),
 
     // ── Resilience & Timeouts ─────────────────────────────────────────────
     TIMEOUT_RPC_READ_MS: z.string().default('8000').transform(Number),

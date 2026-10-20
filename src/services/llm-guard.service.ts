@@ -169,6 +169,35 @@ export function renderUntrustedBlock(signals: SanitizedSignal[], label: string, 
   return [`<${label} nonce="${nonce}">`, ...lines, `</${label} nonce="${nonce}">`].join('\n');
 }
 
+/**
+ * Renders a small JSON record (a question document, #75) as one line of data
+ * inside a nonce-delimited block. Every string is sanitised like signal text
+ * and delimiter look-alikes are escaped. Returns null when any string looks
+ * like an instruction: such a record is quarantined, not sent.
+ */
+export function renderUntrustedRecord(
+  record: Record<string, unknown>,
+  label: string,
+  fixedNonce?: string,
+  maxStringChars = MAX_CONTENT_CHARS,
+): string | null {
+  let suspicious = false;
+  const clean = (value: unknown): unknown => {
+    if (typeof value === 'string') {
+      const { text, flags } = sanitizeSignalText(value, maxStringChars);
+      if (flags.includes('instruction_like')) suspicious = true;
+      return escapeLookalikes(text, label);
+    }
+    if (Array.isArray(value)) return value.map(clean);
+    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, clean(v)]));
+    return value;
+  };
+  const body = JSON.stringify(clean(record));
+  if (suspicious) return null;
+  const nonce = fixedNonce ?? randomBytes(6).toString('hex');
+  return [`<${label} nonce="${nonce}">`, body, `</${label} nonce="${nonce}">`].join('\n');
+}
+
 // ─── Post-generation policy ───────────────────────────────────────────────────
 
 export type GuardReason =

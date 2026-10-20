@@ -446,7 +446,7 @@ export async function runPriceResolutionTick(deps: ResolutionTickDeps = {}): Pro
         resolved.push(market.onChainMarketId);
         break;
       } catch (err) {
-        const code = err instanceof ChainError ? err.contractError : undefined;
+        const code = err instanceof ChainError ? err.contractError ?? undefined : undefined;
         if (code === 'AlreadyFinalized') break;
         const action = nextResolutionAction(code ?? undefined, elapsedSecs, config.PRICE_RESOLUTION_MAX_WAIT_SECS, attempt);
         if (!action.retry) {

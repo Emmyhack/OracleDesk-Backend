@@ -177,7 +177,8 @@ test('executeTrade stores sharesRaw / costBasisRaw / feesPaidRaw from agentBuy',
   (chain as any).quoteBuy = async () => 18_000_000n;
   (chain as any).getOnChainMarket = async () => ({ fee_bps: 100, reserve_yes: 1n, reserve_no: 1n });
   let buyArgs: any;
-  (chain as any).agentBuy = async (args: any) => { buyArgs = args; return { mode: 'live', method: 'agent_buy', value: 19_000_000n, txHash: 'ab'.repeat(32) }; };
+  // agentBuy takes a thunk so a retry re-quotes min_shares_out (#40).
+  (chain as any).agentBuy = async (args: any) => { buyArgs = typeof args === 'function' ? await args() : args; return { mode: 'live', method: 'agent_buy', value: 19_000_000n, txHash: 'ab'.repeat(32) }; };
 
   await executeTrade({ marketId: 'm', direction: 'YES', amount: 2, price: 0.1, kellyFraction: 0.01, edgeDetected: 0.2 } as any);
   assert.equal(buyArgs.collateral_in, 20_000_000n);
@@ -211,7 +212,7 @@ test('portfolio summary uses cost basis and liquidation-based PnL', async () => 
         ]
       : [{ pnl: 2, closedAt: new Date(0) }];
   (prisma.trade.aggregate as any) = async () => ({ _sum: { builderFee: 0 } });
-  const s = await getPortfolioSummary(1000);
+  const s = await getPortfolioSummary(null);
   assert.equal(s.deployedCapital, 20); // 10 USDC cost basis + 10 legacy size
   assert.equal(s.totalPnl, -1 + 2 + (0.5 - 2)); // legacy -1, closed +2, open realised 0.5 + unrealised -2 (USDC)
 });

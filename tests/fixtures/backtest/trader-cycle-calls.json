@@ -1,6 +1,15 @@
 {
   "cycle": [
     {
+      "call": "chain.treasuryAvailableCapital"
+    },
+    {
+      "call": "chain.treasuryRiskConfig"
+    },
+    {
+      "call": "chain.treasuryDailyUsage"
+    },
+    {
       "call": "position.findMany",
       "args": {
         "where": {
@@ -137,7 +146,7 @@
           "marketId": "m-hedge",
           "data": {
             "originalMarketId": "m-stop",
-            "hedgeTradeId": "t-10",
+            "hedgeTradeId": "t-13",
             "hedgeDirection": "NO",
             "hedgeSize": 50,
             "rationale": "Edge decayed from 0.200 to 0.400. Partial hedge of 50 USDC via m-hedge reduces net exposure by ~50%.",
@@ -174,8 +183,8 @@
       }
     },
     {
-      "call": "calculateProbability",
-      "marketProb": 0.4
+      "call": "forecastMarket",
+      "marketId": "m-new"
     },
     {
       "call": "market.findUnique",
@@ -214,31 +223,72 @@
       }
     },
     {
+      "call": "market.findUnique",
+      "args": {
+        "where": {
+          "id": "m-new"
+        },
+        "select": {
+          "onChainMarketId": true
+        }
+      }
+    },
+    {
+      "call": "chainEvent.findFirst",
+      "args": {
+        "where": {
+          "contractName": "treasury",
+          "eventName": "TradeAuthorized",
+          "params": {
+            "path": [
+              "market_id"
+            ],
+            "equals": "7"
+          }
+        },
+        "orderBy": [
+          {
+            "ledger": "desc"
+          },
+          {
+            "id": "desc"
+          }
+        ],
+        "select": {
+          "params": true
+        }
+      }
+    },
+    {
+      "call": "trade.findMany",
+      "args": {
+        "where": {
+          "marketId": "m-new",
+          "status": "EXECUTED"
+        },
+        "select": {
+          "amount": true
+        }
+      }
+    },
+    {
+      "call": "market.findUnique",
+      "args": {
+        "where": {
+          "id": "m-new"
+        },
+        "select": {
+          "seedAmountRaw": true
+        }
+      }
+    },
+    {
       "call": "generateReasoningTrace",
       "input": {
         "marketId": "m-new",
         "agentType": "TRADER",
         "decisionType": "OPEN_POSITION",
-        "sourcesUsed": [
-          {
-            "source": "NEWSAPI",
-            "weight": 0.7,
-            "signal": "headline 1",
-            "rawValue": 0.4
-          },
-          {
-            "source": "NEWSAPI",
-            "weight": 0.7,
-            "signal": "headline 2",
-            "rawValue": 0.4
-          },
-          {
-            "source": "NEWSAPI",
-            "weight": 0.7,
-            "signal": "headline 3",
-            "rawValue": 0.4
-          }
-        ],
+        "sourcesUsed": [],
         "probabilityEstimate": 0.7,
         "marketProbability": 0.4,
         "edge": 0.29999999999999993,
@@ -246,8 +296,39 @@
           "lower": 0.62,
           "upper": 0.78
         },
+        "forecast": {
+          "p": 0.7,
+          "ci": {
+            "lower": 0.62,
+            "upper": 0.78
+          },
+          "members": [],
+          "inputsDigest": "d",
+          "sigmaLogit": 0,
+          "shrink": 0
+        },
         "betFraction": 0.025,
         "betSizeUsdc": 250,
+        "sizing": {
+          "kellyRaw": "2500000000",
+          "correlationRaw": "2500000000",
+          "marketExposureRaw": "0",
+          "marketExposureEstimated": true,
+          "finalRaw": "2500000000",
+          "binding": "KELLY",
+          "safetyBps": 500,
+          "budget": {
+            "availableRaw": "100000000000",
+            "maxTradeRaw": "1000000000000000",
+            "maxMarketRaw": "1000000000000000",
+            "maxDailyRaw": "1000000000000000",
+            "dailyUsedRaw": "0",
+            "dailyRemainingRaw": "1000000000000000",
+            "dailyWindowStart": "<iso>",
+            "dailyResetsAt": "<iso>",
+            "readAt": "<iso>"
+          }
+        },
         "correlation": {
           "pairs": [
             {
@@ -325,7 +406,7 @@
       "call": "trade.findUnique",
       "args": {
         "where": {
-          "id": "t-22"
+          "id": "t-29"
         },
         "select": {
           "id": true,
@@ -359,7 +440,7 @@
       "args": {
         "data": {
           "marketId": "m-new",
-          "tradeId": "t-22",
+          "tradeId": "t-29",
           "direction": "YES",
           "status": "OPEN",
           "entryPrice": 1,
@@ -407,7 +488,7 @@
           "action": "TRADE_EXECUTED",
           "marketId": "m-new",
           "data": {
-            "tradeId": "t-22",
+            "tradeId": "t-29",
             "txHash": "abababababababababababababababababababababababababababababababab",
             "direction": "YES",
             "amount": 250,
@@ -428,6 +509,15 @@
     }
   ],
   "paused": [
+    {
+      "call": "chain.treasuryAvailableCapital"
+    },
+    {
+      "call": "chain.treasuryRiskConfig"
+    },
+    {
+      "call": "chain.treasuryDailyUsage"
+    },
     {
       "call": "position.findMany",
       "args": {
