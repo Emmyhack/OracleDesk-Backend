@@ -69,6 +69,14 @@ export function getRedis(): Redis {
       lazyConnect: false,
     });
     client.on('error', (err) => logger.error({ err: err.message }, 'Redis error'));
+    if (config.NODE_ENV === 'test') {
+      // Unit tests run one process per file; a referenced Redis socket would
+      // keep each process alive after its tests finish. Commands still work
+      // on an unref'd socket.
+      const c = client as unknown as { stream?: { unref?: () => void } };
+      c.stream?.unref?.();
+      client.on('connect', () => c.stream?.unref?.());
+    }
   }
   return client;
 }
