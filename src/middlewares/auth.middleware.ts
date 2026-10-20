@@ -4,6 +4,13 @@ import { config } from '../config';
 import { previousSecret, secret } from '../config/secrets';
 import { sendError } from '../utils/response.util';
 import { currentContext } from '../lib/context';
+import { logger } from '../lib/logger';
+import { prisma } from '../lib/prisma';
+import {
+  AdminPermission,
+  adminAccessFor,
+  ensureAdminRbacSeeded,
+} from '../services/admin-rbac.service';
 
 export interface JwtPayload {
   userId: string;
@@ -23,6 +30,12 @@ export interface JwtPayload {
    * therefore treated as a classic G… account.
    */
   accountType?: 'account' | 'contract';
+  /**
+   * Unix seconds when the wallet last proved possession of its key (#49).
+   * Sensitive admin actions require a recent `auth_time`; refreshing a token
+   * preserves it so a refresh can never bypass step-up.
+   */
+  auth_time?: number;
   iat: number;
   exp: number;
 }
@@ -102,34 +115,106 @@ export function optionalAuth(req: Request, _res: Response, next: NextFunction): 
 }
 
 /**
- * Must run after requireAuth. Admins are the G… addresses in ADMIN_ADDRESSES,
- * compared exactly (StrKey is uppercase and case-sensitive).
- *
  * A custodial sub-user (#46) is never an admin, even when the pooled base
- * account is listed: admin rights are tied to the base account owner, not to
+ * account has a role: admin rights are tied to the base account owner, not to
  * everyone the custodian signs for.
  */
-function isAdmin(user: JwtPayload | undefined): boolean {
+function isAdminIdentity(user: JwtPayload | undefined): user is JwtPayload {
   if (!user) return false;
-  // Contract accounts (#47) are never admins: ADMIN_ADDRESSES is G… only.
   if (user.accountType === 'contract') return false;
-  if ((user.subIdKind ?? null) !== null) return false;
-  return config.ADMIN_ADDRESSES.includes(user.walletAddress);
+  return (user.subIdKind ?? null) === null;
 }
 
-export function requireAdmin(req: Request, res: Response, next: NextFunction): void {
-  if (!isAdmin(req.user)) {
-    sendError(res, 403, 'FORBIDDEN', 'This action is limited to OracleDesk admins');
+function auditAdminRequest(req: Request, user: JwtPayload, permission: AdminPermission): void {
+  if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return;
+  const action = `${req.method} ${req.originalUrl.split('?')[0]}`;
+  void prisma.adminAuditLog
+    .create({
+      data: {
+        actor: user.walletAddress,
+        action,
+        target: permission,
+        metadata: {
+          permission,
+          params: req.params as any,
+          query: req.query as any,
+        } as any,
+      },
+    })
+    .catch((err) => logger.warn({ err, actor: user.walletAddress, action }, 'Could not write admin audit log'));
+}
+
+/**
+ * Must run after requireAuth. Looks the caller up in the database on every
+ * request, so revocation takes effect immediately; JWT claims never carry
+ * permissions. Database errors fail closed.
+ */
+export function requirePermission(
+  permission: AdminPermission,
+  opts: { audit?: boolean } = {},
+): (req: Request, res: Response, next: NextFunction) => void {
+  return (req, res, next) => {
+    void (async () => {
+      if (!isAdminIdentity(req.user)) {
+        sendError(res, 403, 'FORBIDDEN', 'This action is limited to OracleDesk admins');
+        return;
+      }
+      const access = await adminAccessFor(req.user.walletAddress);
+      if (!access || !access.permissions.has(permission)) {
+        sendError(res, 403, 'FORBIDDEN', 'This action is limited to OracleDesk admins');
+        return;
+      }
+      if (opts.audit !== false) {
+        res.once('finish', () => {
+          if (res.statusCode < 400) auditAdminRequest(req, req.user!, permission);
+        });
+      }
+      next();
+    })().catch((err) => {
+      logger.error({ err, permission }, 'Admin permission check failed');
+      if (!res.headersSent) sendError(res, 403, 'FORBIDDEN', 'This action is limited to OracleDesk admins');
+    });
+  };
+}
+
+/** Compatibility wrapper for routes that only need "is any kind of admin". */
+export const requireAdmin = requirePermission('admin.read', { audit: false });
+
+/**
+ * Sensitive admin actions require a fresh wallet signature (#49). This must run
+ * after requirePermission. Refreshing an access token never refreshes
+ * auth_time, so a stolen/old session cannot pass silently.
+ */
+export function requireStepUp(req: Request, res: Response, next: NextFunction): void {
+  const authTime = req.user?.auth_time;
+  const maxAge = config.STEP_UP_MAX_AGE_SECONDS;
+  const now = Math.floor(Date.now() / 1000);
+  if (typeof authTime !== 'number' || !Number.isFinite(authTime) || now - authTime > maxAge || authTime > now + 60) {
+    sendError(res, 403, 'STEP_UP_REQUIRED', 'Re-authenticate with your wallet to perform this action', {
+      maxAgeSeconds: maxAge,
+      reauthenticate: true,
+    });
     return;
   }
   next();
 }
 
-/** True when `token` is a valid JWT for an admin address (used for the socket admin room). */
-export function isAdminToken(token: unknown): boolean {
+/** True when `token` is a valid JWT for an assigned admin (socket admin room). */
+export async function isAdminToken(token: unknown): Promise<boolean> {
   if (typeof token !== 'string') return false;
   const { user } = verifyAccessToken(token);
-  return isAdmin(user);
+  if (!isAdminIdentity(user)) return false;
+  try {
+    return (await adminAccessFor(user.walletAddress)) !== null;
+  } catch (err) {
+    logger.warn({ err }, 'Admin socket lookup failed; denying admin room');
+    return false;
+  }
+}
+
+/** First-boot RBAC catalogue/seed hook, called after the DB connection is up. */
+export async function bootstrapAdminRbac(): Promise<void> {
+  await ensureAdminRbacSeeded();
 }
 
 /**
@@ -146,6 +231,8 @@ export interface TokenIdentity {
   subId?: string | null;
   subIdKind?: 'MUXED' | 'MEMO' | null;
   accountType?: 'account' | 'contract';
+  /** Unix seconds of the wallet proof that created this session. */
+  authTime?: number;
 }
 
 /**
@@ -159,6 +246,7 @@ export function signToken(userId: string, walletAddress: string, identity: Token
     userId,
     walletAddress,
     account: identity.account ?? walletAddress,
+    auth_time: identity.authTime ?? Math.floor(Date.now() / 1000),
   };
   if (identity.subId != null || identity.subIdKind != null) {
     payload.subId = identity.subId ?? null;

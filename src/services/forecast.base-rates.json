@@ -1,0 +1,60 @@
+{
+  "_comment": "Base rates for the trader's base-rate forecaster (#75). Each entry matches a question by category and a case-insensitive regular expression over the question text; the first match wins. p is the historical frequency of YES for that reference class; sigma is kept wide because the tallies are approximate and the reference class is coarse. Unmatched questions get p = 0.5, sigma = 0.25 (uninformative). Review the figures against the cited sources before relying on them; change them as a reviewed code change.",
+  "version": 1,
+  "entries": [
+    {
+      "id": "fomc-cut-at-meeting",
+      "category": "FED",
+      "pattern": "\\b(cut|cuts|lower|lowers|reduce|reduces)\\b.*\\b(rate|rates|federal funds|target range)\\b",
+      "p": 0.15,
+      "sigma": 0.15,
+      "basis": "Share of scheduled FOMC meetings, 1994-2024, at which the federal funds target was lowered (approximate tally, about 35 of about 245 meetings).",
+      "source": "Federal Reserve Board, Open Market Operations: https://www.federalreserve.gov/monetarypolicy/openmarket.htm"
+    },
+    {
+      "id": "fomc-hike-at-meeting",
+      "category": "FED",
+      "pattern": "\\b(raise|raises|hike|hikes|increase|increases)\\b.*\\b(rate|rates|federal funds|target range)\\b",
+      "p": 0.2,
+      "sigma": 0.15,
+      "basis": "Share of scheduled FOMC meetings, 1994-2024, at which the federal funds target was raised (approximate tally, about 50 of about 245 meetings).",
+      "source": "Federal Reserve Board, Open Market Operations: https://www.federalreserve.gov/monetarypolicy/openmarket.htm"
+    },
+    {
+      "id": "fomc-hold-at-meeting",
+      "category": "FED",
+      "pattern": "\\b(hold|holds|keep|keeps|leave|leaves|maintain|maintains|unchanged)\\b.*\\b(rate|rates|federal funds|target range)\\b",
+      "p": 0.65,
+      "sigma": 0.15,
+      "basis": "Share of scheduled FOMC meetings, 1994-2024, with no change to the federal funds target (complement of the two tallies above).",
+      "source": "Federal Reserve Board, Open Market Operations: https://www.federalreserve.gov/monetarypolicy/openmarket.htm"
+    },
+    {
+      "id": "ecb-cut-at-meeting",
+      "category": "ECB",
+      "pattern": "\\b(cut|cuts|lower|lowers|reduce|reduces)\\b.*\\b(rate|rates|deposit facility)\\b",
+      "p": 0.12,
+      "sigma": 0.15,
+      "basis": "Share of ECB monetary policy meetings, 1999-2024, that lowered the key rates (approximate).",
+      "source": "European Central Bank, Key ECB interest rates: https://www.ecb.europa.eu/stats/policy_and_exchange_rates/key_ecb_interest_rates/html/index.en.html"
+    },
+    {
+      "id": "ecb-hike-at-meeting",
+      "category": "ECB",
+      "pattern": "\\b(raise|raises|hike|hikes|increase|increases)\\b.*\\b(rate|rates|deposit facility)\\b",
+      "p": 0.1,
+      "sigma": 0.15,
+      "basis": "Share of ECB monetary policy meetings, 1999-2024, that raised the key rates (approximate).",
+      "source": "European Central Bank, Key ECB interest rates: https://www.ecb.europa.eu/stats/policy_and_exchange_rates/key_ecb_interest_rates/html/index.en.html"
+    },
+    {
+      "id": "event-happens-by-deadline",
+      "category": null,
+      "pattern": "^will\\b.*\\b(by|before)\\b",
+      "p": 0.4,
+      "sigma": 0.2,
+      "basis": "Questions of the form 'will X happen by <date>' resolve NO more often than YES on public forecasting platforms (status quo bias of the reference class); the figure is a rounded, approximate share.",
+      "source": "Metaculus track record (binary questions): https://www.metaculus.com/questions/track-record/"
+    }
+  ]
+}

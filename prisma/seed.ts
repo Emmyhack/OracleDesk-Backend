@@ -14,6 +14,7 @@ import { questionDocument } from '../src/services/market-chain.service';
 import { cidForBytes } from '../src/services/ipfs.service';
 import { buildSeedData, SEED_EPOCH } from '../src/seed/scenario';
 import { encodeSeedEvents } from '../src/seed/raw-events';
+import { ensureAdminRbacSeeded } from '../src/services/admin-rbac.service';
 
 const prisma = new PrismaClient();
 
@@ -264,6 +265,10 @@ async function main(): Promise<void> {
       console.log(`Wrote raw getEvents fixture to ${args.withRawEvents}`);
     }
   }
+
+  // Seed the admin RBAC catalogue and first-deploy super admins (#49).
+  // Idempotent: existing DB assignments are never overwritten from env.
+  await ensureAdminRbacSeeded();
 
   if (args.linkTestnet) await linkTestnet();
 }

@@ -54,3 +54,12 @@ export function meaningfulTokens(text: string): string[] {
     .split(/\s+/)
     .filter(w => w.length > 2 && !STOP_WORDS.has(w));
 }
+
+/**
+ * How many of `tokens` occur in `other` (duplicates counted, as the lexical
+ * dedup rule does). Shared by duplicate detection and the trader's
+ * signal-relevance filter (#75).
+ */
+export function tokenOverlap(tokens: string[], other: Set<string>): number {
+  return tokens.filter((w) => other.has(w)).length;
+}

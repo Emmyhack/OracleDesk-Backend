@@ -165,3 +165,66 @@ Writing an integration test:
 - Seed data with the factories in `tests/helpers/factories.ts`.
 - Use `withRedisPrefix()` from `tests/helpers/redis.ts` so parallel files don't
   share Redis keys.
+
+## Recording cassettes
+
+The agent-cycle tests (`tests/agents-cycle.test.ts`) run `runMarketMakerCycle()`
+and `runTraderCycle()` end to end without a network. Every Anthropic, Gemini,
+NewsAPI, FRED and GDELT request goes through a transport seam
+(`setAnthropicTransport`, `setGeminiTransport`, `setSignalHttp`) and is served
+from a cassette in `tests/cassettes/`. The library is `tests/helpers/cassettes.ts`.
+
+`CASSETTE_MODE` selects the mode:
+
+| Mode | What happens | Where |
+|---|---|---|
+| `replay` (default) | Requests are matched by fingerprint and answered from the cassette. An unmatched request fails with `CassetteMiss` and a diff against the closest recorded request; an interaction no request used fails the test. | everywhere, the only mode in CI |
+| `record` | Requests go to the real providers and the normalised, redacted pairs are written when the test finishes. Needs `CASSETTE_RECORD=1`. | locally |
+| `off` | Real providers, nothing written. | locally |
+
+A fingerprint ignores API keys (any `apiKey`/`api_key`/`key`/`authorization`
+field), query-parameter order, ISO timestamps, UUIDs and the random nonces of
+the untrusted-data blocks. Any other prompt change is a miss on purpose: if you
+change a prompt, the signals it sees or the request a data source sends, you
+re-record.
+
+**Re-recording one cassette.** You need the keys of the providers the scenario
+calls: `ANTHROPIC_API_KEY` (and `GEMINI_API_KEY` for the fallback scenario),
+`NEWSAPI_KEY` and `FRED_API_KEY`. GDELT needs none. Export them in your shell
+(never in a committed file), then run only the scenario you are recording:
+
+```bash
+npm run build:test
+CASSETTE_MODE=record CASSETTE_RECORD=1 \
+  node --test --test-concurrency=1 --test-name-pattern "market maker: news\+fred" \
+  dist-tests/tests/agents-cycle.test.js
+```
+
+`--test-name-pattern` takes a regular expression over the test name; the file
+must be the compiled `dist-tests/tests/agents-cycle.test.js`. Then run
+`npm test` again in replay mode. A scenario whose outcome depends on a specific
+provider failure (the Anthropic 529 → Gemini fallback) cannot be produced on
+demand by a live provider: author it with scripted responses
+(`CASSETTE_UPSTREAM=scripted`, using the scenario's `upstream`), which marks the
+file `"synthetic": true`. The committed cassettes are all synthetic for now;
+replace them with live recordings when you have keys.
+
+Before a cassette is written, the secret guard scans it for the configured key
+values and key-shaped strings (`sk-ant-…`, `AIza…`, 32-hex values in key
+fields) and refuses to write it. `tests/cassettes-secrets.test.ts` runs the
+same scan over every committed cassette on every `npm test`. NewsAPI article
+text is third-party content: the recorder keeps only the six articles the
+prompt can show, cuts titles and descriptions to 180 characters and drops the
+article body.
+
+**Reviewing a cassette** (author and reviewer):
+
+- No personal data: no names of private individuals, emails, phone numbers or
+  wallet addresses other than test ones.
+- No secrets: the guard and the scan pass, and you looked anyway.
+- Prompts inspected: read the recorded `request.system` / `messages` and make
+  sure they are what you meant to send, and that no market price reaches a
+  forecaster prompt.
+- Responses plausible: the scenario's assertions should follow from the
+  recording, not from luck.
+- The diff touches only the cassettes of the scenarios you re-recorded.
