@@ -66,6 +66,34 @@ async function recordTraderCycle(closedTodayPnl = -5): Promise<unknown[]> {
   p.market.findFirst = rec('market.findFirst', () => markets['m-hedge']);
   p.trade.create = rec('trade.create', (a) => ({ id: `t-${calls.length}`, ...a.data }));
   p.trade.update = rec('trade.update', (a) => ({ id: a.where.id, ...a.data }));
+  // #35: executeTrade applies the confirmed buy through guarded updates and
+  // reads the result back instead of writing success state inline.
+  const tradeRows = new Map<string, any>();
+  p.trade.findUnique = rec('trade.findUnique', (a) => tradeRows.get(a.where.id) ?? null);
+  p.trade.updateMany = rec('trade.updateMany', (a) => {
+    const row = tradeRows.get(a.where.id) ?? { id: a.where.id, marketId: 'm-new', direction: 'YES', amount: 25, status: 'PENDING' };
+    if (a.where.status?.in && !a.where.status.in.includes(row.status)) return { count: 0 };
+    tradeRows.set(a.where.id, Object.assign(row, a.data));
+    return { count: 1 };
+  });
+  const origTradeCreate = p.trade.create;
+  p.trade.create = async (a: any) => {
+    const row = await origTradeCreate(a);
+    tradeRows.set(row.id, { ...row, status: row.status ?? 'PENDING' });
+    return row;
+  };
+  const createdPositions = new Map<string, any>();
+  const origPositionCreate = p.position.create;
+  p.position.create = async (a: any) => {
+    const row = await origPositionCreate(a);
+    if (a?.data?.tradeId) createdPositions.set(a.data.tradeId, row);
+    return row;
+  };
+  const origPositionFindUnique = p.position.findUnique;
+  p.position.findUnique = (a: any) =>
+    a?.where?.tradeId !== undefined
+      ? rec('position.findUnique', () => createdPositions.get(a.where.tradeId) ?? null)(a)
+      : origPositionFindUnique(a);
   p.agentLog.create = rec('agentLog.create', (a) => a.data);
   p.correlationSnapshot.findFirst = rec('correlationSnapshot.findFirst', () => null);
   p.$transaction = async (ops: Promise<unknown>[]) => {
@@ -99,7 +127,9 @@ async function recordTraderCycle(closedTodayPnl = -5): Promise<unknown[]> {
   };
   (chain as any).quoteBuy = async (...a: unknown[]) => { calls.push({ call: 'chain.quoteBuy', args: normalize(a) }); return 1_000_000n; };
   (chain as any).agentBuy = async (a: unknown) => {
-    calls.push({ call: 'chain.agentBuy', args: normalize(a) });
+    // #40/#35: the argument source is a thunk that re-quotes per attempt.
+    const args = typeof a === 'function' ? await (a as () => Promise<unknown>)() : a;
+    calls.push({ call: 'chain.agentBuy', args: normalize(args) });
     return { mode: 'live', method: 'agent_buy', value: 1n, txHash: 'ab'.repeat(32) };
   };
   (publish as any).enqueueTracePublication = async (a: unknown) => { calls.push({ call: 'enqueueTracePublication', args: normalize(a) }); };

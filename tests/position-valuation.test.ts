@@ -158,11 +158,20 @@ test('executeTrade stores sharesRaw / costBasisRaw / feesPaidRaw from agentBuy',
   const chain = await import('../src/services/chain.service');
   const { executeTrade } = await import('../src/services/trade.service');
   const created: any[] = [];
+  // The trade row as applyBuySuccess (#35) reads and transitions it.
+  const trade: any = { id: 't1', marketId: 'm', direction: 'YES', amount: 2, status: 'PENDING' };
   (prisma.market.findUnique as any) = async () => ({ id: 'm', onChainMarketId: 7n });
   (prisma.position.findFirst as any) = async () => null;
-  (prisma.trade.create as any) = async ({ data }: any) => ({ id: 't1', ...data });
-  (prisma.trade.update as any) = async ({ data }: any) => ({ id: 't1', ...data });
+  (prisma.trade.create as any) = async ({ data }: any) => Object.assign(trade, data, { id: 't1' });
+  (prisma.trade.update as any) = async ({ data }: any) => Object.assign(trade, data);
+  (prisma.trade.findUnique as any) = async () => ({ ...trade });
+  (prisma.trade.updateMany as any) = async ({ where, data }: any) => {
+    if (where.status?.in && !where.status.in.includes(trade.status)) return { count: 0 };
+    Object.assign(trade, data);
+    return { count: 1 };
+  };
   (prisma.position.create as any) = async ({ data }: any) => { created.push(data); return data; };
+  (prisma.position.findUnique as any) = async () => created[0] ?? null;
   (prisma.$transaction as any) = async (ops: Promise<unknown>[]) => Promise.all(ops);
   (prisma.agentLog.create as any) = async () => ({});
   (chain as any).quoteBuy = async () => 18_000_000n;

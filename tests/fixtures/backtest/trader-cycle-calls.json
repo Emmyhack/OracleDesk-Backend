@@ -295,6 +295,12 @@
       }
     },
     {
+      "call": "chain.getOnChainMarket",
+      "args": [
+        "7n"
+      ]
+    },
+    {
       "call": "chain.quoteBuy",
       "args": [
         "7n",
@@ -302,12 +308,6 @@
           "tag": "Yes"
         },
         "2500000000n"
-      ]
-    },
-    {
-      "call": "chain.getOnChainMarket",
-      "args": [
-        "7n"
       ]
     },
     {
@@ -322,14 +322,34 @@
       }
     },
     {
-      "call": "trade.update",
+      "call": "trade.findUnique",
       "args": {
         "where": {
           "id": "t-22"
         },
+        "select": {
+          "id": true,
+          "marketId": true,
+          "direction": true,
+          "amount": true
+        }
+      }
+    },
+    {
+      "call": "trade.updateMany",
+      "args": {
+        "where": {
+          "id": "t-22",
+          "status": {
+            "in": [
+              "PENDING"
+            ]
+          }
+        },
         "data": {
           "status": "EXECUTED",
           "txHash": "abababababababababababababababababababababababababababababababab",
+          "innerTxHash": "abababababababababababababababababababababababababababababababab",
           "executedAt": "<iso>"
         }
       }
@@ -353,8 +373,20 @@
       }
     },
     {
-      "call": "$transaction",
-      "ops": 2
+      "call": "trade.findUnique",
+      "args": {
+        "where": {
+          "id": "t-22"
+        }
+      }
+    },
+    {
+      "call": "position.findUnique",
+      "args": {
+        "where": {
+          "tradeId": "t-22"
+        }
+      }
     },
     {
       "call": "enqueueTracePublication",
