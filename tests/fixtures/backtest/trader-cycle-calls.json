@@ -420,7 +420,7 @@
       "call": "trade.updateMany",
       "args": {
         "where": {
-          "id": "t-22",
+          "id": "t-29",
           "status": {
             "in": [
               "PENDING"
@@ -457,7 +457,7 @@
       "call": "trade.findUnique",
       "args": {
         "where": {
-          "id": "t-22"
+          "id": "t-29"
         }
       }
     },
@@ -465,7 +465,7 @@
       "call": "position.findUnique",
       "args": {
         "where": {
-          "tradeId": "t-22"
+          "tradeId": "t-29"
         }
       }
     },

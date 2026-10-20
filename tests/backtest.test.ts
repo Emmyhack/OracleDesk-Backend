@@ -43,8 +43,8 @@ async function recordTraderCycle(closedTodayPnl = -5): Promise<unknown[]> {
     position({ id: 'p-hold', marketId: 'm-held', currentPrice: 0.52, entryPrice: 0.5, pnl: 2 }),
   ];
   const markets: Record<string, any> = {
-    'm-new': { id: 'm-new', category: 'CRYPTO', status: 'ACTIVE', currentYesProb: 0.4, initialYesProb: 0.4, totalLiquidity: 900, onChainMarketId: 7n },
-    'm-held': { id: 'm-held', category: 'CRYPTO', status: 'ACTIVE', currentYesProb: 0.52, initialYesProb: 0.5, totalLiquidity: 900, onChainMarketId: 8n },
+    'm-new': { id: 'm-new', question: 'Will BTC close above 100k?', category: 'CRYPTO', status: 'ACTIVE', currentYesProb: 0.4, initialYesProb: 0.4, totalLiquidity: 900, onChainMarketId: 7n },
+    'm-held': { id: 'm-held', question: 'Will ETH close above 5k?', category: 'CRYPTO', status: 'ACTIVE', currentYesProb: 0.52, initialYesProb: 0.5, totalLiquidity: 900, onChainMarketId: 8n },
     'm-hedge': { id: 'm-hedge', category: 'CRYPTO', status: 'ACTIVE', currentYesProb: 0.5, initialYesProb: 0.5, totalLiquidity: 2000, onChainMarketId: 9n },
   };
 
@@ -116,20 +116,30 @@ async function recordTraderCycle(closedTodayPnl = -5): Promise<unknown[]> {
       fed: [], macro: [], aggregatedAt: new Date(), signalCount: 4,
     };
   };
-  // The estimate is stubbed so the cycle reaches sizing, correlation and execution.
-  (marketSvc as any).calculateProbability = (_signals: unknown, marketProb: number) => {
-    calls.push({ call: 'calculateProbability', marketProb });
-    return { probability: 0.7, confidenceInterval: { lower: 0.62, upper: 0.78 } };
+  // The forecast (#75) is stubbed so the cycle reaches sizing, correlation and execution.
+  void marketSvc;
+  const forecastSvc = await import('../src/services/forecast.service');
+  (forecastSvc as any).rankForForecast = async (markets: unknown[]) => markets;
+  (forecastSvc as any).forecastMarket = async (market: { id: string }) => {
+    calls.push({ call: 'forecastMarket', marketId: market.id });
+    return { forecast: { p: 0.7, ci: { lower: 0.62, upper: 0.78 }, members: [], inputsDigest: 'd', sigmaLogit: 0, shrink: 0 }, relevant: [], cached: false };
   };
+  // Treasury capital and caps (#76): the same 10 000 USDC the old constant
+  // assumed, with caps that do not bind.
+  (chain as any).treasuryAvailableCapital = async () => { calls.push({ call: 'chain.treasuryAvailableCapital' }); return 100_000_000_000n; };
+  (chain as any).treasuryRiskConfig = async () => { calls.push({ call: 'chain.treasuryRiskConfig' }); return { max_trade: 10n ** 15n, max_market: 10n ** 15n, max_daily: 10n ** 15n }; };
+  (chain as any).treasuryDailyUsage = async () => { calls.push({ call: 'chain.treasuryDailyUsage' }); return { amount: 0n, day_start: 0n }; };
+  p.chainEvent.findFirst = rec('chainEvent.findFirst', () => null);
+  p.trade.findMany = rec('trade.findMany', () => []);
   (reasoning as any).generateReasoningTrace = async (input: any) => {
     calls.push({ call: 'generateReasoningTrace', input: normalize(input) });
     return { trace: { id: 'trace-1' }, tracePayload: { traceId: 'trace-1' } };
   };
   (chain as any).quoteBuy = async (...a: unknown[]) => { calls.push({ call: 'chain.quoteBuy', args: normalize(a) }); return 1_000_000n; };
-  (chain as any).agentBuy = async (a: unknown) => {
-    // #40/#35: the argument source is a thunk that re-quotes per attempt.
-    const args = typeof a === 'function' ? await (a as () => Promise<unknown>)() : a;
-    calls.push({ call: 'chain.agentBuy', args: normalize(args) });
+  // agentBuy takes a thunk so each attempt re-quotes min_shares_out (#40).
+  (chain as any).agentBuy = async (thunk: unknown) => {
+    const a = typeof thunk === 'function' ? await thunk() : thunk;
+    calls.push({ call: 'chain.agentBuy', args: normalize(a) });
     return { mode: 'live', method: 'agent_buy', value: 1n, txHash: 'ab'.repeat(32) };
   };
   (publish as any).enqueueTracePublication = async (a: unknown) => { calls.push({ call: 'enqueueTracePublication', args: normalize(a) }); };
